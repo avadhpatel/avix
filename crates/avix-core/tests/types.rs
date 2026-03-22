@@ -199,8 +199,9 @@ fn tool_category_avix_behaviour() {
 #[test]
 fn capability_map_spawn_grants_agent_tools() {
     let map = CapabilityToolMap::default();
-    let tools = map.tools_for_capability("spawn");
+    let tools = map.tools_for_capability("agent:spawn");
     assert!(tools.contains(&"agent/spawn"));
+    assert!(tools.contains(&"agent/kill"));
     assert!(tools.contains(&"agent/list"));
     assert!(tools.contains(&"agent/wait"));
     assert!(tools.contains(&"agent/send-message"));
@@ -209,7 +210,7 @@ fn capability_map_spawn_grants_agent_tools() {
 #[test]
 fn capability_map_pipe_grants_pipe_tools() {
     let map = CapabilityToolMap::default();
-    let tools = map.tools_for_capability("pipe");
+    let tools = map.tools_for_capability("pipe:use");
     assert!(tools.contains(&"pipe/open"));
     assert!(tools.contains(&"pipe/write"));
     assert!(tools.contains(&"pipe/read"));

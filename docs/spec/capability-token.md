@@ -28,9 +28,15 @@ metadata:
 spec:
   tools:
     granted:
-      - web_search
-      - web_fetch
-      - file_read
+      # Individual tool names — not capability group names
+      - fs/read
+      - fs/write
+      - llm/complete
+      - agent/spawn         # granted as part of agent:spawn capability expansion
+      - agent/kill
+      - agent/list
+      - agent/wait
+      - agent/send-message
     # send_email was optional in manifest but denied by crew limits — not listed
 
   constraints:
@@ -45,6 +51,9 @@ spec:
 
 ## Notes
 
+- `spec.tools.granted` stores **individual tool names** (e.g. `"fs/read"`, `"agent/spawn"`)
+  — never capability group names (e.g. `"agent:spawn"`). Capability group names exist only
+  for token issuers to expand into tool lists via `CapabilityToolMap`.
 - `spec.tools.granted` reflects only the tools actually granted at spawn — optional tools
   denied by crew or user limits are absent.
 - The `signature` field is HMAC-signed by the kernel. Any modification invalidates the
@@ -53,6 +62,23 @@ spec:
   `resource: token_renewal` before the deadline.
 - Agents must treat the token as opaque — do not parse or rely on internal structure
   beyond what is defined here.
+
+## Capability Key Format
+
+Capability names use `namespace:verb` format consistently:
+
+| Capability key    | Individual tools it expands to                                         |
+|-------------------|------------------------------------------------------------------------|
+| `agent:spawn`     | `agent/spawn`, `agent/kill`, `agent/list`, `agent/wait`, `agent/send-message` |
+| `pipe:use`        | `pipe/open`, `pipe/write`, `pipe/read`, `pipe/close`                   |
+| `llm:inference`   | `llm/complete`                                                         |
+| `llm:image`       | `llm/generate-image`                                                   |
+| `llm:speech`      | `llm/generate-speech`                                                  |
+| `llm:transcription` | `llm/transcribe`                                                     |
+| `llm:embedding`   | `llm/embed`                                                            |
+
+Token issuers use `CapabilityToolMap.tools_for_capability(key)` to expand a capability
+into the individual tool names that get stored in `granted_tools`.
 
 -----
 

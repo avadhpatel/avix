@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 #[derive(Default)]
 pub struct MockKernelHandle {
     proc_spawns: Arc<Mutex<HashSet<String>>>,
+    proc_kills: Arc<Mutex<HashSet<u32>>>,
     auto_approve_rr: Arc<Mutex<bool>>,
 }
 
@@ -19,6 +20,14 @@ impl MockKernelHandle {
 
     pub async fn received_proc_spawn(&self, agent_name: &str) -> bool {
         self.proc_spawns.lock().await.contains(agent_name)
+    }
+
+    pub async fn record_proc_kill(&self, pid: u32) {
+        self.proc_kills.lock().await.insert(pid);
+    }
+
+    pub async fn received_proc_kill(&self, pid: u32) -> bool {
+        self.proc_kills.lock().await.contains(&pid)
     }
 
     pub async fn auto_approve_resource_request(&self) {

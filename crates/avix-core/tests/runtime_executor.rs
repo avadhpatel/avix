@@ -36,15 +36,16 @@ async fn spawn_with_caps(pid_val: u32, caps: &[&str]) -> (RuntimeExecutor, Arc<M
 
 #[tokio::test]
 async fn executor_spawns_with_correct_pid_and_token() {
-    let (executor, _registry) = spawn_with_caps(42, &["spawn"]).await;
+    let (executor, _registry) = spawn_with_caps(42, &["agent/spawn"]).await;
     assert_eq!(executor.pid().as_u32(), 42);
 }
 
 #[tokio::test]
 async fn spawn_cap_registers_agent_tools() {
-    let (_, registry) = spawn_with_caps(10, &["spawn"]).await;
+    let (_, registry) = spawn_with_caps(10, &["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"]).await;
     let tools = registry.tools_registered_by_pid(10).await;
     assert!(tools.contains("agent/spawn"));
+    assert!(tools.contains("agent/kill"));
     assert!(tools.contains("agent/list"));
     assert!(tools.contains("agent/wait"));
     assert!(tools.contains("agent/send-message"));
@@ -52,7 +53,7 @@ async fn spawn_cap_registers_agent_tools() {
 
 #[tokio::test]
 async fn pipe_cap_registers_pipe_tools() {
-    let (_, registry) = spawn_with_caps(11, &["pipe"]).await;
+    let (_, registry) = spawn_with_caps(11, &["pipe/open", "pipe/write", "pipe/read", "pipe/close"]).await;
     let tools = registry.tools_registered_by_pid(11).await;
     assert!(tools.contains("pipe/open"));
     assert!(tools.contains("pipe/write"));
@@ -86,7 +87,7 @@ async fn shutdown_deregisters_all_category2_tools() {
         goal: "test".into(),
         spawned_by: "kernel".into(),
         session_id: "test-session".into(),
-        token: token_with_caps(&["spawn", "pipe"]),
+        token: token_with_caps(&["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message", "pipe/open", "pipe/write", "pipe/read", "pipe/close"]),
     };
     let mut executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -109,18 +110,18 @@ async fn category2_tools_registered_with_user_visibility() {
         goal: "test".into(),
         spawned_by: "kernel".into(),
         session_id: "test-session".into(),
-        token: token_with_caps(&["spawn"]),
+        token: token_with_caps(&["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"]),
     };
     RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
         .unwrap();
 
-    // Check that all registered tools have All visibility
+    // All Cat2 tools are scoped to the owning user (spawned_by = "kernel")
     let all = registry.registered.lock().await;
     let agent_tools: Vec<_> = all.iter().filter(|(p, _, _)| *p == 15).collect();
     assert!(!agent_tools.is_empty());
     for (_, _, visibility) in &agent_tools {
-        assert_eq!(*visibility, ToolVisibility::All);
+        assert_eq!(*visibility, ToolVisibility::User("kernel".to_string()));
     }
 }
 
@@ -210,8 +211,8 @@ fn tool_call_rejected_when_not_in_token() {
         name: "send_email".into(),
         args: json!({}),
     };
-    let budgets = ToolBudgets::default();
-    assert!(validate_tool_call(&token, &call, &budgets).is_err());
+    let mut budgets = ToolBudgets::default();
+    assert!(validate_tool_call(&token, &call, &mut budgets).is_err());
 }
 
 #[test]
@@ -224,7 +225,7 @@ fn tool_call_rejected_when_budget_zero() {
     };
     let mut budgets = ToolBudgets::default();
     budgets.set("send_email", 0);
-    assert!(validate_tool_call(&token, &call, &budgets).is_err());
+    assert!(validate_tool_call(&token, &call, &mut budgets).is_err());
 }
 
 #[test]
@@ -237,7 +238,9 @@ fn tool_call_allowed_when_budget_positive() {
     };
     let mut budgets = ToolBudgets::default();
     budgets.set("send_email", 3);
-    assert!(validate_tool_call(&token, &call, &budgets).is_ok());
+    assert!(validate_tool_call(&token, &call, &mut budgets).is_ok());
+    // Budget should be decremented after a successful call
+    assert_eq!(budgets.remaining("send_email"), Some(2));
 }
 
 #[test]
@@ -252,8 +255,49 @@ fn tool_call_allowed_when_token_is_empty() {
         name: "anything".into(),
         args: json!({}),
     };
-    let budgets = ToolBudgets::default();
-    assert!(validate_tool_call(&token, &call, &budgets).is_ok());
+    let mut budgets = ToolBudgets::default();
+    assert!(validate_tool_call(&token, &call, &mut budgets).is_ok());
+}
+
+#[test]
+fn always_present_tools_bypass_capability_check() {
+    // Token grants only one specific tool but always-present tools must still pass
+    let token = token_with_caps(&["fs/read"]);
+    for tool_name in &["cap/request-tool", "cap/escalate", "cap/list", "job/watch"] {
+        let call = AvixToolCall {
+            call_id: "c-ap".into(),
+            name: tool_name.to_string(),
+            args: json!({}),
+        };
+        let mut budgets = ToolBudgets::default();
+        assert!(
+            validate_tool_call(&token, &call, &mut budgets).is_ok(),
+            "always-present tool {tool_name} should not be blocked by capability check"
+        );
+    }
+}
+
+#[test]
+fn tool_budget_decrements_to_zero_then_rejects() {
+    let token = token_with_caps(&["send_email"]);
+    let call = AvixToolCall {
+        call_id: "c5".into(),
+        name: "send_email".into(),
+        args: json!({}),
+    };
+    let mut budgets = ToolBudgets::default();
+    budgets.set("send_email", 2);
+
+    // First call: budget 2 → 1
+    assert!(validate_tool_call(&token, &call, &mut budgets).is_ok());
+    assert_eq!(budgets.remaining("send_email"), Some(1));
+
+    // Second call: budget 1 → 0
+    assert!(validate_tool_call(&token, &call, &mut budgets).is_ok());
+    assert_eq!(budgets.remaining("send_email"), Some(0));
+
+    // Third call: budget 0 → rejected
+    assert!(validate_tool_call(&token, &call, &mut budgets).is_err());
 }
 
 #[tokio::test]
@@ -286,7 +330,7 @@ async fn agent_spawn_translates_to_kernel_proc_spawn() {
         goal: "spawn subagents".into(),
         spawned_by: "kernel".into(),
         session_id: "test-session".into(),
-        token: token_with_caps(&["spawn"]),
+        token: token_with_caps(&["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"]),
     };
     let mut executor =
         RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
@@ -300,6 +344,35 @@ async fn agent_spawn_translates_to_kernel_proc_spawn() {
     };
     executor.dispatch_category2(&call).await.unwrap();
     assert!(kernel.received_proc_spawn("researcher").await);
+}
+
+#[tokio::test]
+async fn agent_kill_records_in_kernel() {
+    use avix_core::executor::MockKernelHandle;
+
+    let registry = Arc::new(MockToolRegistry::new());
+    let kernel = Arc::new(MockKernelHandle::new());
+    let params = SpawnParams {
+        pid: Pid::new(42),
+        agent_name: "orchestrator".into(),
+        goal: "kill subagent".into(),
+        spawned_by: "kernel".into(),
+        session_id: "test-session".into(),
+        token: token_with_caps(&["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"]),
+    };
+    let mut executor =
+        RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
+            .await
+            .unwrap();
+
+    let call = AvixToolCall {
+        call_id: "kill-1".into(),
+        name: "agent/kill".into(),
+        args: json!({"pid": 55, "reason": "task complete"}),
+    };
+    let result = executor.dispatch_category2(&call).await.unwrap();
+    assert_eq!(result["killed"], true);
+    assert!(kernel.received_proc_kill(55).await);
 }
 
 #[tokio::test]
@@ -342,7 +415,7 @@ async fn build_test_executor_with_mocks() -> RuntimeExecutor {
         goal: "test goal".into(),
         spawned_by: "kernel".into(),
         session_id: "test-session".into(),
-        token: token_with_caps(&["spawn", "pipe"]),
+        token: token_with_caps(&["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message", "pipe/open", "pipe/write", "pipe/read", "pipe/close"]),
     };
     RuntimeExecutor::spawn_with_registry(params, registry)
         .await

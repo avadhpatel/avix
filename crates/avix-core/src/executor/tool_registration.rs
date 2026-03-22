@@ -2,23 +2,31 @@ use crate::types::capability_map::CapabilityToolMap;
 use crate::types::{token::CapabilityToken, tool::ToolVisibility};
 use std::collections::HashSet;
 
-pub fn compute_cat2_tools(token: &CapabilityToken) -> Vec<(String, ToolVisibility)> {
+/// Compute the Category 2 tool set for an agent given its token and owning username.
+///
+/// `CapabilityToken.granted_tools` stores **individual tool names** (e.g. "agent/spawn",
+/// "fs/read"). This function:
+///   1. Always includes the 4 always-present tools (cap/*, job/watch) — no token check.
+///   2. Scans all known Cat2 gated tools; includes each one that appears in the token.
+///
+/// All Cat2 tools are scoped to the agent's owning user (ToolVisibility::User).
+pub fn compute_cat2_tools(token: &CapabilityToken, username: &str) -> Vec<(String, ToolVisibility)> {
     let map = CapabilityToolMap::default();
     let mut tools = Vec::new();
 
-    // Always-present tools
+    // Always-present tools (registered regardless of token contents)
     for &name in map.always_present() {
-        tools.push((name.to_string(), ToolVisibility::All));
+        tools.push((name.to_string(), ToolVisibility::User(username.to_string())));
     }
 
-    // Capability-gated tools
-    for cap in &token.granted_tools {
-        for &name in map.tools_for_capability(cap) {
-            tools.push((name.to_string(), ToolVisibility::All));
+    // Capability-gated Cat2 tools: register only those explicitly in the token
+    for name in map.all_gated_cat2_tools() {
+        if token.has_tool(name) {
+            tools.push((name.to_string(), ToolVisibility::User(username.to_string())));
         }
     }
 
-    // Deduplicate
+    // Deduplicate (always-present tools may also appear in the gated list)
     let mut seen = HashSet::new();
     tools.retain(|(name, _)| seen.insert(name.clone()));
     tools
@@ -76,7 +84,7 @@ pub fn cat2_tool_descriptor(name: &str) -> serde_json::Value {
         }),
         "agent/spawn" => serde_json::json!({
             "name": "agent/spawn",
-            "description": "Spawn a child agent to work on a sub-task. Requires spawn capability.",
+            "description": "Spawn a child agent to work on a sub-task. Requires agent:spawn capability.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -86,6 +94,18 @@ pub fn cat2_tool_descriptor(name: &str) -> serde_json::Value {
                     "waitForResult": { "type": "boolean", "description": "If true, block until child finishes" }
                 },
                 "required": ["agent", "goal", "capabilities", "waitForResult"]
+            }
+        }),
+        "agent/kill" => serde_json::json!({
+            "name": "agent/kill",
+            "description": "Terminate a child agent by PID. Requires agent:spawn capability.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pid":    { "type": "number", "description": "PID of the child agent to terminate" },
+                    "reason": { "type": "string", "description": "Reason for termination" }
+                },
+                "required": ["pid"]
             }
         }),
         "agent/list" => serde_json::json!({
@@ -188,6 +208,14 @@ pub fn cat2_tool_descriptor(name: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::token::CapabilityToken;
+
+    fn token_with_tools(tools: &[&str]) -> CapabilityToken {
+        CapabilityToken {
+            granted_tools: tools.iter().map(|s| s.to_string()).collect(),
+            signature: "test-sig".into(),
+        }
+    }
 
     #[test]
     fn test_cat2_descriptor_cap_list() {
@@ -202,6 +230,13 @@ mod tests {
     }
 
     #[test]
+    fn test_cat2_descriptor_agent_kill() {
+        let desc = cat2_tool_descriptor("agent/kill");
+        assert_eq!(desc["name"], "agent/kill");
+        assert!(!desc["description"].as_str().unwrap_or("").is_empty());
+    }
+
+    #[test]
     fn test_cat2_descriptor_all_tools() {
         let known = [
             "cap/request-tool",
@@ -209,6 +244,7 @@ mod tests {
             "cap/list",
             "job/watch",
             "agent/spawn",
+            "agent/kill",
             "agent/list",
             "agent/wait",
             "agent/send-message",
@@ -222,5 +258,62 @@ mod tests {
             let got_name = desc["name"].as_str().unwrap_or("");
             assert!(!got_name.is_empty(), "descriptor for {name} has empty name");
         }
+    }
+
+    #[test]
+    fn test_compute_cat2_tools_always_present() {
+        // Empty token → only always-present tools
+        let token = token_with_tools(&[]);
+        let tools = compute_cat2_tools(&token, "alice");
+        let names: Vec<_> = tools.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"cap/request-tool"));
+        assert!(names.contains(&"cap/escalate"));
+        assert!(names.contains(&"cap/list"));
+        assert!(names.contains(&"job/watch"));
+        // No gated Cat2 tools without explicit grants
+        assert!(!names.contains(&"agent/spawn"));
+        assert!(!names.contains(&"pipe/open"));
+    }
+
+    #[test]
+    fn test_compute_cat2_tools_individual_agent_tools() {
+        // Token holds individual tool names — only listed tools are registered
+        let token = token_with_tools(&["agent/spawn", "agent/kill"]);
+        let tools = compute_cat2_tools(&token, "alice");
+        let names: Vec<_> = tools.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"agent/spawn"));
+        assert!(names.contains(&"agent/kill"));
+        // agent/list not granted → not registered
+        assert!(!names.contains(&"agent/list"));
+    }
+
+    #[test]
+    fn test_compute_cat2_tools_pipe_tools() {
+        let token = token_with_tools(&["pipe/open", "pipe/write", "pipe/read", "pipe/close"]);
+        let tools = compute_cat2_tools(&token, "alice");
+        let names: Vec<_> = tools.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"pipe/open"));
+        assert!(names.contains(&"pipe/write"));
+        assert!(names.contains(&"pipe/read"));
+        assert!(names.contains(&"pipe/close"));
+    }
+
+    #[test]
+    fn test_compute_cat2_tools_user_visibility() {
+        let token = token_with_tools(&["agent/spawn"]);
+        let tools = compute_cat2_tools(&token, "bob");
+        for (_, vis) in &tools {
+            assert_eq!(*vis, crate::types::tool::ToolVisibility::User("bob".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_compute_cat2_tools_no_cat1_tools_registered() {
+        // Cat1 tools in token (fs/read) should NOT appear in Cat2 registration
+        let token = token_with_tools(&["fs/read", "agent/spawn"]);
+        let tools = compute_cat2_tools(&token, "alice");
+        let names: Vec<_> = tools.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(!names.contains(&"fs/read"));
+        assert!(names.contains(&"agent/spawn"));
     }
 }

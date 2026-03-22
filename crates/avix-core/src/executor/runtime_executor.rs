@@ -120,7 +120,7 @@ impl RuntimeExecutor {
         params: SpawnParams,
         registry: Arc<MockToolRegistry>,
     ) -> Result<Self, AvixError> {
-        let tools = compute_cat2_tools(&params.token);
+        let tools = compute_cat2_tools(&params.token, &params.spawned_by);
         let mut registered_cat2 = Vec::new();
 
         for (name, visibility) in &tools {
@@ -174,7 +174,7 @@ impl RuntimeExecutor {
 
     /// GAP 3: Rebuild tool_list from the current Cat2 tools, excluding removed tools.
     pub fn refresh_tool_list(&mut self) {
-        let cat2 = compute_cat2_tools(&self.token);
+        let cat2 = compute_cat2_tools(&self.token, &self.spawned_by);
         let removed = &self.removed_tools;
         self.tool_list = cat2
             .into_iter()
@@ -184,6 +184,7 @@ impl RuntimeExecutor {
     }
 
     pub fn build_system_prompt_str(&self) -> String {
+        let tool_list = self.current_tool_list();
         build_system_prompt(
             self.pid.as_u32(),
             &self.agent_name,
@@ -198,6 +199,7 @@ impl RuntimeExecutor {
                 .filter_map(|name| self.tool_budgets.remaining(name).map(|n| (name.clone(), n)))
                 .collect::<HashMap<String, u32>>(),
             &self.pending_messages,
+            &tool_list,
         )
     }
 
@@ -257,6 +259,24 @@ impl RuntimeExecutor {
             .collect()
     }
 
+    /// Returns true if this tool is a registered Category 2 tool for this agent.
+    /// Category 1/3 tools are forwarded to router.svc; Category 2 tools are handled locally.
+    pub fn is_cat2_tool(&self, name: &str) -> bool {
+        self.registered_cat2.contains(&name.to_string())
+    }
+
+    /// Dispatch a Category 1 or Category 3 (MCP-bridged) tool call via router.svc.
+    /// In production this opens a fresh IPC connection to router.svc per ADR-05.
+    pub async fn dispatch_via_router(
+        &self,
+        call: &AvixToolCall,
+    ) -> Result<serde_json::Value, AvixError> {
+        // IPC dispatch to router.svc not yet wired in this environment
+        Ok(serde_json::json!({
+            "content": format!("Tool '{}' executed via router (IPC dispatch not yet wired)", call.name)
+        }))
+    }
+
     pub async fn dispatch_category2(
         &mut self,
         call: &AvixToolCall,
@@ -269,6 +289,13 @@ impl RuntimeExecutor {
                 }
                 Ok(serde_json::json!({"spawned": true}))
             }
+            "agent/kill" => {
+                if let Some(kernel) = &self.kernel {
+                    let pid = call.args["pid"].as_u64().unwrap_or(0) as u32;
+                    kernel.record_proc_kill(pid).await;
+                }
+                Ok(serde_json::json!({"killed": true}))
+            }
             "cap/request-tool" => {
                 if let Some(kernel) = &self.kernel {
                     if kernel.is_auto_approve().await {
@@ -277,14 +304,30 @@ impl RuntimeExecutor {
                 }
                 Ok(serde_json::json!({"approved": false}))
             }
-            // GAP 5: remaining Category 2 stubs
-            "cap/list" => Ok(serde_json::json!({
-                "grantedTools": self.token.granted_tools,
-                "constraints": {
-                    "maxToolChainLength": self.max_tool_chain_length
-                },
-                "tokenExpiresAt": null
-            })),
+            // cap/list — reads directly from in-memory CapabilityToken (no IPC call).
+            // Schema per docs/spec/runtime-exec-tool-exposure.md §cap/list.
+            // Never exposes the token's HMAC signature.
+            "cap/list" => {
+                let budgets: serde_json::Value = self
+                    .registered_cat2
+                    .iter()
+                    .filter_map(|name| {
+                        self.tool_budgets
+                            .remaining(name)
+                            .map(|n| (name.clone(), serde_json::json!(n)))
+                    })
+                    .collect::<serde_json::Map<_, _>>()
+                    .into();
+                Ok(serde_json::json!({
+                    "grantedTools": self.token.granted_tools,
+                    "constraints": {
+                        "maxTokensPerTurn": null,
+                        "maxToolChainLength": self.max_tool_chain_length,
+                        "toolCallBudgets": budgets
+                    },
+                    "tokenExpiresAt": null
+                }))
+            }
             "cap/escalate" => {
                 let guidance = call.args["reason"].as_str().unwrap_or("");
                 Ok(serde_json::json!({
@@ -433,8 +476,8 @@ impl RuntimeExecutor {
                     // Dispatch each call and collect results
                     let mut tool_results = Vec::new();
                     for call in &calls {
-                        // GAP 4: capability validation + budget check
-                        if let Err(e) = validate_tool_call(&self.token, call, &self.tool_budgets) {
+                        // GAP 4: capability validation + budget check (budget decremented on success)
+                        if let Err(e) = validate_tool_call(&self.token, call, &mut self.tool_budgets) {
                             tool_results.push(serde_json::json!({
                                 "type": "tool_result",
                                 "tool_use_id": call.call_id,
@@ -470,7 +513,12 @@ impl RuntimeExecutor {
                             }
                         }
 
-                        let result = self.dispatch_category2(call).await?;
+                        // Cat2: handled locally; Cat1/3: forwarded to router.svc
+                        let result = if self.is_cat2_tool(&call.name) {
+                            self.dispatch_category2(call).await?
+                        } else {
+                            self.dispatch_via_router(call).await?
+                        };
                         tool_results.push(serde_json::json!({
                             "type": "tool_result",
                             "tool_use_id": call.call_id,
@@ -687,7 +735,7 @@ mod tests {
     // GAP 5 tests
     #[tokio::test]
     async fn test_dispatch_cap_list() {
-        let mut executor = make_executor(210, &["spawn"]).await;
+        let mut executor = make_executor(210, &["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"]).await;
         let call = AvixToolCall {
             call_id: "c1".into(),
             name: "cap/list".into(),
@@ -721,7 +769,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_pipe_open() {
-        let mut executor = make_executor(212, &["pipe"]).await;
+        let mut executor = make_executor(212, &["pipe/open", "pipe/write", "pipe/read", "pipe/close"]).await;
         let call = AvixToolCall {
             call_id: "c3".into(),
             name: "pipe/open".into(),
@@ -831,6 +879,34 @@ mod tests {
         assert_eq!(executor.pending_messages.len(), 3);
         assert_eq!(executor.pending_messages[0], "msg-1");
         assert_eq!(executor.pending_messages[2], "msg-3");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_kill() {
+        let registry = Arc::new(MockToolRegistry::new());
+        let kernel = Arc::new(MockKernelHandle::new());
+        let params = make_params(250, &["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"]);
+        let mut executor =
+            RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
+                .await
+                .unwrap();
+        let call = AvixToolCall {
+            call_id: "kill-1".into(),
+            name: "agent/kill".into(),
+            args: json!({"pid": 77, "reason": "done"}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        assert_eq!(result["killed"], true);
+        assert!(kernel.received_proc_kill(77).await);
+    }
+
+    #[tokio::test]
+    async fn test_is_cat2_tool() {
+        let executor = make_executor(251, &["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"]).await;
+        assert!(executor.is_cat2_tool("cap/list"));
+        assert!(executor.is_cat2_tool("agent/spawn"));
+        assert!(!executor.is_cat2_tool("fs/read"));
+        assert!(!executor.is_cat2_tool("llm/complete"));
     }
 
     #[tokio::test]

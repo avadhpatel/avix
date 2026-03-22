@@ -39,7 +39,7 @@ Avix features fall into three categories based on how the LLM accesses them:
 │  Avix-specific capabilities exposed as tools the LLM can explicitly call.   │
 │  RuntimeExecutor translates each into the correct kernel syscall or IPC.    │
 │                                                                             │
-│  agent/spawn, agent/list, agent/wait, agent/send-message                   │
+│  agent/spawn, agent/kill, agent/list, agent/wait, agent/send-message       │
 │  pipe/open, pipe/write, pipe/read, pipe/close                              │
 │  cap/request-tool, cap/escalate                                             │
 │  job/watch                                                                  │
@@ -51,6 +51,14 @@ Avix features fall into three categories based on how the LLM accesses them:
 │                                                                             │
 │  HIL gating (tool_call_approval), token renewal, snapshot triggers,         │
 │  tool list refresh on tool.changed, stop-reason detection                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Category 4 — MCP-Bridge Tools                                              │
+│  Tools from connected MCP servers, proxied by mcp-bridge.svc.               │
+│  Registered dynamically as MCP servers connect/disconnect.                  │
+│                                                                             │
+│  mcp/<server>/list-prs, mcp/<server>/create-issue, ...                     │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -88,7 +96,8 @@ are never placed in the tool list sent to the LLM.
 
 ### `agent/` — Multi-Agent Orchestration
 
-Requires `spawn` capability in the CapabilityToken.
+Requires the individual tools `agent/spawn`, `agent/kill`, etc. in `CapabilityToken.granted_tools`.
+These are granted by expanding the `agent:spawn` capability at token issuance time.
 
 -----
 
@@ -132,6 +141,34 @@ LLM calls agent/spawn
   → if waitForResult: true → kernel/proc/wait { pid: 58 }
   → return { pid: 58, status, result }
 ```
+
+-----
+
+#### `agent/kill`
+
+Terminate a child agent by PID. The child receives `SIGKILL` and its resources are
+released. Only the parent agent (or an agent with explicit kill permission) can
+terminate a child.
+
+**Input:**
+
+```json
+{
+  "pid": 58,
+  "reason": "Task complete — no longer needed"
+}
+```
+
+**Output:**
+
+```json
+{
+  "killed": true,
+  "pid": 58
+}
+```
+
+**RuntimeExecutor translation:** `kernel/proc/kill { pid: 58 }`
 
 -----
 
@@ -222,7 +259,9 @@ capability) before delivering the message.
 
 ### `pipe/` — Inter-Agent Data Channels
 
-Requires `pipe` capability in the CapabilityToken. Intra-crew pipes where
+Requires the individual tools `pipe/open`, `pipe/write`, etc. in `CapabilityToken.granted_tools`.
+These are granted by expanding the `pipe:use` capability at token issuance time.
+Intra-crew pipes where
 `pipePolicy: allow-intra-crew` skip the capability check.
 
 -----
@@ -509,6 +548,29 @@ the LLM’s conversation history — only the final result is.
 
 -----
 
+## Category 4 — MCP-Bridge Tools
+
+Tools from connected MCP servers are proxied by `mcp-bridge.svc` and registered
+dynamically in the tool registry as MCP servers connect or disconnect. They appear
+in the `mcp/<server>/` namespace.
+
+The LLM calls them like any other tool. RuntimeExecutor routes them to `router.svc`
+which forwards to `mcp-bridge.svc`. No special handling beyond standard Cat1 dispatch.
+
+**Tool naming:**
+- Avix name: `mcp/github/list-prs` (with `/`)
+- Wire name: `mcp__github__list-prs` (mangled `__` on the wire)
+
+**Registration:** `mcp-bridge.svc` calls `ipc.tool-add` when an MCP server connects and
+`ipc.tool-remove` when it disconnects. RuntimeExecutor picks up the change via
+`tool.changed` events and refreshes Block 2 of the system prompt on the next turn.
+
+**Capability:** Each MCP tool requires a per-tool grant in `CapabilityToken.granted_tools`
+(e.g., `"mcp/github/list-prs"`). A wildcard grant `"mcp/github/*"` is not currently
+supported — grants are always per-tool.
+
+-----
+
 ## Category 3 — Transparent RuntimeExecutor Behaviours
 
 These are things `RuntimeExecutor` handles automatically. The LLM never sees them,
@@ -526,10 +588,9 @@ At the start of each turn, RuntimeExecutor builds the exact tool list passed to
      - tool is in CapabilityToken.spec.tools.granted, AND
      - tool.status.state == available
 2. Always include Category 2 tools the agent is entitled to:
-     - agent/* if spawn capability granted
-     - pipe/*  if pipe capability granted
-     - cap/request-tool, cap/escalate, cap/list — always included
-     - job/watch — always included
+     - Each tool in CapabilityToken.granted_tools that is a known Cat2 tool
+     - cap/request-tool, cap/escalate, cap/list — always included (no token check)
+     - job/watch — always included (no token check)
 3. Pass the full list through the provider adapter's translate_tools()
 4. Send translated list in the tools[] field of the llm/complete call
 ```
@@ -628,9 +689,12 @@ LLM always knows what it is, what it can do, and what its current goal is.
 └─────────────────────────────────────────────────────────────────────────────┘
          ↓
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ BLOCK 2 — Operational Context (static, set at spawn)                        │
+│ BLOCK 2 — Available Tools (dynamic, rebuilt on tool.changed events)         │
 │                                                                             │
-│ You have access to the following tools. Use them to complete your goal.     │
+│ # Available Tools                                                           │
+│ - **fs/read**: Read the contents of a file                                  │
+│ - **agent/spawn**: Spawn a child agent to work on a sub-task                │
+│ - ...                                                                       │
 │ When you need a tool not listed here, call cap/request-tool.               │
 │ When you encounter a situation requiring human judgment, call cap/escalate. │
 │ When your task is complete, respond with your final answer.                 │
@@ -655,9 +719,9 @@ LLM always knows what it is, what it can do, and what its current goal is.
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Block 4 is the only dynamic block. All other blocks are fixed at spawn time and never
-change during the agent’s lifetime. This keeps the system prompt stable and
-predictable while still allowing runtime events to surface as instructions.
+Blocks 1 and 3 are static — fixed at spawn and never change. Block 2 is rebuilt
+whenever a `tool.changed` event fires so the LLM always sees its current tool set.
+Block 4 is populated at runtime as events occur.
 
 -----
 
@@ -720,16 +784,20 @@ START OF TURN
 This table shows which Category 2 tools become available for each capability grant.
 RuntimeExecutor uses this to build the per-agent tool list at spawn time.
 
-|Capability         |Tools exposed to LLM                                           |
-|-------------------|---------------------------------------------------------------|
-|`spawn`            |`agent/spawn`, `agent/list`, `agent/wait`, `agent/send-message`|
-|`pipe`             |`pipe/open`, `pipe/write`, `pipe/read`, `pipe/close`           |
-|`llm:inference`    |`llm/complete`                                                 |
-|`llm:image`        |`llm/generate-image`                                           |
-|`llm:speech`       |`llm/generate-speech`                                          |
-|`llm:transcription`|`llm/transcribe`                                               |
-|`llm:embedding`    |`llm/embed`                                                    |
-|*(always)*         |`cap/request-tool`, `cap/escalate`, `cap/list`, `job/watch`    |
+This table maps capability names (used by token issuers) to the individual tool names
+stored in `CapabilityToken.granted_tools`. RuntimeExecutor checks for each tool name
+individually — it never checks for capability group names.
+
+|Capability key     |Individual tools granted                                                           |
+|-------------------|-----------------------------------------------------------------------------------|
+|`agent:spawn`      |`agent/spawn`, `agent/kill`, `agent/list`, `agent/wait`, `agent/send-message`      |
+|`pipe:use`         |`pipe/open`, `pipe/write`, `pipe/read`, `pipe/close`                               |
+|`llm:inference`    |`llm/complete`                                                                     |
+|`llm:image`        |`llm/generate-image`                                                               |
+|`llm:speech`       |`llm/generate-speech`                                                              |
+|`llm:transcription`|`llm/transcribe`                                                                   |
+|`llm:embedding`    |`llm/embed`                                                                        |
+|*(always)*         |`cap/request-tool`, `cap/escalate`, `cap/list`, `job/watch` — no token check       |
 
 `cap/request-tool`, `cap/escalate`, and `cap/list` are always in the tool list
 regardless of grants — an agent always needs the ability to ask for more tools or
