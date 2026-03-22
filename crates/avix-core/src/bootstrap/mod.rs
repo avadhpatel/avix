@@ -1,4 +1,4 @@
-mod phase1;
+pub(crate) mod phase1;
 
 use crate::error::AvixError;
 use crate::memfs::MemFs;
