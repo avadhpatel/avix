@@ -76,3 +76,14 @@ pub enum ToolVisibility {
     Crew(String),
     User(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_display_tool_name() {
+        let t = ToolName::parse("fs/read").unwrap();
+        assert_eq!(format!("{t}"), "fs/read");
+    }
+}

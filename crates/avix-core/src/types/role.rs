@@ -35,6 +35,24 @@ impl std::fmt::Display for Role {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_display_all_variants() {
+        assert_eq!(format!("{}", Role::Admin), "admin");
+        assert_eq!(format!("{}", Role::Operator), "operator");
+        assert_eq!(format!("{}", Role::User), "user");
+        assert_eq!(format!("{}", Role::Guest), "guest");
+    }
+
+    #[test]
+    fn test_can_access_domain_unknown_returns_false() {
+        assert!(!Role::Admin.can_access_domain("unknown-domain"));
+    }
+}
+
 impl FromStr for Role {
     type Err = AvixError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {

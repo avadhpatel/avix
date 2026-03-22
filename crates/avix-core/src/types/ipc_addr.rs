@@ -42,3 +42,16 @@ impl IpcAddr {
         &self.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_well_known_addresses() {
+        assert!(IpcAddr::kernel().os_path().contains("kernel"));
+        assert!(IpcAddr::auth().os_path().contains("auth"));
+        assert!(IpcAddr::memfs().os_path().contains("memfs"));
+        assert!(IpcAddr::router().os_path().contains("router"));
+    }
+}

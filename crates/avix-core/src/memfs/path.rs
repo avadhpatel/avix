@@ -35,3 +35,20 @@ impl VfsPath {
         self.0.rsplit_once('/').map(|(_, name)| name)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parent_of_root_child_is_root() {
+        let p = VfsPath::parse("/foo").unwrap();
+        assert_eq!(p.parent().unwrap().as_str(), "/");
+    }
+
+    #[test]
+    fn test_file_name() {
+        let p = VfsPath::parse("/foo/bar.txt").unwrap();
+        assert_eq!(p.file_name(), Some("bar.txt"));
+    }
+}
