@@ -191,7 +191,7 @@ avix/
 │   │   ├── quickstart.md
 │   │   ├── installation.md
 │   │   └── tutorial.md
-│   └── daily-plans/          ← Day-by-day implementation plans (day-01.md … day-31.md)
+│   └── dev_plans/            ← Active development plans and gap analyses
 │
 └── .github/
     └── workflows/

@@ -121,16 +121,6 @@ points only — they parse CLI args, call `avix-core`, and exit.
 
 Never write implementation code without a failing test already in place. No exceptions.
 
-### Daily Commit Convention
-
-Each day's work is a single commit:
-
-```
-day-NN: <short description>
-```
-
-Example: `day-06: IPC foundation — 4-byte framing, JSON-RPC types, socket transport`
-
 ### Before Every Commit
 
 ```bash
@@ -190,7 +180,7 @@ All three must exit 0. Fix before committing.
 
 ## Performance Targets
 
-These are hard benchmarks, not aspirational. All must pass before Day 29 merges.
+These are hard benchmarks, not aspirational.
 
 | Operation                          | Target   |
 |------------------------------------|----------|
@@ -303,46 +293,21 @@ AVIX_MASTER_KEY=<your-key> ./target/debug/avix start --root ~/avix-data
 
 ---
 
-## Daily Plan Files
+## Development Plans
 
-Detailed day-by-day instructions for Claude Code are in `docs/daily-plans/`:
+Active development plans live in `docs/dev_plans/`. These are gap analyses and focused
+implementation tasks with TDD test code, implementation guidance, and success criteria.
 
 ```
-docs/daily-plans/
-├── day-01.md   ← Repo setup, workspace skeleton, CLAUDE.md, CI
-├── day-02.md   ← Core types (Pid, IpcAddr, Role, Modality, ToolName)
-├── day-03.md   ← ProcessTable
-├── day-04.md   ← SignalBus
-├── day-05.md   ← Config parsing (Auth, Kernel, Users, Crews, Llm)
-├── day-06.md   ← IPC framing + JSON-RPC types
-├── day-07.md   ← Router service registry
-├── day-08.md   ← MemFS / VFS
-├── day-09.md   ← Auth service + session management
-├── day-10.md   ← Router concurrency + _caller injection
-├── day-11.md   ← ATPToken + avix config init
-├── day-12.md   ← Bootstrap phases 0–3
-├── day-13.md   ← Session storage (redb)
-├── day-14.md   ← AutoAgents integration / LlmClient trait
-├── day-14b.md  ← llm.svc multi-modality implementation
-├── day-15.md   ← RuntimeExecutor core + Category 2 tool registration
-├── day-16.md   ← 7-step turn loop + tool call validation
-├── day-17.md   ← Human-in-loop (3 scenarios) + ApprovalToken
-├── day-18.md   ← Main execution loop integration
-├── day-19.md   ← ToolRegistry dynamic registration
-├── day-20.md   ← Service lifecycle + ServiceToken
-├── day-21.md   ← 32 kernel syscalls (6 domains)
-├── day-22.md   ← Pipes (open/write/read/close, backpressure)
-├── day-23.md   ← Secrets store (AES-256-GCM)
-├── day-24.md   ← Crontab scheduler
-├── day-25.md   ← Snapshot & restore
-├── day-26.md   ← Gateway service (ATP over WebSocket)
-├── day-27.md   ← exec.svc + mcp-bridge.svc
-├── day-28.md   ← avix llm CLI commands
-├── day-29.md   ← Benchmarks (all performance targets)
-├── day-30.md   ← GUI SPA (avix-app)
-└── day-31.md   ← Docs, 95%+ coverage gate, v0.1.0 release
+docs/dev_plans/
+├── README.md                          ← Overview of the dev_plans folder
+├── fs-gap-A-bootstrap-vfs-init.md     ← Phase 1 VFS skeleton (proc/, kernel/ trees)
+├── fs-gap-B-agent-spawn-vfs-writes.md ← /proc/<pid>/status.yaml + resolved.yaml at spawn
+├── fs-gap-C-config-init-completeness.md ← config init writes all 6 /etc/avix/ files
+├── fs-gap-D-vfs-write-protection.md   ← VfsPath::is_agent_writable() + syscall enforcement
+├── fs-gap-E-mount-system.md           ← Mount system design (deferred to v0.2)
+└── fs-gap-F-session-vfs-manifest.md   ← SessionStore writes /proc/users/<u>/sessions/
 ```
 
-Each file contains: pre-flight verification of the previous day, module setup,
-full test code (written before implementation), implementation guidance, verify
-steps, commit message, and a success criteria checklist.
+Files in `docs/dev_plans/` are considered temporary working documents and may be removed
+once the work is complete and incorporated into `docs/architecture/`.
