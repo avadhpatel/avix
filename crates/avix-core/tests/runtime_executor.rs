@@ -937,3 +937,92 @@ async fn pipe_open_without_handler_returns_stub() {
         "stub should still return pipeId"
     );
 }
+
+// ── Finding B: VFS writes at agent spawn ─────────────────────────────────────
+
+#[tokio::test]
+async fn spawn_writes_status_yaml_to_vfs() {
+    let handler = Arc::new(KernelResourceHandler::new(TEST_KEY.to_vec()));
+    let vfs = Arc::new(MemFs::new());
+    let (executor, _reg) = spawn_with_signed_token(600, &["fs/read", "llm/complete"]).await;
+    let executor = executor
+        .with_resource_handler(handler)
+        .with_vfs(Arc::clone(&vfs));
+    executor.init_proc_files().await;
+
+    let path = VfsPath::parse("/proc/600/status.yaml").unwrap();
+    assert!(
+        vfs.exists(&path).await,
+        "/proc/600/status.yaml must exist after spawn when VFS is attached"
+    );
+}
+
+#[tokio::test]
+async fn spawn_status_yaml_contains_pid_and_name() {
+    let vfs = Arc::new(MemFs::new());
+    let registry = Arc::new(MockToolRegistry::new());
+    let params = SpawnParams {
+        pid: Pid::new(601),
+        agent_name: "my-researcher".into(),
+        goal: "do research".into(),
+        spawned_by: "alice".into(),
+        session_id: "sess-601".into(),
+        token: CapabilityToken::test_token(&["fs/read"]),
+    };
+    let executor = RuntimeExecutor::spawn_with_registry(params, registry)
+        .await
+        .unwrap()
+        .with_vfs(Arc::clone(&vfs));
+    executor.init_proc_files().await;
+
+    let raw = vfs
+        .read(&VfsPath::parse("/proc/601/status.yaml").unwrap())
+        .await
+        .unwrap();
+    let text = String::from_utf8(raw).unwrap();
+    assert!(text.contains("601"), "status.yaml must contain pid 601");
+    assert!(
+        text.contains("my-researcher"),
+        "status.yaml must contain agent name"
+    );
+    assert!(text.contains("alice"), "status.yaml must contain spawnedBy");
+    assert!(text.contains("running"), "status.yaml must show status: running");
+}
+
+#[tokio::test]
+async fn spawn_writes_resolved_yaml_to_vfs() {
+    let vfs = Arc::new(MemFs::new());
+    let registry = Arc::new(MockToolRegistry::new());
+    let params = SpawnParams {
+        pid: Pid::new(602),
+        agent_name: "writer".into(),
+        goal: "write report".into(),
+        spawned_by: "kernel".into(),
+        session_id: "sess-602".into(),
+        token: CapabilityToken::test_token(&["fs/read", "fs/write"]),
+    };
+    let executor = RuntimeExecutor::spawn_with_registry(params, registry)
+        .await
+        .unwrap()
+        .with_vfs(Arc::clone(&vfs));
+    executor.init_proc_files().await;
+
+    let path = VfsPath::parse("/proc/602/resolved.yaml").unwrap();
+    assert!(
+        vfs.exists(&path).await,
+        "/proc/602/resolved.yaml must exist after spawn when VFS is attached"
+    );
+    let raw = vfs.read(&path).await.unwrap();
+    let text = String::from_utf8(raw).unwrap();
+    assert!(text.contains("fs/read"), "resolved.yaml must list granted tools");
+    assert!(
+        text.contains("fs/write"),
+        "resolved.yaml must list all granted tools"
+    );
+}
+
+#[tokio::test]
+async fn spawn_without_vfs_does_not_panic() {
+    let (executor, _reg) = spawn_with_caps(603, &["fs/read"]).await;
+    assert_eq!(executor.pid().as_u32(), 603);
+}

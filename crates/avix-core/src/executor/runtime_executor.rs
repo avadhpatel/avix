@@ -190,6 +190,52 @@ impl RuntimeExecutor {
         self
     }
 
+    /// Write `/proc/<pid>/status.yaml` and `/proc/<pid>/resolved.yaml` to the VFS.
+    /// Must be called after `with_vfs()` to populate the proc entries.
+    /// No-op when no VFS is attached.
+    pub async fn init_proc_files(&self) {
+        self.write_proc_files().await;
+    }
+
+    async fn write_proc_files(&self) {
+        let vfs = match &self.vfs {
+            Some(v) => v,
+            None => return,
+        };
+        let pid = self.pid.as_u32();
+        let tools_yaml = self
+            .token
+            .granted_tools
+            .iter()
+            .map(|t| format!("    - {t}\n"))
+            .collect::<String>();
+
+        let status_yaml = format!(
+            "apiVersion: avix/v1\nkind: AgentStatus\nmetadata:\n  pid: {pid}\n  name: {name}\nspec:\n  status: running\n  goal: {goal:?}\n  spawnedBy: {spawned_by}\n  sessionId: {session_id}\n  grantedTools:\n{tools}  toolChainDepth: 0\n  contextTokensUsed: 0\n",
+            name = self.agent_name,
+            goal = self.goal,
+            spawned_by = self.spawned_by,
+            session_id = self.session_id,
+            tools = tools_yaml,
+        );
+        if let Ok(path) = VfsPath::parse(&format!("/proc/{pid}/status.yaml")) {
+            let _ = vfs.write(&path, status_yaml.into_bytes()).await;
+        }
+
+        let resolved_yaml = format!(
+            "apiVersion: avix/v1\nkind: Resolved\nmetadata:\n  pid: {pid}\n  name: {name}\nspec:\n  contextWindowTokens: 64000\n  maxToolChainLength: 50\n  tokenTtlSecs: 3600\n  grantedTools:\n{tools}",
+            name = self.agent_name,
+            tools = self.token
+                .granted_tools
+                .iter()
+                .map(|t| format!("    - {t}\n"))
+                .collect::<String>(),
+        );
+        if let Ok(path) = VfsPath::parse(&format!("/proc/{pid}/resolved.yaml")) {
+            let _ = vfs.write(&path, resolved_yaml.into_bytes()).await;
+        }
+    }
+
     pub fn pid(&self) -> Pid {
         self.pid
     }
