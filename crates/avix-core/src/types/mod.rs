@@ -11,5 +11,5 @@ pub use ipc_addr::IpcAddr;
 pub use modality::Modality;
 pub use pid::Pid;
 pub use role::Role;
-pub use token::{CapabilityToken, SessionToken};
+pub use token::{CapabilityToken, CapabilityTokenManifest, IssuedTo, SessionToken};
 pub use tool::{ToolCategory, ToolName, ToolState, ToolVisibility};

@@ -111,6 +111,103 @@ impl CapabilityToken {
             signature: "test-sig".into(),
         }
     }
+
+    /// Serialize this token to the canonical YAML manifest format:
+    /// ```yaml
+    /// apiVersion: avix/v1
+    /// kind: CapabilityToken
+    /// metadata: { issuedAt, expiresAt, issuedTo }
+    /// spec:
+    ///   tools: { granted: [...] }
+    ///   signature: sha256:...
+    /// ```
+    pub fn to_manifest_yaml(&self) -> Result<String, serde_yaml::Error> {
+        let manifest = CapabilityTokenManifest::from_token(self);
+        serde_yaml::to_string(&manifest)
+    }
+
+    /// Deserialize a token from a YAML manifest string.
+    pub fn from_manifest_yaml(yaml: &str) -> Result<Self, serde_yaml::Error> {
+        let manifest: CapabilityTokenManifest = serde_yaml::from_str(yaml)?;
+        Ok(manifest.into_token())
+    }
+}
+
+// ── YAML Manifest wrapper ──────────────────────────────────────────────────
+
+/// The envelope structure matching `apiVersion: avix/v1 / kind: CapabilityToken`.
+/// Used for on-disk storage and the `AVIX_CAP_TOKEN` env-var serialisation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityTokenManifest {
+    pub api_version: String,
+    pub kind: String,
+    pub metadata: ManifestMetadata,
+    pub spec: ManifestSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestMetadata {
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issued_to: Option<IssuedTo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestSpec {
+    pub tools: ManifestTools,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub constraints: Option<ManifestConstraints>,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestTools {
+    pub granted: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestConstraints {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens_per_turn: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tool_chain_length: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_pipe_targets: Option<Vec<u32>>,
+}
+
+impl CapabilityTokenManifest {
+    pub fn from_token(token: &CapabilityToken) -> Self {
+        Self {
+            api_version: "avix/v1".into(),
+            kind: "CapabilityToken".into(),
+            metadata: ManifestMetadata {
+                issued_at: token.issued_at,
+                expires_at: token.expires_at,
+                issued_to: token.issued_to.clone(),
+            },
+            spec: ManifestSpec {
+                tools: ManifestTools {
+                    granted: token.granted_tools.clone(),
+                },
+                constraints: None,
+                signature: token.signature.clone(),
+            },
+        }
+    }
+
+    pub fn into_token(self) -> CapabilityToken {
+        CapabilityToken {
+            granted_tools: self.spec.tools.granted,
+            issued_at: self.metadata.issued_at,
+            expires_at: self.metadata.expires_at,
+            issued_to: self.metadata.issued_to,
+            signature: self.spec.signature,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -236,5 +333,74 @@ mod tests {
         assert_eq!(decoded.granted_tools, token.granted_tools);
         assert_eq!(decoded.signature, token.signature);
         assert_eq!(decoded.issued_at.timestamp(), token.issued_at.timestamp());
+    }
+
+    // ── YAML manifest tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_manifest_yaml_round_trip() {
+        let token = fresh_token(&["fs/read", "agent/spawn"]);
+        let yaml = token.to_manifest_yaml().unwrap();
+        let decoded = CapabilityToken::from_manifest_yaml(&yaml).unwrap();
+        assert_eq!(decoded.granted_tools, token.granted_tools);
+        assert_eq!(decoded.signature, token.signature);
+        assert_eq!(decoded.issued_at.timestamp(), token.issued_at.timestamp());
+        assert_eq!(decoded.expires_at.timestamp(), token.expires_at.timestamp());
+    }
+
+    #[test]
+    fn test_manifest_yaml_contains_required_keys() {
+        let token = fresh_token(&["fs/read"]);
+        let yaml = token.to_manifest_yaml().unwrap();
+        assert!(yaml.contains("apiVersion"), "missing apiVersion");
+        assert!(yaml.contains("avix/v1"), "wrong apiVersion value");
+        assert!(yaml.contains("kind"), "missing kind");
+        assert!(yaml.contains("CapabilityToken"), "wrong kind value");
+        assert!(yaml.contains("metadata"), "missing metadata");
+        assert!(yaml.contains("issuedAt"), "missing issuedAt");
+        assert!(yaml.contains("expiresAt"), "missing expiresAt");
+        assert!(yaml.contains("spec"), "missing spec");
+        assert!(yaml.contains("granted"), "missing spec.tools.granted");
+        assert!(yaml.contains("signature"), "missing signature");
+    }
+
+    #[test]
+    fn test_manifest_yaml_with_issued_to() {
+        let issued_to = IssuedTo {
+            pid: 57,
+            agent_name: "researcher".into(),
+            spawned_by: "alice".into(),
+        };
+        let token = CapabilityToken::mint(
+            vec!["fs/read".into()],
+            Some(issued_to),
+            3600,
+            TEST_KEY,
+        );
+        let yaml = token.to_manifest_yaml().unwrap();
+        assert!(yaml.contains("issuedTo"), "missing issuedTo in manifest");
+        assert!(yaml.contains("researcher"), "missing agent_name");
+
+        let decoded = CapabilityToken::from_manifest_yaml(&yaml).unwrap();
+        let it = decoded.issued_to.unwrap();
+        assert_eq!(it.pid, 57);
+        assert_eq!(it.agent_name, "researcher");
+    }
+
+    #[test]
+    fn test_manifest_from_yaml_preserves_signature_validity() {
+        let token = fresh_token(&["fs/read", "llm/complete"]);
+        let yaml = token.to_manifest_yaml().unwrap();
+        let decoded = CapabilityToken::from_manifest_yaml(&yaml).unwrap();
+        assert!(
+            decoded.verify_signature(TEST_KEY),
+            "signature should still verify after YAML round-trip"
+        );
+    }
+
+    #[test]
+    fn test_manifest_from_yaml_invalid_returns_error() {
+        let result = CapabilityToken::from_manifest_yaml("not: valid: yaml: at: all: !!!");
+        assert!(result.is_err(), "invalid YAML should return an error");
     }
 }

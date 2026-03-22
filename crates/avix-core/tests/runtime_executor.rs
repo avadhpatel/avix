@@ -2,12 +2,16 @@ use avix_core::executor::runtime_executor::MockToolRegistry;
 use avix_core::executor::stop_reason::{interpret_stop_reason, TurnAction};
 use avix_core::executor::validation::{validate_tool_call, ToolBudgets};
 use avix_core::executor::{RuntimeExecutor, SpawnParams};
+use avix_core::kernel::KernelResourceHandler;
 use avix_core::llm_client::{LlmCompleteResponse, StopReason};
 use avix_core::llm_svc::adapter::AvixToolCall;
+use avix_core::memfs::{MemFs, VfsPath};
 use avix_core::types::token::CapabilityToken;
 use avix_core::types::{tool::ToolVisibility, Pid};
 use serde_json::json;
 use std::sync::Arc;
+
+const TEST_KEY: &[u8] = b"test-master-key-32-bytes-padded!";
 
 fn token_with_caps(caps: &[&str]) -> CapabilityToken {
     CapabilityToken::test_token(caps)
@@ -720,4 +724,141 @@ async fn cap_escalate_returns_guidance_in_response() {
     let result = executor.dispatch_category2(&call).await.unwrap();
     assert!(result.get("guidance").is_some(), "response should have guidance field");
     assert!(result.get("selectedOption").is_some(), "response should have selectedOption field");
+}
+
+// ── Resource handler wiring tests ──────────────────────────────────────────
+
+async fn spawn_with_signed_token(pid_val: u32, tools: &[&str]) -> (RuntimeExecutor, Arc<MockToolRegistry>) {
+    let registry = Arc::new(MockToolRegistry::new());
+    let token = avix_core::types::token::CapabilityToken::mint(
+        tools.iter().map(|s| s.to_string()).collect(),
+        None,
+        3600,
+        TEST_KEY,
+    );
+    let params = SpawnParams {
+        pid: Pid::new(pid_val),
+        agent_name: "test-agent".into(),
+        goal: "do something".into(),
+        spawned_by: "kernel".into(),
+        session_id: "session".into(),
+        token,
+    };
+    let executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
+        .await
+        .unwrap();
+    (executor, registry)
+}
+
+#[tokio::test]
+async fn cap_request_tool_returns_denied_via_resource_handler() {
+    // KernelResourceHandler always denies tool grants (HIL required)
+    let handler = Arc::new(KernelResourceHandler::new(TEST_KEY.to_vec()));
+    let (executor, _reg) = spawn_with_signed_token(400, &["cap/request-tool"]).await;
+    let mut executor = executor.with_resource_handler(handler);
+
+    let call = AvixToolCall {
+        call_id: "rh-1".into(),
+        name: "cap/request-tool".into(),
+        args: json!({ "tool": "send_email", "reason": "notify user" }),
+    };
+    let result = executor.dispatch_category2(&call).await.unwrap();
+    assert_eq!(result["approved"], json!(false), "handler should deny tool grants (HIL required)");
+    assert_eq!(result["tool"], json!("send_email"));
+}
+
+#[tokio::test]
+async fn token_renewal_via_resource_handler_updates_token() {
+    let handler = Arc::new(KernelResourceHandler::new(TEST_KEY.to_vec()));
+    let (executor, _reg) = spawn_with_signed_token(401, &["fs/read"]).await;
+    let mut executor = executor.with_resource_handler(handler);
+
+    // Force the token close to expiry so maybe_renew_token fires
+    executor.token.expires_at = chrono::Utc::now() + chrono::Duration::minutes(2);
+    let old_expires_at = executor.token.expires_at;
+
+    // Simulate what run_until_complete does at turn start
+    // We call maybe_renew_token indirectly by pushing a done response and running
+    let response = LlmCompleteResponse {
+        content: vec![json!({"type": "text", "text": "done"})],
+        stop_reason: StopReason::EndTurn,
+        input_tokens: 5,
+        output_tokens: 2,
+    };
+    executor.push_llm_response(response);
+    executor.run_until_complete("test goal").await.unwrap();
+
+    assert!(
+        executor.token.expires_at > old_expires_at,
+        "token expiry should have been extended by resource handler renewal"
+    );
+    assert!(
+        executor.token.verify_signature(TEST_KEY),
+        "renewed token must carry a valid HMAC signature"
+    );
+}
+
+// ── pipe/open ResourceRequest + VFS record tests ───────────────────────────
+
+#[tokio::test]
+async fn pipe_open_via_resource_handler_writes_proc_entry() {
+    let handler = Arc::new(KernelResourceHandler::new(TEST_KEY.to_vec()));
+    let vfs = Arc::new(MemFs::new());
+    let (executor, _reg) = spawn_with_signed_token(500, &["pipe/open"]).await;
+    let mut executor = executor
+        .with_resource_handler(handler)
+        .with_vfs(Arc::clone(&vfs));
+
+    let call = AvixToolCall {
+        call_id: "pipe-1".into(),
+        name: "pipe/open".into(),
+        args: json!({ "targetPid": 99, "direction": "out", "bufferTokens": 8192 }),
+    };
+    let result = executor.dispatch_category2(&call).await.unwrap();
+    assert!(result.get("pipeId").is_some(), "pipe/open should return a pipeId");
+    let pipe_id = result["pipeId"].as_str().unwrap();
+
+    // The VFS entry must exist at /proc/<pid>/pipes/<pipeId>.yaml
+    let path = VfsPath::parse(&format!("/proc/{}/pipes/{}.yaml", 500, pipe_id)).unwrap();
+    assert!(
+        vfs.exists(&path).await,
+        "VFS entry /proc/500/pipes/{pipe_id}.yaml should exist after pipe/open"
+    );
+}
+
+#[tokio::test]
+async fn pipe_open_proc_entry_contains_pipe_metadata() {
+    let handler = Arc::new(KernelResourceHandler::new(TEST_KEY.to_vec()));
+    let vfs = Arc::new(MemFs::new());
+    let (executor, _reg) = spawn_with_signed_token(501, &["pipe/open"]).await;
+    let mut executor = executor
+        .with_resource_handler(handler)
+        .with_vfs(Arc::clone(&vfs));
+
+    let call = AvixToolCall {
+        call_id: "pipe-2".into(),
+        name: "pipe/open".into(),
+        args: json!({ "targetPid": 77, "direction": "bidirectional", "bufferTokens": 4096 }),
+    };
+    let result = executor.dispatch_category2(&call).await.unwrap();
+    let pipe_id = result["pipeId"].as_str().unwrap();
+
+    let path = VfsPath::parse(&format!("/proc/{}/pipes/{}.yaml", 501, pipe_id)).unwrap();
+    let raw = vfs.read(&path).await.expect("VFS entry should be readable");
+    let content = String::from_utf8(raw).unwrap();
+    assert!(content.contains("target_pid") || content.contains("targetPid"), "entry should include target_pid");
+    assert!(content.contains("77"), "entry should include target pid 77");
+}
+
+#[tokio::test]
+async fn pipe_open_without_handler_returns_stub() {
+    // Without a handler, pipe/open returns the old stub response
+    let (mut executor, _reg) = spawn_with_caps(502, &["pipe/open"]).await;
+    let call = AvixToolCall {
+        call_id: "pipe-stub".into(),
+        name: "pipe/open".into(),
+        args: json!({ "targetPid": 10, "direction": "out" }),
+    };
+    let result = executor.dispatch_category2(&call).await.unwrap();
+    assert!(result.get("pipeId").is_some(), "stub should still return pipeId");
 }

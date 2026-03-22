@@ -10,6 +10,9 @@ fn entry(pid: u32) -> ProcessEntry {
         status: ProcessStatus::Running,
         parent: None,
         spawned_by_user: "alice".to_string(),
+        granted_tools: Vec::new(),
+        token_expires_at: None,
+        tool_chain_depth: 0,
     }
 }
 

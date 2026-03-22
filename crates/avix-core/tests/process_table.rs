@@ -1,5 +1,6 @@
 use avix_core::process::{ProcessEntry, ProcessKind, ProcessStatus, ProcessTable};
 use avix_core::types::Pid;
+use chrono::Utc;
 use std::sync::Arc;
 
 fn make_agent_entry(pid: u32, name: &str) -> ProcessEntry {
@@ -10,6 +11,9 @@ fn make_agent_entry(pid: u32, name: &str) -> ProcessEntry {
         status: ProcessStatus::Running,
         parent: None,
         spawned_by_user: "alice".to_string(),
+        granted_tools: Vec::new(),
+        token_expires_at: None,
+        tool_chain_depth: 0,
     }
 }
 
@@ -21,6 +25,9 @@ fn make_service_entry(pid: u32, name: &str) -> ProcessEntry {
         status: ProcessStatus::Running,
         parent: None,
         spawned_by_user: "system".to_string(),
+        granted_tools: Vec::new(),
+        token_expires_at: None,
+        tool_chain_depth: 0,
     }
 }
 
@@ -169,4 +176,62 @@ async fn count_is_accurate() {
     assert_eq!(table.count().await, 1);
     table.remove(Pid::new(57)).await;
     assert_eq!(table.count().await, 0);
+}
+
+// ── Token / chain-depth fields ──────────────────────────────────────────
+
+#[tokio::test]
+async fn set_token_stores_granted_tools_and_expiry() {
+    let table = ProcessTable::new();
+    table.insert(make_agent_entry(70, "researcher")).await;
+    let expires = Utc::now() + chrono::Duration::hours(1);
+    table
+        .set_token(
+            Pid::new(70),
+            vec!["fs/read".into(), "agent/spawn".into()],
+            Some(expires),
+        )
+        .await
+        .unwrap();
+
+    let entry = table.get(Pid::new(70)).await.unwrap();
+    assert_eq!(entry.granted_tools, vec!["fs/read", "agent/spawn"]);
+    assert!(entry.token_expires_at.is_some());
+}
+
+#[tokio::test]
+async fn set_token_missing_pid_returns_err() {
+    let table = ProcessTable::new();
+    let result = table.set_token(Pid::new(99), vec![], None).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn increment_chain_depth_counts_up() {
+    let table = ProcessTable::new();
+    table.insert(make_agent_entry(71, "agent")).await;
+    table.increment_chain_depth(Pid::new(71)).await.unwrap();
+    table.increment_chain_depth(Pid::new(71)).await.unwrap();
+    table.increment_chain_depth(Pid::new(71)).await.unwrap();
+    let entry = table.get(Pid::new(71)).await.unwrap();
+    assert_eq!(entry.tool_chain_depth, 3);
+}
+
+#[tokio::test]
+async fn reset_chain_depth_sets_to_zero() {
+    let table = ProcessTable::new();
+    table.insert(make_agent_entry(72, "agent")).await;
+    table.increment_chain_depth(Pid::new(72)).await.unwrap();
+    table.increment_chain_depth(Pid::new(72)).await.unwrap();
+    table.reset_chain_depth(Pid::new(72)).await.unwrap();
+    let entry = table.get(Pid::new(72)).await.unwrap();
+    assert_eq!(entry.tool_chain_depth, 0);
+}
+
+#[tokio::test]
+async fn new_entry_has_zero_chain_depth_and_empty_tools() {
+    let entry = make_agent_entry(73, "fresh");
+    assert_eq!(entry.tool_chain_depth, 0);
+    assert!(entry.granted_tools.is_empty());
+    assert!(entry.token_expires_at.is_none());
 }

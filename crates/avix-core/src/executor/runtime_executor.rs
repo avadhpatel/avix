@@ -4,6 +4,10 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 use crate::error::AvixError;
+use crate::kernel::resource_request::{
+    KernelResourceHandler, ResourceGrant, ResourceItem, ResourceRequest, Urgency,
+};
+use crate::memfs::{MemFs, VfsPath};
 use crate::llm_client::LlmCompleteResponse;
 use crate::llm_svc::adapter::AvixToolCall;
 use crate::types::{token::CapabilityToken, tool::ToolVisibility, Pid};
@@ -107,6 +111,11 @@ pub struct RuntimeExecutor {
     pub max_tool_chain_length: usize,
     // kernel handle for dispatch (optional)
     kernel: Option<Arc<MockKernelHandle>>,
+    /// Real kernel resource handler — used for cap/request-tool and token renewal.
+    /// When set, takes precedence over the `MockKernelHandle` auto-approve flag.
+    resource_handler: Option<Arc<KernelResourceHandler>>,
+    /// VFS handle — when set, pipe/open writes a /proc/<pid>/pipes/<pipeId>.yaml record.
+    vfs: Option<Arc<MemFs>>,
     registry_ref: RegistryRef,
 }
 
@@ -147,6 +156,8 @@ impl RuntimeExecutor {
             fs_data: Arc::new(std::sync::Mutex::new(HashMap::new())),
             max_tool_chain_length: 50,
             kernel: None,
+            resource_handler: None,
+            vfs: None,
             registry_ref: RegistryRef::Mock(registry),
         };
 
@@ -164,6 +175,19 @@ impl RuntimeExecutor {
         let mut executor = Self::spawn_with_registry(params, registry).await?;
         executor.kernel = Some(kernel);
         Ok(executor)
+    }
+
+    /// Attach a `KernelResourceHandler` so `cap/request-tool` and token renewal
+    /// route through the real handler instead of the mock auto-approve flag.
+    pub fn with_resource_handler(mut self, handler: Arc<KernelResourceHandler>) -> Self {
+        self.resource_handler = Some(handler);
+        self
+    }
+
+    /// Attach a `MemFs` handle so `pipe/open` writes `/proc/<pid>/pipes/<pipeId>.yaml`.
+    pub fn with_vfs(mut self, vfs: Arc<MemFs>) -> Self {
+        self.vfs = Some(vfs);
+        self
     }
 
     pub fn pid(&self) -> Pid {
@@ -306,6 +330,42 @@ impl RuntimeExecutor {
                 Ok(serde_json::json!({"killed": true}))
             }
             "cap/request-tool" => {
+                let tool_name = call.args["tool"].as_str().unwrap_or("").to_string();
+                let reason = call.args["reason"].as_str().unwrap_or("").to_string();
+
+                // Route through KernelResourceHandler when available
+                if let Some(handler) = &self.resource_handler {
+                    let req = ResourceRequest::new(
+                        self.pid.as_u32(),
+                        self.token.signature.clone(),
+                        vec![ResourceItem::Tool {
+                            name: tool_name.clone(),
+                            urgency: Urgency::Normal,
+                            reason,
+                        }],
+                    );
+                    match handler.handle(&req, &self.token) {
+                        Ok(resp) => {
+                            if let Some(ResourceGrant::Tool { granted, new_token, .. }) =
+                                resp.grants.into_iter().next()
+                            {
+                                if granted {
+                                    if let Some(tok) = new_token {
+                                        self.token = tok;
+                                        self.refresh_tool_list();
+                                    }
+                                    return Ok(serde_json::json!({"approved": true, "tool": tool_name}));
+                                }
+                            }
+                            return Ok(serde_json::json!({"approved": false, "tool": tool_name}));
+                        }
+                        Err(e) => {
+                            return Ok(serde_json::json!({"approved": false, "error": e.to_string()}));
+                        }
+                    }
+                }
+
+                // Fallback: mock auto-approve flag
                 if let Some(kernel) = &self.kernel {
                     if kernel.is_auto_approve().await {
                         return Ok(serde_json::json!({"approved": true}));
@@ -362,10 +422,60 @@ impl RuntimeExecutor {
                 "durationSec": 0
             })),
             "agent/send-message" => Ok(serde_json::json!({ "delivered": true })),
-            "pipe/open" => Ok(serde_json::json!({
-                "pipeId": "pipe-stub",
-                "state": "open"
-            })),
+            "pipe/open" => {
+                let target_pid = call.args["targetPid"].as_u64().unwrap_or(0) as u32;
+                let direction = call.args["direction"].as_str().unwrap_or("out").to_string();
+                let buffer_tokens = call.args["bufferTokens"].as_u64().unwrap_or(8192) as u32;
+
+                if let Some(handler) = &self.resource_handler {
+                    let pipe_direction = match direction.as_str() {
+                        "in" => crate::kernel::resource_request::PipeDirection::In,
+                        "bidirectional" => crate::kernel::resource_request::PipeDirection::Bidirectional,
+                        _ => crate::kernel::resource_request::PipeDirection::Out,
+                    };
+                    let req = ResourceRequest::new(
+                        self.pid.as_u32(),
+                        self.token.signature.clone(),
+                        vec![ResourceItem::Pipe {
+                            target_pid,
+                            direction: pipe_direction,
+                            buffer_tokens,
+                            reason: String::new(),
+                        }],
+                    );
+                    match handler.handle(&req, &self.token) {
+                        Ok(resp) => {
+                            if let Some(ResourceGrant::Pipe { granted: true, pipe_id: Some(pipe_id), .. }) =
+                                resp.grants.into_iter().next()
+                            {
+                                // Write /proc/<pid>/pipes/<pipeId>.yaml to VFS when handle available
+                                if let Some(vfs) = &self.vfs {
+                                    let pid = self.pid.as_u32();
+                                    let entry = serde_yaml::to_string(&serde_json::json!({
+                                        "pipe_id": pipe_id,
+                                        "target_pid": target_pid,
+                                        "direction": direction,
+                                        "buffer_tokens": buffer_tokens,
+                                        "state": "open"
+                                    }))
+                                    .unwrap_or_default();
+                                    let path_str = format!("/proc/{}/pipes/{}.yaml", pid, pipe_id);
+                                    if let Ok(path) = VfsPath::parse(&path_str) {
+                                        let _ = vfs.write(&path, entry.into_bytes()).await;
+                                    }
+                                }
+                                return Ok(serde_json::json!({ "pipeId": pipe_id, "state": "open" }));
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(pid = ?self.pid, error = %e, "pipe/open resource request failed");
+                        }
+                    }
+                }
+
+                // Fallback stub
+                Ok(serde_json::json!({ "pipeId": "pipe-stub", "state": "open" }))
+            }
             "pipe/write" => Ok(serde_json::json!({
                 "tokensSent": 0,
                 "bufferRemaining": 8192
@@ -418,17 +528,42 @@ impl RuntimeExecutor {
         self.max_tool_chain_length = max;
     }
 
-    /// Token renewal — extend expiry by 1 hour if the token is still valid but within
-    /// 5 minutes of expiry.  Already-expired tokens are NOT renewed here; the expiry
-    /// guard after this call returns an error for those.
-    /// In production the kernel re-issues a properly signed token; here we extend
-    /// `expires_at` directly since tests use unsigned `test_token()` tokens.
+    /// Token renewal — if the token is still valid but within 5 minutes of expiry,
+    /// send a `ResourceRequest{token_renewal}` to the kernel handler (when available)
+    /// and replace `self.token` with the newly signed token from the response.
+    /// Falls back to in-place extension when no handler is attached (tests).
+    /// Already-expired tokens are NOT renewed here; the expiry guard handles those.
     fn maybe_renew_token(&mut self) {
         let until_expiry = self.token.expires_at.signed_duration_since(chrono::Utc::now());
-        if until_expiry > chrono::Duration::zero() && until_expiry <= chrono::Duration::minutes(5) {
-            self.token.expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
-            tracing::info!(pid = ?self.pid, "token renewed (mock)");
+        if !(until_expiry > chrono::Duration::zero() && until_expiry <= chrono::Duration::minutes(5)) {
+            return;
         }
+
+        if let Some(handler) = self.resource_handler.clone() {
+            let req = ResourceRequest::new(
+                self.pid.as_u32(),
+                self.token.signature.clone(),
+                vec![ResourceItem::TokenRenewal { reason: "auto-renewal within 5 min window".into() }],
+            );
+            match handler.handle(&req, &self.token) {
+                Ok(resp) => {
+                    if let Some(ResourceGrant::TokenRenewal { granted: true, new_token: Some(tok), .. }) =
+                        resp.grants.into_iter().next()
+                    {
+                        tracing::info!(pid = ?self.pid, "token renewed via KernelResourceHandler");
+                        self.token = tok;
+                        return;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(pid = ?self.pid, error = %e, "token renewal request failed");
+                }
+            }
+        }
+
+        // Fallback: extend in-place (unsigned test tokens)
+        self.token.expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+        tracing::info!(pid = ?self.pid, "token renewed (mock)");
     }
 
     /// Run the turn loop against a real LLM client.

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use chrono::{DateTime, Utc};
+
 use super::entry::{ProcessEntry, ProcessKind, ProcessStatus};
 use crate::error::AvixError;
 use crate::types::Pid;
@@ -84,5 +86,49 @@ impl ProcessTable {
 
     pub async fn count(&self) -> usize {
         self.inner.read().await.len()
+    }
+
+    /// Update the capability fields for an agent: the granted tool names and optional expiry.
+    /// Called by `RuntimeExecutor` at spawn and on token renewal.
+    pub async fn set_token(
+        &self,
+        pid: Pid,
+        granted_tools: Vec<String>,
+        token_expires_at: Option<DateTime<Utc>>,
+    ) -> Result<(), AvixError> {
+        let mut guard = self.inner.write().await;
+        match guard.get_mut(&pid.as_u32()) {
+            Some(e) => {
+                e.granted_tools = granted_tools;
+                e.token_expires_at = token_expires_at;
+                Ok(())
+            }
+            None => Err(AvixError::InvalidPid(pid.to_string())),
+        }
+    }
+
+    /// Increment the tool-chain depth counter for the current turn.
+    /// Called each time a tool call is dispatched within a turn.
+    pub async fn increment_chain_depth(&self, pid: Pid) -> Result<(), AvixError> {
+        let mut guard = self.inner.write().await;
+        match guard.get_mut(&pid.as_u32()) {
+            Some(e) => {
+                e.tool_chain_depth = e.tool_chain_depth.saturating_add(1);
+                Ok(())
+            }
+            None => Err(AvixError::InvalidPid(pid.to_string())),
+        }
+    }
+
+    /// Reset the tool-chain depth to 0 at the start of each new turn.
+    pub async fn reset_chain_depth(&self, pid: Pid) -> Result<(), AvixError> {
+        let mut guard = self.inner.write().await;
+        match guard.get_mut(&pid.as_u32()) {
+            Some(e) => {
+                e.tool_chain_depth = 0;
+                Ok(())
+            }
+            None => Err(AvixError::InvalidPid(pid.to_string())),
+        }
     }
 }
