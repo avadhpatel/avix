@@ -232,4 +232,89 @@ mod tests {
             Err(AdapterError::UnsupportedModality(Modality::Embedding))
         ));
     }
+
+    #[test]
+    fn test_parse_tool_call_returns_unsupported() {
+        let adapter = make_adapter();
+        assert!(matches!(
+            adapter.parse_tool_call(&json!({})),
+            Err(AdapterError::UnsupportedModality(Modality::Text))
+        ));
+    }
+
+    #[test]
+    fn test_parse_image_response_returns_unsupported() {
+        let adapter = make_adapter();
+        assert!(matches!(
+            adapter.parse_image_response(json!({})),
+            Err(AdapterError::UnsupportedModality(Modality::Image))
+        ));
+    }
+
+    #[test]
+    fn test_parse_transcription_response_returns_unsupported() {
+        let adapter = make_adapter();
+        assert!(matches!(
+            adapter.parse_transcription_response(json!({})),
+            Err(AdapterError::UnsupportedModality(Modality::Transcription))
+        ));
+    }
+
+    #[test]
+    fn test_parse_embed_response_returns_unsupported() {
+        let adapter = make_adapter();
+        assert!(matches!(
+            adapter.parse_embed_response(json!({})),
+            Err(AdapterError::UnsupportedModality(Modality::Embedding))
+        ));
+    }
+
+    #[test]
+    fn test_translate_tools_returns_empty_array() {
+        let adapter = make_adapter();
+        let tools = vec![AvixToolDescriptor {
+            name: "fs/read".to_string(),
+            description: "read".to_string(),
+            input_schema: json!({}),
+        }];
+        let result = adapter.translate_tools(&tools);
+        assert_eq!(result, json!([]));
+    }
+
+    #[test]
+    fn test_build_complete_request_returns_empty_object() {
+        let adapter = make_adapter();
+        let req = AvixCompleteRequest {
+            provider: None,
+            model: "m".to_string(),
+            messages: vec![],
+            system: None,
+            max_tokens: None,
+            temperature: None,
+            stream: None,
+            stop_sequences: None,
+            tools: vec![],
+            metadata: make_metadata(),
+        };
+        let body = adapter.build_complete_request(&req);
+        assert_eq!(body, json!({}));
+    }
+
+    #[test]
+    fn test_format_tool_result_returns_empty_object() {
+        let adapter = make_adapter();
+        let result = AvixToolResult {
+            call_id: "call-1".to_string(),
+            output: json!({"content": "ok"}),
+            error: None,
+        };
+        let formatted = adapter.format_tool_result(&result);
+        assert_eq!(formatted, json!({}));
+    }
+
+    #[test]
+    fn test_default_impl() {
+        let adapter = ElevenLabsAdapter::default();
+        assert_eq!(adapter.provider_name(), "elevenlabs");
+    }
 }

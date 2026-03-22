@@ -222,4 +222,126 @@ mod tests {
             Err(AdapterError::UnsupportedModality(Modality::Speech))
         ));
     }
+
+    #[test]
+    fn test_speech_endpoint_returns_unsupported() {
+        let adapter = make_adapter();
+        let req = AvixSpeechRequest {
+            provider: None,
+            model: "tts".to_string(),
+            text: "hello".to_string(),
+            voice: "alloy".to_string(),
+            format: None,
+            speed: None,
+            stream: None,
+            metadata: make_metadata(),
+        };
+        assert!(matches!(
+            adapter.speech_endpoint(&req),
+            Err(AdapterError::UnsupportedModality(Modality::Speech))
+        ));
+    }
+
+    #[test]
+    fn test_transcription_returns_unsupported() {
+        let adapter = make_adapter();
+        let req = AvixTranscribeRequest {
+            provider: None,
+            model: "whisper-1".to_string(),
+            file_path: "/tmp/audio.wav".to_string(),
+            language: None,
+            prompt: None,
+            granularity: None,
+            metadata: make_metadata(),
+        };
+        assert!(matches!(
+            adapter.build_transcription_request(&req, &[]),
+            Err(AdapterError::UnsupportedModality(Modality::Transcription))
+        ));
+    }
+
+    #[test]
+    fn test_parse_transcription_response_returns_unsupported() {
+        let adapter = make_adapter();
+        assert!(matches!(
+            adapter.parse_transcription_response(json!({})),
+            Err(AdapterError::UnsupportedModality(Modality::Transcription))
+        ));
+    }
+
+    #[test]
+    fn test_parse_tool_call_returns_unsupported() {
+        let adapter = make_adapter();
+        assert!(matches!(
+            adapter.parse_tool_call(&json!({})),
+            Err(AdapterError::UnsupportedModality(Modality::Text))
+        ));
+    }
+
+    #[test]
+    fn test_translate_tools_returns_empty_array() {
+        let adapter = make_adapter();
+        let result = adapter.translate_tools(&[]);
+        assert_eq!(result, json!([]));
+    }
+
+    #[test]
+    fn test_build_complete_request_returns_empty_object() {
+        use super::super::AvixCompleteRequest;
+        let adapter = make_adapter();
+        let req = AvixCompleteRequest {
+            provider: None,
+            model: "sd3".to_string(),
+            messages: vec![],
+            system: None,
+            max_tokens: None,
+            temperature: None,
+            stream: None,
+            stop_sequences: None,
+            tools: vec![],
+            metadata: make_metadata(),
+        };
+        let body = adapter.build_complete_request(&req);
+        assert_eq!(body, json!({}));
+    }
+
+    #[test]
+    fn test_format_tool_result_returns_empty_object() {
+        use super::super::AvixToolResult;
+        let adapter = make_adapter();
+        let result = AvixToolResult {
+            call_id: "c1".to_string(),
+            output: json!({}),
+            error: None,
+        };
+        let formatted = adapter.format_tool_result(&result);
+        assert_eq!(formatted, json!({}));
+    }
+
+    #[test]
+    fn test_parse_image_response_missing_image_field() {
+        let adapter = make_adapter();
+        // Missing "image" field → MissingField error
+        let raw = json!({"finish_reason": "SUCCESS"});
+        assert!(matches!(
+            adapter.parse_image_response(raw),
+            Err(AdapterError::MissingField(_))
+        ));
+    }
+
+    #[test]
+    fn test_parse_image_response_invalid_base64() {
+        let adapter = make_adapter();
+        let raw = json!({"image": "not-valid-base64!!!"});
+        assert!(matches!(
+            adapter.parse_image_response(raw),
+            Err(AdapterError::ParseError(_))
+        ));
+    }
+
+    #[test]
+    fn test_default_impl() {
+        let adapter = StabilityAdapter::default();
+        assert_eq!(adapter.provider_name(), "stability-ai");
+    }
 }

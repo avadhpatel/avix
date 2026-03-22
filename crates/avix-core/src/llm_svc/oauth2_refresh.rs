@@ -190,4 +190,126 @@ mod tests {
         // Cancelling a nonexistent provider should not panic
         sched.cancel("nonexistent-provider").await;
     }
+
+    #[test]
+    fn test_token_state_expiry_in_future() {
+        let expiry = Utc::now() + chrono::Duration::hours(1);
+        let state = OAuth2TokenState {
+            access_token: "access123".into(),
+            refresh_token: "refresh456".into(),
+            expiry,
+        };
+        assert!(state.expiry > Utc::now(), "expiry should be in the future");
+    }
+
+    #[test]
+    fn test_token_state_expiry_in_past() {
+        let expiry = Utc::now() - chrono::Duration::minutes(5);
+        let state = OAuth2TokenState {
+            access_token: "expired-tok".into(),
+            refresh_token: "ref".into(),
+            expiry,
+        };
+        assert!(state.expiry < Utc::now(), "expiry should be in the past");
+    }
+
+    #[tokio::test]
+    async fn test_token_store_insert_and_read() {
+        let store: TokenStore = Arc::new(RwLock::new(HashMap::new()));
+        let token = OAuth2TokenState {
+            access_token: "tok_abc".into(),
+            refresh_token: "ref_xyz".into(),
+            expiry: Utc::now() + chrono::Duration::hours(24),
+        };
+        store.write().await.insert("test-provider".into(), token.clone());
+
+        let guard = store.read().await;
+        let retrieved = guard.get("test-provider").unwrap();
+        assert_eq!(retrieved.access_token, "tok_abc");
+        assert_eq!(retrieved.refresh_token, "ref_xyz");
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_schedule_and_cancel_immediately() {
+        let scheduler = RefreshScheduler::new();
+        let store: TokenStore = Arc::new(RwLock::new(HashMap::new()));
+        // Add a token with far-future expiry so the scheduled task sleeps a long time
+        store.write().await.insert(
+            "test-provider".into(),
+            OAuth2TokenState {
+                access_token: "tok".into(),
+                refresh_token: "ref".into(),
+                expiry: Utc::now() + chrono::Duration::hours(24),
+            },
+        );
+
+        let config = RefreshConfig {
+            provider_name: "test-provider".into(),
+            token_url: "http://localhost:19999/token".into(), // unreachable — won't be called
+            client_id: "client".into(),
+            client_secret: "secret".into(),
+            refresh_before_expiry_min: 5,
+        };
+
+        let http_client = Arc::new(reqwest::Client::new());
+        scheduler
+            .schedule(config, Arc::clone(&store), http_client, |_| {})
+            .await;
+        // Immediately cancel — no HTTP call should occur
+        scheduler.cancel("test-provider").await;
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_multiple_providers_schedule_cancel() {
+        let scheduler = RefreshScheduler::new();
+        let http_client = Arc::new(reqwest::Client::new());
+
+        for name in &["provider-a", "provider-b"] {
+            let store: TokenStore = Arc::new(RwLock::new(HashMap::new()));
+            store.write().await.insert(
+                name.to_string(),
+                OAuth2TokenState {
+                    access_token: "tok".into(),
+                    refresh_token: "ref".into(),
+                    expiry: Utc::now() + chrono::Duration::hours(24),
+                },
+            );
+            let config = RefreshConfig {
+                provider_name: name.to_string(),
+                token_url: "http://localhost:19999/token".into(),
+                client_id: "c".into(),
+                client_secret: "s".into(),
+                refresh_before_expiry_min: 5,
+            };
+            scheduler
+                .schedule(config, store, Arc::clone(&http_client), |_| {})
+                .await;
+        }
+
+        scheduler.cancel("provider-a").await;
+        scheduler.cancel("provider-b").await;
+        // No panic = success
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_no_token_in_store() {
+        // If no token in store, the loop sleeps 60s and then tries refresh
+        // We test that scheduling without a token in the store doesn't panic on cancel
+        let scheduler = RefreshScheduler::new();
+        let store: TokenStore = Arc::new(RwLock::new(HashMap::new()));
+        // empty store
+
+        let config = RefreshConfig {
+            provider_name: "empty-provider".into(),
+            token_url: "http://localhost:19999/token".into(),
+            client_id: "c".into(),
+            client_secret: "s".into(),
+            refresh_before_expiry_min: 5,
+        };
+        let http_client = Arc::new(reqwest::Client::new());
+        scheduler
+            .schedule(config, store, http_client, |_| {})
+            .await;
+        scheduler.cancel("empty-provider").await;
+    }
 }

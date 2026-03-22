@@ -655,4 +655,216 @@ spec:
         let result = resp.result.unwrap();
         assert!(result.is_object());
     }
+
+    #[tokio::test]
+    async fn test_llm_service_dispatch_llm_complete_no_client_returns_error() {
+        let svc = make_service();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: "req-4".into(),
+            method: "llm/complete".into(),
+            params: serde_json::json!({
+                "provider": "anthropic",
+                "model": "claude-3",
+                "messages": [],
+                "metadata": {
+                    "agentPid": 1,
+                    "sessionId": "sess-test"
+                }
+            }),
+        };
+        let resp = svc.dispatch(&req).await;
+        // No text client registered for anthropic → should return an error
+        assert!(
+            resp.error.is_some(),
+            "expected error when no text client is registered"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_llm_service_dispatch_llm_complete_unknown_provider_returns_error() {
+        let svc = make_service();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: "req-5".into(),
+            method: "llm/complete".into(),
+            params: serde_json::json!({
+                "provider": "nonexistent-provider",
+                "model": "model-x",
+                "messages": [],
+                "metadata": {
+                    "agentPid": 1,
+                    "sessionId": "sess-test"
+                }
+            }),
+        };
+        let resp = svc.dispatch(&req).await;
+        assert!(
+            resp.error.is_some(),
+            "expected error for unknown provider"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_llm_service_dispatch_generate_image_no_adapter_returns_error() {
+        let svc = make_service();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: "req-6".into(),
+            method: "llm/generate-image".into(),
+            params: serde_json::json!({
+                "provider": "openai",
+                "model": "dall-e-3",
+                "prompt": "a cat",
+                "metadata": {
+                    "agentPid": 1,
+                    "sessionId": "sess-test"
+                }
+            }),
+        };
+        let resp = svc.dispatch(&req).await;
+        // No adapter registered → error
+        assert!(
+            resp.error.is_some(),
+            "expected error when no image adapter is registered"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_llm_service_dispatch_generate_speech_no_adapter_returns_error() {
+        let svc = make_service();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: "req-7".into(),
+            method: "llm/generate-speech".into(),
+            params: serde_json::json!({
+                "provider": "openai",
+                "model": "tts-1",
+                "text": "hello",
+                "voice": "alloy",
+                "metadata": {
+                    "agentPid": 1,
+                    "sessionId": "sess-test"
+                }
+            }),
+        };
+        let resp = svc.dispatch(&req).await;
+        assert!(
+            resp.error.is_some(),
+            "expected error when no speech adapter is registered"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_llm_service_dispatch_transcribe_no_adapter_returns_error() {
+        let svc = make_service();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: "req-8".into(),
+            method: "llm/transcribe".into(),
+            params: serde_json::json!({
+                "provider": "openai",
+                "model": "whisper-1",
+                "filePath": "/tmp/audio.wav",
+                "metadata": {
+                    "agentPid": 1,
+                    "sessionId": "sess-test"
+                }
+            }),
+        };
+        let resp = svc.dispatch(&req).await;
+        assert!(
+            resp.error.is_some(),
+            "expected error when no transcription adapter is registered"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_llm_service_dispatch_embed_no_input_returns_error() {
+        let svc = make_service();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: "req-9".into(),
+            method: "llm/embed".into(),
+            params: serde_json::json!({
+                "provider": "openai",
+                "model": "text-embedding-3-small",
+                "metadata": {
+                    "agentPid": 1,
+                    "sessionId": "sess-test"
+                }
+                // no "input" field
+            }),
+        };
+        let resp = svc.dispatch(&req).await;
+        assert!(
+            resp.error.is_some(),
+            "expected error when missing embed input"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_credential_store_holds_values() {
+        let store = CredentialStore {
+            inner: {
+                let mut m = HashMap::new();
+                m.insert(
+                    "anthropic".to_string(),
+                    ProviderCredential {
+                        header_name: "x-api-key".to_string(),
+                        header_value: "sk-test-123".to_string(),
+                    },
+                );
+                m
+            },
+        };
+        let cred = store.inner.get("anthropic").unwrap();
+        assert_eq!(cred.header_name, "x-api-key");
+        assert_eq!(cred.header_value, "sk-test-123");
+    }
+
+    #[tokio::test]
+    async fn test_provider_credential_clone() {
+        let cred = ProviderCredential {
+            header_name: "Authorization".to_string(),
+            header_value: "Bearer tok".to_string(),
+        };
+        let cloned = cred.clone();
+        assert_eq!(cloned.header_name, "Authorization");
+        assert_eq!(cloned.header_value, "Bearer tok");
+    }
+
+    #[tokio::test]
+    async fn test_llm_service_providers_includes_modalities_and_auth() {
+        let svc = make_service();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: "req-10".into(),
+            method: "llm/providers".into(),
+            params: serde_json::json!({}),
+        };
+        let resp = svc.dispatch(&req).await;
+        let result = resp.result.unwrap();
+        let providers = result["providers"].as_array().unwrap();
+        // anthropic provider should have authType: api_key
+        let anthropic = providers.iter().find(|p| p["name"] == "anthropic").unwrap();
+        assert_eq!(anthropic["authType"], "api_key");
+        assert_eq!(anthropic["status"], "available");
+    }
+
+    #[tokio::test]
+    async fn test_llm_service_new_creates_instance() {
+        let config = make_two_provider_config();
+        let routing = Arc::new(RoutingEngine::from_config(&config));
+        let svc = LlmService::new(config, HashMap::new(), routing, HashMap::new());
+        // verify the service was created by dispatching a basic request
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: "req-init".into(),
+            method: "llm/usage".into(),
+            params: serde_json::json!({}),
+        };
+        let resp = svc.dispatch(&req).await;
+        assert!(resp.error.is_none());
+    }
 }

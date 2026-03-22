@@ -277,3 +277,257 @@ pub trait ProviderAdapter: Send + Sync {
         Err(AdapterError::UnsupportedModality(Modality::Embedding))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal adapter that only implements required text methods.
+    struct TextOnlyAdapter;
+
+    impl ProviderAdapter for TextOnlyAdapter {
+        fn provider_name(&self) -> &str {
+            "text-only"
+        }
+
+        fn modalities(&self) -> &[Modality] {
+            &[Modality::Text]
+        }
+
+        fn translate_tools(&self, _tools: &[AvixToolDescriptor]) -> serde_json::Value {
+            serde_json::json!([])
+        }
+
+        fn build_complete_request(&self, _req: &AvixCompleteRequest) -> serde_json::Value {
+            serde_json::json!({})
+        }
+
+        fn parse_complete_response(
+            &self,
+            _raw: serde_json::Value,
+        ) -> Result<AvixCompleteResponse, AdapterError> {
+            Err(AdapterError::ParseError("not implemented".into()))
+        }
+
+        fn parse_tool_call(&self, _raw: &serde_json::Value) -> Result<AvixToolCall, AdapterError> {
+            Err(AdapterError::ParseError("not implemented".into()))
+        }
+
+        fn format_tool_result(&self, _result: &AvixToolResult) -> serde_json::Value {
+            serde_json::json!({})
+        }
+    }
+
+    fn make_metadata() -> CompleteMetadata {
+        CompleteMetadata {
+            agent_pid: 1,
+            session_id: "sess-1".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_default_build_image_request_returns_unsupported() {
+        let adapter = TextOnlyAdapter;
+        let req = AvixImageRequest {
+            provider: None,
+            model: "m".into(),
+            prompt: "p".into(),
+            negative_prompt: None,
+            size: None,
+            style: None,
+            n: None,
+            metadata: make_metadata(),
+        };
+        assert!(matches!(
+            adapter.build_image_request(&req),
+            Err(AdapterError::UnsupportedModality(Modality::Image))
+        ));
+    }
+
+    #[test]
+    fn test_default_parse_image_response_returns_unsupported() {
+        let adapter = TextOnlyAdapter;
+        assert!(matches!(
+            adapter.parse_image_response(serde_json::json!({})),
+            Err(AdapterError::UnsupportedModality(Modality::Image))
+        ));
+    }
+
+    #[test]
+    fn test_default_build_speech_request_returns_unsupported() {
+        let adapter = TextOnlyAdapter;
+        let req = AvixSpeechRequest {
+            provider: None,
+            model: "tts".into(),
+            text: "hello".into(),
+            voice: "alloy".into(),
+            format: None,
+            speed: None,
+            stream: None,
+            metadata: make_metadata(),
+        };
+        assert!(matches!(
+            adapter.build_speech_request(&req),
+            Err(AdapterError::UnsupportedModality(Modality::Speech))
+        ));
+    }
+
+    #[test]
+    fn test_default_speech_endpoint_returns_unsupported() {
+        let adapter = TextOnlyAdapter;
+        let req = AvixSpeechRequest {
+            provider: None,
+            model: "tts".into(),
+            text: "hello".into(),
+            voice: "alloy".into(),
+            format: None,
+            speed: None,
+            stream: None,
+            metadata: make_metadata(),
+        };
+        assert!(matches!(
+            adapter.speech_endpoint(&req),
+            Err(AdapterError::UnsupportedModality(Modality::Speech))
+        ));
+    }
+
+    #[test]
+    fn test_default_build_transcription_request_returns_unsupported() {
+        let adapter = TextOnlyAdapter;
+        let req = AvixTranscribeRequest {
+            provider: None,
+            model: "whisper-1".into(),
+            file_path: "/tmp/audio.wav".into(),
+            language: None,
+            prompt: None,
+            granularity: None,
+            metadata: make_metadata(),
+        };
+        assert!(matches!(
+            adapter.build_transcription_request(&req, &[]),
+            Err(AdapterError::UnsupportedModality(Modality::Transcription))
+        ));
+    }
+
+    #[test]
+    fn test_default_parse_transcription_response_returns_unsupported() {
+        let adapter = TextOnlyAdapter;
+        assert!(matches!(
+            adapter.parse_transcription_response(serde_json::json!({})),
+            Err(AdapterError::UnsupportedModality(Modality::Transcription))
+        ));
+    }
+
+    #[test]
+    fn test_default_build_embed_request_returns_unsupported() {
+        let adapter = TextOnlyAdapter;
+        let req = AvixEmbedRequest {
+            provider: None,
+            model: "embed".into(),
+            input: EmbedInput::Single("hello".into()),
+            metadata: make_metadata(),
+        };
+        assert!(matches!(
+            adapter.build_embed_request(&req),
+            Err(AdapterError::UnsupportedModality(Modality::Embedding))
+        ));
+    }
+
+    #[test]
+    fn test_default_parse_embed_response_returns_unsupported() {
+        let adapter = TextOnlyAdapter;
+        assert!(matches!(
+            adapter.parse_embed_response(serde_json::json!({})),
+            Err(AdapterError::UnsupportedModality(Modality::Embedding))
+        ));
+    }
+
+    #[test]
+    fn test_usage_summary_fields() {
+        let usage = UsageSummary {
+            input_tokens: 10,
+            output_tokens: 5,
+            total_tokens: 15,
+        };
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 5);
+        assert_eq!(usage.total_tokens, 15);
+    }
+
+    #[test]
+    fn test_embed_input_single_serde_roundtrip() {
+        let s = EmbedInput::Single("hello world".into());
+        let v = serde_json::to_value(&s).unwrap();
+        let back: EmbedInput = serde_json::from_value(v).unwrap();
+        match back {
+            EmbedInput::Single(text) => assert_eq!(text, "hello world"),
+            _ => panic!("expected Single"),
+        }
+    }
+
+    #[test]
+    fn test_embed_input_batch_serde_roundtrip() {
+        let b = EmbedInput::Batch(vec!["a".into(), "b".into(), "c".into()]);
+        let v = serde_json::to_value(&b).unwrap();
+        let back: EmbedInput = serde_json::from_value(v).unwrap();
+        match back {
+            EmbedInput::Batch(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0], "a");
+            }
+            _ => panic!("expected Batch"),
+        }
+    }
+
+    #[test]
+    fn test_adapter_error_display() {
+        let e1 = AdapterError::UnsupportedModality(Modality::Image);
+        assert!(e1.to_string().contains("Image"));
+
+        let e2 = AdapterError::ParseError("missing field x".into());
+        assert!(e2.to_string().contains("missing field x"));
+
+        let e3 = AdapterError::MissingField("prompt".into());
+        assert!(e3.to_string().contains("prompt"));
+    }
+
+    #[test]
+    fn test_avix_tool_call_fields() {
+        let call = AvixToolCall {
+            call_id: "id-123".into(),
+            name: "fs/read".into(),
+            args: serde_json::json!({"path": "/tmp/x"}),
+        };
+        assert_eq!(call.call_id, "id-123");
+        assert_eq!(call.name, "fs/read");
+        assert_eq!(call.args["path"], "/tmp/x");
+    }
+
+    #[test]
+    fn test_avix_tool_result_fields() {
+        let result = AvixToolResult {
+            call_id: "id-456".into(),
+            output: serde_json::json!({"content": "file contents"}),
+            error: None,
+        };
+        assert_eq!(result.call_id, "id-456");
+        assert!(result.error.is_none());
+
+        let result_err = AvixToolResult {
+            call_id: "id-789".into(),
+            output: serde_json::json!(null),
+            error: Some("EPERM".into()),
+        };
+        assert_eq!(result_err.error.as_deref(), Some("EPERM"));
+    }
+
+    #[test]
+    fn test_complete_metadata_fields() {
+        let meta = CompleteMetadata {
+            agent_pid: 42,
+            session_id: "sess-xyz".into(),
+        };
+        assert_eq!(meta.agent_pid, 42);
+        assert_eq!(meta.session_id, "sess-xyz");
+    }
+}

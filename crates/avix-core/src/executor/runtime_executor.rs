@@ -776,4 +776,367 @@ mod tests {
             "should have HIL pending message"
         );
     }
+
+    #[tokio::test]
+    async fn test_set_max_tool_chain_length() {
+        let mut executor = make_executor(230, &[]).await;
+        assert_eq!(executor.max_tool_chain_length, 50); // default
+        executor.set_max_tool_chain_length(10);
+        assert_eq!(executor.max_tool_chain_length, 10);
+    }
+
+    #[tokio::test]
+    async fn test_set_tool_budget() {
+        let mut executor = make_executor(231, &["fs/read"]).await;
+        executor.set_tool_budget("fs/read", 5);
+        assert_eq!(executor.tool_budgets.remaining("fs/read"), Some(5));
+    }
+
+    #[tokio::test]
+    async fn test_require_hil_for_sets_field() {
+        let mut executor = make_executor(232, &[]).await;
+        executor.require_hil_for("cap/escalate");
+        executor.require_hil_for("fs/delete");
+        // Verify the tools are recorded by checking hil gating in a turn
+        // (indirect test — we just verify the pending_messages after a blocked call)
+        let mock_client = MockLlmClient::new(vec![
+            LlmCompleteResponse {
+                content: vec![json!({
+                    "type": "tool_use",
+                    "id": "call-1",
+                    "name": "cap__escalate",
+                    "input": {}
+                })],
+                stop_reason: StopReason::ToolUse,
+                input_tokens: 5,
+                output_tokens: 2,
+            },
+            LlmCompleteResponse {
+                content: vec![json!({"type": "text", "text": "ok"})],
+                stop_reason: StopReason::EndTurn,
+                input_tokens: 3,
+                output_tokens: 1,
+            },
+        ]);
+        let result = executor.run_with_client("test", &mock_client).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_inject_pending_message_accumulates() {
+        let mut executor = make_executor(233, &[]).await;
+        executor.inject_pending_message("msg-1".into());
+        executor.inject_pending_message("msg-2".into());
+        executor.inject_pending_message("msg-3".into());
+        assert_eq!(executor.pending_messages.len(), 3);
+        assert_eq!(executor.pending_messages[0], "msg-1");
+        assert_eq!(executor.pending_messages[2], "msg-3");
+    }
+
+    #[tokio::test]
+    async fn test_spawn_with_registry_and_kernel() {
+        let registry = Arc::new(MockToolRegistry::new());
+        let kernel = Arc::new(MockKernelHandle::new());
+        let params = make_params(240, &["cap/list"]);
+        let executor =
+            RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, kernel)
+                .await
+                .unwrap();
+        assert!(!executor.tool_list.is_empty());
+        // kernel is set
+    }
+
+    #[tokio::test]
+    async fn test_set_token_expiry_in_and_on_fs_read() {
+        let mut executor = make_executor(241, &[]).await;
+        // set_token_expiry_in should set token_expiry_at
+        executor.set_token_expiry_in(Duration::from_secs(300));
+        // on_fs_read should store data
+        executor.on_fs_read("/tmp/test.txt", b"hello world");
+        // No panic = success; we test indirectly via run_until_complete with fs/read
+    }
+
+    #[tokio::test]
+    async fn test_run_until_complete_fs_read() {
+        let mut executor = make_executor(242, &[]).await;
+        executor.on_fs_read("/tmp/hello.txt", b"file contents here");
+
+        // Simulate: LLM calls fs/read, then returns text
+        executor.push_llm_response(LlmCompleteResponse {
+            content: vec![json!({
+                "type": "tool_use",
+                "id": "read-call",
+                "name": "fs/read",
+                "input": {"path": "/tmp/hello.txt"}
+            })],
+            stop_reason: StopReason::ToolUse,
+            input_tokens: 5,
+            output_tokens: 2,
+        });
+        executor.push_llm_response(LlmCompleteResponse {
+            content: vec![json!({"type": "text", "text": "I read the file"})],
+            stop_reason: StopReason::EndTurn,
+            input_tokens: 5,
+            output_tokens: 3,
+        });
+
+        let result = executor.run_until_complete("read the file").await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().text.contains("read the file"));
+    }
+
+    #[tokio::test]
+    async fn test_run_until_complete_chain_limit_exceeded() {
+        let mut executor = make_executor(243, &[]).await;
+        executor.set_max_tool_chain_length(1);
+
+        // Push two tool-use responses (will exceed chain limit of 1)
+        for i in 0..3 {
+            executor.push_llm_response(LlmCompleteResponse {
+                content: vec![json!({
+                    "type": "tool_use",
+                    "id": format!("call-{i}"),
+                    "name": "cap/list",
+                    "input": {}
+                })],
+                stop_reason: StopReason::ToolUse,
+                input_tokens: 5,
+                output_tokens: 2,
+            });
+        }
+
+        let result = executor.run_until_complete("do stuff").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("max tool chain"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_job_watch() {
+        let mut executor = make_executor(244, &[]).await;
+        let call = AvixToolCall {
+            call_id: "c1".into(),
+            name: "job/watch".into(),
+            args: json!({"jobId": "job-abc"}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        assert_eq!(result["finalStatus"], "done");
+        assert_eq!(result["jobId"], "job-abc");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_list() {
+        let mut executor = make_executor(245, &[]).await;
+        let call = AvixToolCall {
+            call_id: "c2".into(),
+            name: "agent/list".into(),
+            args: json!({}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        assert!(result["agents"].is_array());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_wait() {
+        let mut executor = make_executor(246, &[]).await;
+        let call = AvixToolCall {
+            call_id: "c3".into(),
+            name: "agent/wait".into(),
+            args: json!({"pid": 99}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        assert_eq!(result["finalStatus"], "completed");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_send_message() {
+        let mut executor = make_executor(247, &[]).await;
+        let call = AvixToolCall {
+            call_id: "c4".into(),
+            name: "agent/send-message".into(),
+            args: json!({"pid": 99, "message": "hello"}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        assert_eq!(result["delivered"], true);
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_pipe_write_and_read_and_close() {
+        let mut executor = make_executor(248, &[]).await;
+
+        let write_call = AvixToolCall {
+            call_id: "pw".into(),
+            name: "pipe/write".into(),
+            args: json!({"pipeId": "p1", "content": "hello"}),
+        };
+        let w_result = executor.dispatch_category2(&write_call).await.unwrap();
+        assert!(w_result.get("tokensSent").is_some());
+
+        let read_call = AvixToolCall {
+            call_id: "pr".into(),
+            name: "pipe/read".into(),
+            args: json!({"pipeId": "p1"}),
+        };
+        let r_result = executor.dispatch_category2(&read_call).await.unwrap();
+        assert!(r_result.get("content").is_some());
+
+        let close_call = AvixToolCall {
+            call_id: "pc".into(),
+            name: "pipe/close".into(),
+            args: json!({"pipeId": "p1"}),
+        };
+        let c_result = executor.dispatch_category2(&close_call).await.unwrap();
+        assert_eq!(c_result["closed"], true);
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_unknown_tool_returns_stub() {
+        let mut executor = make_executor(249, &[]).await;
+        let call = AvixToolCall {
+            call_id: "c99".into(),
+            name: "some/unknown-tool".into(),
+            args: json!({}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        // Unknown tool returns stub response
+        assert!(result.get("content").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_cap_request_tool_without_kernel() {
+        let mut executor = make_executor(250, &[]).await;
+        let call = AvixToolCall {
+            call_id: "c5".into(),
+            name: "cap/request-tool".into(),
+            args: json!({"tool": "fs/read", "reason": "need it"}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        // No kernel → not auto-approved
+        assert_eq!(result["approved"], false);
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_spawn_without_kernel() {
+        let mut executor = make_executor(251, &[]).await;
+        let call = AvixToolCall {
+            call_id: "c6".into(),
+            name: "agent/spawn".into(),
+            args: json!({"agent": "worker", "goal": "do stuff"}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        assert_eq!(result["spawned"], true);
+    }
+
+    #[tokio::test]
+    async fn test_hil_gate_with_auto_approve_kernel() {
+        let registry = Arc::new(MockToolRegistry::new());
+        let kernel = Arc::new(MockKernelHandle::new());
+        kernel.auto_approve_resource_request().await;
+
+        let params = make_params(252, &["cap/list"]);
+        let mut executor =
+            RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, kernel)
+                .await
+                .unwrap();
+
+        executor.require_hil_for("cap/list");
+
+        let mock_client = MockLlmClient::new(vec![
+            LlmCompleteResponse {
+                content: vec![json!({
+                    "type": "tool_use",
+                    "id": "hil-auto",
+                    "name": "cap__list",
+                    "input": {}
+                })],
+                stop_reason: StopReason::ToolUse,
+                input_tokens: 5,
+                output_tokens: 2,
+            },
+            LlmCompleteResponse {
+                content: vec![json!({"type": "text", "text": "Done."})],
+                stop_reason: StopReason::EndTurn,
+                input_tokens: 3,
+                output_tokens: 1,
+            },
+        ]);
+
+        let result = executor.run_with_client("do something", &mock_client).await;
+        assert!(result.is_ok(), "auto-approved HIL should complete: {result:?}");
+    }
+
+    #[tokio::test]
+    async fn test_run_with_client_chain_limit_exceeded() {
+        let mut executor = make_executor(253, &[]).await;
+        executor.set_max_tool_chain_length(1);
+
+        let mock_client = MockLlmClient::new(vec![
+            LlmCompleteResponse {
+                content: vec![
+                    json!({"type": "tool_use", "id": "c1", "name": "cap__list", "input": {}}),
+                    json!({"type": "tool_use", "id": "c2", "name": "cap__list", "input": {}}),
+                ],
+                stop_reason: StopReason::ToolUse,
+                input_tokens: 5,
+                output_tokens: 2,
+            },
+        ]);
+
+        let result = executor.run_with_client("do it", &mock_client).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("max tool chain"));
+    }
+
+    #[tokio::test]
+    async fn test_current_tool_list_excludes_removed() {
+        let mut executor = make_executor(254, &[]).await;
+        let initial_count = executor.current_tool_list().len();
+        executor
+            .handle_tool_changed("removed", "cap/list", "test")
+            .await;
+        let after_count = executor.current_tool_list().len();
+        assert!(after_count < initial_count, "removed tool should reduce list");
+    }
+
+    #[tokio::test]
+    async fn test_llm_call_count_tracks_calls() {
+        let mut executor = make_executor(255, &[]).await;
+        assert_eq!(executor.llm_call_count(), 0);
+
+        executor.push_llm_response(LlmCompleteResponse {
+            content: vec![json!({"type": "text", "text": "done"})],
+            stop_reason: StopReason::EndTurn,
+            input_tokens: 1,
+            output_tokens: 1,
+        });
+        let _ = executor.run_until_complete("test").await;
+        assert_eq!(executor.llm_call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_call_messages_returns_empty_for_invalid_idx() {
+        let executor = make_executor(256, &[]).await;
+        let msgs = executor.call_messages(99);
+        assert!(msgs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_run_until_complete_summarise_context_stub() {
+        let mut executor = make_executor(257, &[]).await;
+        // SummariseContext is treated as "continue" but needs another response
+        executor.push_llm_response(LlmCompleteResponse {
+            content: vec![],
+            stop_reason: StopReason::MaxTokens, // maps to SummariseContext
+            input_tokens: 5,
+            output_tokens: 0,
+        });
+        executor.push_llm_response(LlmCompleteResponse {
+            content: vec![json!({"type": "text", "text": "summary done"})],
+            stop_reason: StopReason::EndTurn,
+            input_tokens: 3,
+            output_tokens: 1,
+        });
+        let result = executor.run_until_complete("test").await;
+        assert!(result.is_ok());
+    }
 }

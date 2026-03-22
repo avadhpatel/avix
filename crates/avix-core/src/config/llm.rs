@@ -361,4 +361,221 @@ spec:
             _ => panic!("expected ApiKey auth"),
         }
     }
+
+    #[test]
+    fn test_default_provider_for_returns_correct_provider() {
+        let cfg = LlmConfig::from_str(two_provider_yaml()).unwrap();
+        let text_provider = cfg.default_provider_for(Modality::Text).unwrap();
+        assert_eq!(text_provider.name, "anthropic");
+
+        let image_provider = cfg.default_provider_for(Modality::Image).unwrap();
+        assert_eq!(image_provider.name, "openai");
+
+        let speech_provider = cfg.default_provider_for(Modality::Speech).unwrap();
+        assert_eq!(speech_provider.name, "openai");
+
+        let transcription_provider = cfg.default_provider_for(Modality::Transcription).unwrap();
+        assert_eq!(transcription_provider.name, "openai");
+
+        let embedding_provider = cfg.default_provider_for(Modality::Embedding).unwrap();
+        assert_eq!(embedding_provider.name, "openai");
+    }
+
+    #[test]
+    fn test_validation_rejects_missing_provider() {
+        let yaml = r#"
+apiVersion: avix/v1
+kind: LlmConfig
+spec:
+  defaultProviders:
+    text: nonexistent
+    image: nonexistent
+    speech: nonexistent
+    transcription: nonexistent
+    embedding: nonexistent
+  providers:
+    - name: openai
+      baseUrl: https://api.openai.com
+      modalities: [text, image, speech, transcription, embedding]
+      auth:
+        type: api_key
+        secretName: OPENAI_API_KEY
+        header: Authorization
+"#;
+        let result = LlmConfig::from_str(yaml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("nonexistent") || err.contains("not found"), "err: {err}");
+    }
+
+    #[test]
+    fn test_validation_rejects_wrong_modality() {
+        // anthropic only supports text, but set as default for image
+        let yaml = r#"
+apiVersion: avix/v1
+kind: LlmConfig
+spec:
+  defaultProviders:
+    text: anthropic
+    image: anthropic
+    speech: anthropic
+    transcription: anthropic
+    embedding: anthropic
+  providers:
+    - name: anthropic
+      baseUrl: https://api.anthropic.com
+      modalities: [text]
+      auth:
+        type: api_key
+        secretName: ANTHROPIC_API_KEY
+        header: x-api-key
+"#;
+        let result = LlmConfig::from_str(yaml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("modality") || err.contains("anthropic"), "err: {err}");
+    }
+
+    #[test]
+    fn test_provider_timeout_defaults() {
+        let yaml = r#"
+apiVersion: avix/v1
+kind: LlmConfig
+spec:
+  defaultProviders:
+    text: openai
+    image: openai
+    speech: openai
+    transcription: openai
+    embedding: openai
+  providers:
+    - name: openai
+      baseUrl: https://api.openai.com
+      modalities: [text, image, speech, transcription, embedding]
+      auth:
+        type: api_key
+        secretName: OPENAI_API_KEY
+        header: Authorization
+      timeout:
+        connectMs: 5000
+        readMs: 30000
+"#;
+        let cfg = LlmConfig::from_str(yaml).unwrap();
+        let timeout = cfg.spec.providers[0].timeout.as_ref().unwrap();
+        assert_eq!(timeout.connect_ms, 5000);
+        assert_eq!(timeout.read_ms, 30000);
+    }
+
+    #[test]
+    fn test_retry_policy_defaults() {
+        let yaml = r#"
+apiVersion: avix/v1
+kind: LlmConfig
+spec:
+  defaultProviders:
+    text: openai
+    image: openai
+    speech: openai
+    transcription: openai
+    embedding: openai
+  providers:
+    - name: openai
+      baseUrl: https://api.openai.com
+      modalities: [text, image, speech, transcription, embedding]
+      auth:
+        type: api_key
+        secretName: OPENAI_API_KEY
+        header: Authorization
+      retryPolicy:
+        backoffMs: 200
+        retryOn: [500, 503]
+"#;
+        let cfg = LlmConfig::from_str(yaml).unwrap();
+        let retry = cfg.spec.providers[0].retry_policy.as_ref().unwrap();
+        // maxAttempts has a default of 3
+        assert_eq!(retry.max_attempts, 3);
+        assert_eq!(retry.backoff_ms, 200);
+        assert!(retry.retry_on.contains(&500));
+    }
+
+    #[test]
+    fn test_oauth2_provider_auth_parses() {
+        let yaml = r#"
+apiVersion: avix/v1
+kind: LlmConfig
+spec:
+  defaultProviders:
+    text: myapi
+    image: myapi
+    speech: myapi
+    transcription: myapi
+    embedding: myapi
+  providers:
+    - name: myapi
+      baseUrl: https://api.example.com
+      modalities: [text, image, speech, transcription, embedding]
+      auth:
+        type: oauth2
+        secretName: MY_TOKEN
+        tokenUrl: https://auth.example.com/token
+        clientId: client-123
+        clientSecretName: MY_CLIENT_SECRET
+        scopes: [read, write]
+        refreshBeforeExpiryMin: 10
+"#;
+        let cfg = LlmConfig::from_str(yaml).unwrap();
+        let auth = &cfg.spec.providers[0].auth;
+        match auth {
+            ProviderAuth::Oauth2 {
+                token_url,
+                client_id,
+                refresh_before_expiry_min,
+                ..
+            } => {
+                assert_eq!(token_url, "https://auth.example.com/token");
+                assert_eq!(client_id, "client-123");
+                assert_eq!(*refresh_before_expiry_min, 10);
+            }
+            _ => panic!("expected Oauth2 auth"),
+        }
+    }
+
+    #[test]
+    fn test_model_config_fields() {
+        let yaml = r#"
+apiVersion: avix/v1
+kind: LlmConfig
+spec:
+  defaultProviders:
+    text: openai
+    image: openai
+    speech: openai
+    transcription: openai
+    embedding: openai
+  providers:
+    - name: openai
+      baseUrl: https://api.openai.com
+      modalities: [text, image, speech, transcription, embedding]
+      auth:
+        type: api_key
+        secretName: OPENAI_API_KEY
+        header: Authorization
+      models:
+        - id: gpt-4o
+          modality: text
+          contextWindow: 128000
+          tier: premium
+        - id: text-embedding-3-large
+          modality: embedding
+          tier: standard
+          dimensions: 3072
+"#;
+        let cfg = LlmConfig::from_str(yaml).unwrap();
+        let models = &cfg.spec.providers[0].models;
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gpt-4o");
+        assert_eq!(models[0].context_window, Some(128000));
+        assert_eq!(models[0].tier, "premium");
+        assert_eq!(models[1].dimensions, Some(3072));
+    }
 }

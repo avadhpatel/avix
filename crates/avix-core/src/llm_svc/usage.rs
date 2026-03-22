@@ -242,4 +242,44 @@ mod tests {
         assert!(json.contains("openai"));
         assert!(json.contains("input_tokens"));
     }
+
+    #[tokio::test]
+    async fn test_record_speech_error() {
+        let tracker = UsageTracker::new();
+        tracker.record_speech_error("elevenlabs").await;
+        tracker.record_speech_error("elevenlabs").await;
+        let snap = tracker.snapshot().await;
+        assert_eq!(snap["elevenlabs"].speech.errors, 2);
+    }
+
+    #[tokio::test]
+    async fn test_record_transcription_error() {
+        let tracker = UsageTracker::new();
+        tracker.record_transcription_error("openai").await;
+        let snap = tracker.snapshot().await;
+        assert_eq!(snap["openai"].transcription.errors, 1);
+    }
+
+    #[tokio::test]
+    async fn test_record_embedding_error() {
+        let tracker = UsageTracker::new();
+        tracker.record_embedding_error("openai").await;
+        tracker.record_embedding_error("openai").await;
+        tracker.record_embedding_error("openai").await;
+        let snap = tracker.snapshot().await;
+        assert_eq!(snap["openai"].embedding.errors, 3);
+    }
+
+    #[tokio::test]
+    async fn test_provider_usage_default_is_zero() {
+        let usage = ProviderUsage::default();
+        assert_eq!(usage.text.input_tokens, 0);
+        assert_eq!(usage.text.output_tokens, 0);
+        assert_eq!(usage.text.requests, 0);
+        assert_eq!(usage.text.errors, 0);
+        assert_eq!(usage.image.requests, 0);
+        assert_eq!(usage.speech.characters_generated, 0);
+        assert_eq!(usage.transcription.audio_seconds, 0.0);
+        assert_eq!(usage.embedding.input_tokens, 0);
+    }
 }

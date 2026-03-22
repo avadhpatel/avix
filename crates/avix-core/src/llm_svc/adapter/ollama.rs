@@ -218,4 +218,93 @@ mod tests {
             Err(AdapterError::UnsupportedModality(Modality::Transcription))
         ));
     }
+
+    #[test]
+    fn test_parse_image_response_returns_unsupported() {
+        let adapter = make_adapter();
+        assert!(matches!(
+            adapter.parse_image_response(json!({})),
+            Err(AdapterError::UnsupportedModality(Modality::Image))
+        ));
+    }
+
+    #[test]
+    fn test_speech_endpoint_returns_unsupported() {
+        let adapter = make_adapter();
+        let req = super::super::AvixSpeechRequest {
+            provider: None,
+            model: "tts".to_string(),
+            text: "hello".to_string(),
+            voice: "alloy".to_string(),
+            format: None,
+            speed: None,
+            stream: None,
+            metadata: make_metadata(),
+        };
+        assert!(matches!(
+            adapter.speech_endpoint(&req),
+            Err(AdapterError::UnsupportedModality(Modality::Speech))
+        ));
+    }
+
+    #[test]
+    fn test_parse_transcription_response_returns_unsupported() {
+        let adapter = make_adapter();
+        assert!(matches!(
+            adapter.parse_transcription_response(json!({})),
+            Err(AdapterError::UnsupportedModality(Modality::Transcription))
+        ));
+    }
+
+    #[test]
+    fn test_build_embed_delegates_to_openai() {
+        use super::super::EmbedInput;
+        let adapter = make_adapter();
+        let req = super::super::AvixEmbedRequest {
+            provider: None,
+            model: "nomic-embed-text".to_string(),
+            input: EmbedInput::Single("hello world".to_string()),
+            metadata: make_metadata(),
+        };
+        let result = adapter.build_embed_request(&req);
+        assert!(result.is_ok(), "embed should work for ollama");
+        let body = result.unwrap();
+        assert_eq!(body["model"], "nomic-embed-text");
+    }
+
+    #[test]
+    fn test_format_tool_result_delegates() {
+        let adapter = make_adapter();
+        let result = super::super::AvixToolResult {
+            call_id: "call-1".to_string(),
+            output: json!({"content": "ok"}),
+            error: None,
+        };
+        let formatted = adapter.format_tool_result(&result);
+        assert!(formatted.is_object());
+    }
+
+    #[test]
+    fn test_parse_tool_call_delegates() {
+        let adapter = make_adapter();
+        let raw = json!({
+            "id": "call-1",
+            "type": "function",
+            "function": {
+                "name": "fs__read",
+                "arguments": "{\"path\":\"/tmp/x\"}"
+            }
+        });
+        let result = adapter.parse_tool_call(&raw);
+        // Delegates to OpenAI adapter parsing
+        assert!(result.is_ok(), "parse_tool_call should succeed: {result:?}");
+        let call = result.unwrap();
+        assert_eq!(call.name, "fs/read"); // unmangled
+    }
+
+    #[test]
+    fn test_default_impl() {
+        let adapter = OllamaAdapter::default();
+        assert_eq!(adapter.provider_name(), "ollama");
+    }
 }

@@ -127,4 +127,57 @@ spec:
         assert_eq!(spec.endpoint, "/v1/models");
         assert_eq!(spec.interval_sec, 30);
     }
+
+    #[tokio::test]
+    async fn test_health_monitor_start_and_abort() {
+        let routing = make_routing();
+        let client = Arc::new(reqwest::Client::new());
+        let monitor = HealthMonitor::new(routing, client);
+
+        let spec = HealthCheckSpec {
+            provider_name: "anthropic".into(),
+            base_url: "https://api.anthropic.com".into(),
+            endpoint: "/v1/models".into(),
+            interval_sec: 3600, // very long — first sleep won't complete
+        };
+
+        let handle = monitor.start_provider(spec);
+        // Immediately abort the background task
+        handle.abort();
+        // No panic = success
+    }
+
+    #[tokio::test]
+    async fn test_health_monitor_multiple_providers() {
+        let routing = make_routing();
+        let client = Arc::new(reqwest::Client::new());
+        let monitor = HealthMonitor::new(Arc::clone(&routing), Arc::clone(&client));
+
+        let spec1 = HealthCheckSpec {
+            provider_name: "provider-1".into(),
+            base_url: "http://localhost:19998".into(),
+            endpoint: "/health".into(),
+            interval_sec: 3600,
+        };
+        let spec2 = HealthCheckSpec {
+            provider_name: "provider-2".into(),
+            base_url: "http://localhost:19997".into(),
+            endpoint: "/health".into(),
+            interval_sec: 3600,
+        };
+
+        let h1 = monitor.start_provider(spec1);
+        let h2 = monitor.start_provider(spec2);
+        h1.abort();
+        h2.abort();
+    }
+
+    #[test]
+    fn test_health_monitor_fields() {
+        let routing = make_routing();
+        let client = Arc::new(reqwest::Client::new());
+        let _monitor = HealthMonitor::new(Arc::clone(&routing), Arc::clone(&client));
+        // Just verifying construction with different routing instances
+        let _monitor2 = HealthMonitor::new(routing, client);
+    }
 }
