@@ -203,15 +203,23 @@ impl RuntimeExecutor {
     /// Write `/proc/<pid>/status.yaml` and `/proc/<pid>/resolved.yaml` to the VFS.
     /// Must be called after `with_vfs()` to populate the proc entries.
     /// No-op when no VFS is attached.
+    /// Uses `spawned_by` as the username and no crew memberships.
     pub async fn init_proc_files(&self) {
-        self.write_proc_files().await;
+        self.init_proc_files_for(&self.spawned_by.clone(), &[]).await;
     }
 
-    async fn write_proc_files(&self) {
+    /// Like `init_proc_files`, but with explicit username and crew memberships for
+    /// the parameter resolution engine.
+    pub async fn init_proc_files_for(&self, username: &str, crews: &[String]) {
         let vfs = match &self.vfs {
-            Some(v) => v,
+            Some(v) => Arc::clone(v),
             None => return,
         };
+        self.write_status_file(&vfs).await;
+        self.write_resolved_file(&vfs, username, crews).await;
+    }
+
+    async fn write_status_file(&self, vfs: &MemFs) {
         let pid = self.pid.as_u32();
         let tools_yaml = self
             .token
@@ -219,7 +227,6 @@ impl RuntimeExecutor {
             .iter()
             .map(|t| format!("    - {t}\n"))
             .collect::<String>();
-
         let status_yaml = format!(
             "apiVersion: avix/v1\nkind: AgentStatus\nmetadata:\n  pid: {pid}\n  name: {name}\nspec:\n  status: running\n  goal: {goal:?}\n  spawnedBy: {spawned_by}\n  sessionId: {session_id}\n  grantedTools:\n{tools}  toolChainDepth: 0\n  contextTokensUsed: 0\n",
             name = self.agent_name,
@@ -231,18 +238,64 @@ impl RuntimeExecutor {
         if let Ok(path) = VfsPath::parse(&format!("/proc/{pid}/status.yaml")) {
             let _ = vfs.write(&path, status_yaml.into_bytes()).await;
         }
+    }
 
-        let resolved_yaml = format!(
-            "apiVersion: avix/v1\nkind: Resolved\nmetadata:\n  pid: {pid}\n  name: {name}\nspec:\n  contextWindowTokens: 64000\n  maxToolChainLength: 50\n  tokenTtlSecs: 3600\n  grantedTools:\n{tools}",
-            name = self.agent_name,
-            tools = self.token
-                .granted_tools
-                .iter()
-                .map(|t| format!("    - {t}\n"))
-                .collect::<String>(),
+    async fn write_resolved_file(&self, vfs: &MemFs, username: &str, crews: &[String]) {
+        use crate::params::defaults::system_agent_defaults;
+        use crate::params::limits::system_agent_limits;
+        use crate::params::resolved_file::ResolvedFile;
+        use crate::params::resolver::{
+            ParamResolver, ResolverInput, ResolverInputLoader,
+        };
+
+        let pid = self.pid.as_u32();
+
+        // Load resolver inputs from VFS (system defaults/limits must be present).
+        // If they are missing (e.g. unit tests without phase1), fall back to
+        // compiled-in system defaults and limits directly.
+        let loader = ResolverInputLoader::new(vfs);
+        let mut input = match loader.load(username, crews).await {
+            Ok(inp) => inp,
+            Err(_) => ResolverInput {
+                system_defaults: system_agent_defaults(),
+                system_defaults_path: "compiled-in".into(),
+                system_limits: system_agent_limits(),
+                system_limits_path: "compiled-in".into(),
+                crew_defaults: vec![],
+                crew_limits: vec![],
+                user_defaults: None,
+                user_limits: None,
+                manifest: crate::params::defaults::AgentDefaults::default(),
+            },
+        };
+        input.manifest = crate::params::defaults::AgentDefaults::default();
+
+        let (resolved_config, _annotations) = match ParamResolver::resolve(&input) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("param resolution failed for pid {pid}: {e}");
+                return;
+            }
+        };
+
+        let file = ResolvedFile::new(
+            username,
+            Some(pid),
+            crews.to_vec(),
+            resolved_config,
+            self.token.granted_tools.clone(),
+            None, // annotations omitted from per-pid resolved.yaml
         );
-        if let Ok(path) = VfsPath::parse(&format!("/proc/{pid}/resolved.yaml")) {
-            let _ = vfs.write(&path, resolved_yaml.into_bytes()).await;
+
+        match file.to_yaml() {
+            Ok(yaml) => {
+                if let Ok(path) = VfsPath::parse(&format!("/proc/{pid}/resolved.yaml")) {
+                    let _ = vfs.write(&path, yaml.into_bytes()).await;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("failed to serialise resolved.yaml for pid {pid}: {e}");
+            }
         }
     }
 
