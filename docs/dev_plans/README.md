@@ -10,17 +10,6 @@ Consider files in this folder temporary and can be deleted as per dev's needs.
 
 ## Active Plans
 
-### Filesystem Gaps (VFS)
-
-| File | Description |
-|------|-------------|
-| `fs-gap-A-bootstrap-vfs-init.md` | Phase 1 VFS skeleton (proc/, kernel/ trees) |
-| `fs-gap-B-agent-spawn-vfs-writes.md` | /proc/<pid>/status.yaml + resolved.yaml at spawn |
-| `fs-gap-C-config-init-completeness.md` | config init writes all 6 /etc/avix/ files |
-| `fs-gap-D-vfs-write-protection.md` | VfsPath::is_agent_writable() + syscall enforcement |
-| `fs-gap-E-mount-system.md` | Mount system design (deferred to v0.2) |
-| `fs-gap-F-session-vfs-manifest.md` | SessionStore writes /proc/users/<u>/sessions/ |
-
 ### IPC Gaps
 
 | File | Description | Priority | Depends On |
@@ -37,4 +26,22 @@ Consider files in this folder temporary and can be deleted as per dev's needs.
 ipc-gap-A  →  ipc-gap-B  →  ipc-gap-E
            →  ipc-gap-C  ↗
 ipc-gap-D  (independent, can run in parallel with A)
+```
+
+### KernelConfig + Param System Gaps
+
+| File | Description | Priority | Depends On |
+|------|-------------|----------|------------|
+| `param-gap-A-kernel-config-expansion.md` | Full KernelConfig schema, validation, reload classification, config_init template | High | — |
+| `param-gap-B-defaults-limits-types.md` | Typed Defaults and Limits structs; constraint types; replace hard-coded bootstrap values | High | — |
+| `param-gap-C-resolution-engine.md` | ParamResolver: merge system→crew→user→manifest, clamp against limits, provenance annotations | High | Gap B |
+| `param-gap-D-resolved-at-spawn.md` | Wire resolution engine into RuntimeExecutor; enforce resolved values; spawn error files | High | Gap B, Gap C |
+| `param-gap-E-resolve-cli.md` | `avix resolve` CLI + `avix config reload --check` command | Medium | Gap B, Gap C, Gap D |
+
+### Recommended Build Order
+
+```
+param-gap-A  (independent — expand KernelConfig struct)
+param-gap-B  (independent — typed Defaults/Limits structs)
+param-gap-B  →  param-gap-C  →  param-gap-D  →  param-gap-E
 ```
