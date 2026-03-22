@@ -105,7 +105,6 @@ pub struct RuntimeExecutor {
     call_log: Arc<std::sync::Mutex<Vec<Vec<serde_json::Value>>>>,
     fs_data: Arc<std::sync::Mutex<HashMap<String, Vec<u8>>>>,
     pub max_tool_chain_length: usize,
-    token_expiry_at: Option<std::time::Instant>,
     // kernel handle for dispatch (optional)
     kernel: Option<Arc<MockKernelHandle>>,
     registry_ref: RegistryRef,
@@ -147,7 +146,6 @@ impl RuntimeExecutor {
             call_log: Arc::new(std::sync::Mutex::new(Vec::new())),
             fs_data: Arc::new(std::sync::Mutex::new(HashMap::new())),
             max_tool_chain_length: 50,
-            token_expiry_at: None,
             kernel: None,
             registry_ref: RegistryRef::Mock(registry),
         };
@@ -234,9 +232,20 @@ impl RuntimeExecutor {
     }
 
     pub async fn handle_tool_changed(&mut self, op: &str, tool_name: &str, _reason: &str) {
-        if op == "removed" {
-            self.removed_tools.push(tool_name.to_string());
+        match op {
+            "removed" => {
+                if !self.removed_tools.contains(&tool_name.to_string()) {
+                    self.removed_tools.push(tool_name.to_string());
+                }
+            }
+            "added" => {
+                // Re-enable a previously removed tool by dropping it from the removed list.
+                self.removed_tools.retain(|t| t != tool_name);
+            }
+            _ => {}
         }
+        // current_tool_list() filters removed_tools dynamically, so tool_list stays
+        // consistent without a full rebuild.  A full refresh happens at turn start.
     }
 
     pub fn current_tool_list(&self) -> Vec<serde_json::Value> {
@@ -325,11 +334,15 @@ impl RuntimeExecutor {
                         "maxToolChainLength": self.max_tool_chain_length,
                         "toolCallBudgets": budgets
                     },
-                    "tokenExpiresAt": null
+                    "tokenExpiresAt": self.token.expires_at.to_rfc3339()
                 }))
             }
             "cap/escalate" => {
                 let guidance = call.args["reason"].as_str().unwrap_or("");
+                // Inject into Block 4 (pending instructions) so the LLM sees the guidance
+                // on the next turn as per the spec §Category 3 transparent behaviours.
+                self.pending_messages
+                    .push(format!("[Human guidance]: {guidance}"));
                 Ok(serde_json::json!({
                     "selectedOption": "acknowledged",
                     "guidance": guidance
@@ -388,8 +401,10 @@ impl RuntimeExecutor {
             .unwrap_or_default()
     }
 
-    pub fn set_token_expiry_in(&mut self, _d: Duration) {
-        self.token_expiry_at = Some(std::time::Instant::now());
+    /// Set the token's expiry to `now + d`. Used in tests to simulate near-expiry tokens.
+    pub fn set_token_expiry_in(&mut self, d: Duration) {
+        self.token.expires_at =
+            chrono::Utc::now() + chrono::Duration::from_std(d).unwrap_or(chrono::Duration::hours(1));
     }
 
     pub fn on_fs_read(&self, path: &str, content: &[u8]) {
@@ -403,15 +418,16 @@ impl RuntimeExecutor {
         self.max_tool_chain_length = max;
     }
 
-    /// GAP 8: Token renewal — extend expiry if within 5 minutes.
+    /// Token renewal — extend expiry by 1 hour if the token is still valid but within
+    /// 5 minutes of expiry.  Already-expired tokens are NOT renewed here; the expiry
+    /// guard after this call returns an error for those.
+    /// In production the kernel re-issues a properly signed token; here we extend
+    /// `expires_at` directly since tests use unsigned `test_token()` tokens.
     fn maybe_renew_token(&mut self) {
-        if let Some(expiry) = self.token_expiry_at {
-            let until_expiry = expiry.saturating_duration_since(std::time::Instant::now());
-            if until_expiry <= std::time::Duration::from_secs(300) {
-                self.token_expiry_at =
-                    Some(std::time::Instant::now() + std::time::Duration::from_secs(3600));
-                tracing::info!(pid = ?self.pid, "token renewed (mock)");
-            }
+        let until_expiry = self.token.expires_at.signed_duration_since(chrono::Utc::now());
+        if until_expiry > chrono::Duration::zero() && until_expiry <= chrono::Duration::minutes(5) {
+            self.token.expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+            tracing::info!(pid = ?self.pid, "token renewed (mock)");
         }
     }
 
@@ -430,8 +446,15 @@ impl RuntimeExecutor {
             // GAP 3: refresh tool list at turn start
             self.refresh_tool_list();
 
-            // GAP 8: renew token if needed
+            // Token renewal — extend before calling LLM so the turn doesn't start with an expired token
             self.maybe_renew_token();
+
+            // Expiry guard — abort if token is still expired after renewal attempt
+            if self.token.is_expired() {
+                return Err(AvixError::CapabilityDenied(
+                    "capability token expired; cannot begin turn".into(),
+                ));
+            }
 
             let req = crate::llm_client::LlmCompleteRequest {
                 model: String::new(), // client picks its default
@@ -552,8 +575,13 @@ impl RuntimeExecutor {
             // record call
             self.call_log.lock().unwrap().push(messages.clone());
 
-            // token renewal stub
+            // Token renewal + expiry guard
             self.maybe_renew_token();
+            if self.token.is_expired() {
+                return Err(AvixError::ConfigParse(
+                    "capability token expired; cannot begin turn".into(),
+                ));
+            }
 
             match interpret_stop_reason(&response) {
                 TurnAction::ReturnResult(text) => return Ok(TurnResult { text }),
@@ -619,10 +647,7 @@ mod tests {
             goal: "test goal".into(),
             spawned_by: "kernel".into(),
             session_id: "sess-test".into(),
-            token: CapabilityToken {
-                granted_tools: caps.iter().map(|s| s.to_string()).collect(),
-                signature: "test-sig".into(),
-            },
+            token: CapabilityToken::test_token(caps),
         }
     }
 
@@ -696,10 +721,7 @@ mod tests {
             goal: "goal".into(),
             spawned_by: "kernel".into(),
             session_id: "sess".into(),
-            token: CapabilityToken {
-                granted_tools: vec!["cap/list".to_string()], // has cap/list, not fs/read
-                signature: "sig".into(),
-            },
+            token: CapabilityToken::test_token(&["cap/list"]), // has cap/list, not fs/read
         };
         let mut executor = RuntimeExecutor::spawn_with_registry(params, registry)
             .await

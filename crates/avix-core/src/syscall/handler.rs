@@ -54,10 +54,7 @@ mod tests {
     fn make_ctx(tools: &[&str]) -> SyscallContext {
         SyscallContext {
             caller_pid: 42,
-            token: CapabilityToken {
-                granted_tools: tools.iter().map(|s| s.to_string()).collect(),
-                signature: "sig".into(),
-            },
+            token: CapabilityToken::test_token(tools),
         }
     }
 

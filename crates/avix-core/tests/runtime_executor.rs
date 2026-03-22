@@ -10,10 +10,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 fn token_with_caps(caps: &[&str]) -> CapabilityToken {
-    CapabilityToken {
-        granted_tools: caps.iter().map(|s| s.to_string()).collect(),
-        signature: "test-sig".into(),
-    }
+    CapabilityToken::test_token(caps)
 }
 
 async fn spawn_with_caps(pid_val: u32, caps: &[&str]) -> (RuntimeExecutor, Arc<MockToolRegistry>) {
@@ -246,10 +243,7 @@ fn tool_call_allowed_when_budget_positive() {
 #[test]
 fn tool_call_allowed_when_token_is_empty() {
     // Empty granted_tools = no restriction
-    let token = CapabilityToken {
-        granted_tools: vec![],
-        signature: "sig".into(),
-    };
+    let token = CapabilityToken::test_token(&[]);
     let call = AvixToolCall {
         call_id: "c4".into(),
         name: "anything".into(),
@@ -576,4 +570,154 @@ async fn run_until_complete_stop_sequence_returns_text() {
     });
     let result = executor.run_until_complete("test").await.unwrap();
     assert_eq!(result.text, "Stopping here.");
+}
+
+// ---- Token expiry tests ----
+
+#[tokio::test]
+async fn expired_token_aborts_run_until_complete() {
+    let (mut executor, _) = spawn_with_caps(300, &[]).await;
+    // Set expiry to 0 seconds — expires_at = Utc::now(), which is already past by loop time.
+    executor.set_token_expiry_in(std::time::Duration::ZERO);
+
+    // Push a valid response — but it should never be consumed because expiry fails first
+    executor.push_llm_response(LlmCompleteResponse {
+        content: vec![json!({"type": "text", "text": "Should not reach here."})],
+        stop_reason: StopReason::EndTurn,
+        input_tokens: 5,
+        output_tokens: 2,
+    });
+
+    let result = executor.run_until_complete("go").await;
+    assert!(result.is_err(), "expired token should abort the run");
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("expired"),
+        "error should mention expiry: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn cap_list_returns_token_expires_at() {
+    let (mut executor, _) = spawn_with_caps(301, &[]).await;
+    let call = avix_core::llm_svc::adapter::AvixToolCall {
+        call_id: "c1".into(),
+        name: "cap/list".into(),
+        args: json!({}),
+    };
+    let result = executor.dispatch_category2(&call).await.unwrap();
+    let expires_at = result["tokenExpiresAt"].as_str().unwrap_or("");
+    assert!(
+        !expires_at.is_empty(),
+        "cap/list should return a non-null tokenExpiresAt"
+    );
+    // Should be a valid RFC3339 timestamp
+    assert!(
+        expires_at.contains('T'),
+        "tokenExpiresAt should be an ISO timestamp: {expires_at}"
+    );
+}
+
+#[tokio::test]
+async fn maybe_renew_extends_near_expiry_token() {
+    let (mut executor, _) = spawn_with_caps(302, &[]).await;
+    // Set token to expire in 2 minutes (within the 5-minute renewal window)
+    executor.set_token_expiry_in(std::time::Duration::from_secs(120));
+    // Push a response so run_until_complete can proceed
+    executor.push_llm_response(LlmCompleteResponse {
+        content: vec![json!({"type": "text", "text": "Done."})],
+        stop_reason: StopReason::EndTurn,
+        input_tokens: 5,
+        output_tokens: 2,
+    });
+    // Should succeed because maybe_renew_token extends the expiry before the guard runs
+    let result = executor.run_until_complete("go").await;
+    assert!(
+        result.is_ok(),
+        "near-expiry token should be auto-renewed: {result:?}"
+    );
+}
+
+// ---- tool.changed event tests ----
+
+#[tokio::test]
+async fn tool_changed_added_re_enables_previously_removed_tool() {
+    let (mut executor, _) = spawn_with_caps(320, &[]).await;
+    // Remove cap/list — current_tool_list() filters it out dynamically
+    executor.handle_tool_changed("removed", "cap/list", "").await;
+    let names_after_remove: Vec<_> = executor
+        .current_tool_list()
+        .into_iter()
+        .filter_map(|t| t["name"].as_str().map(|s| s.to_string()))
+        .collect();
+    assert!(
+        !names_after_remove.contains(&"cap/list".to_string()),
+        "cap/list should be absent after removal"
+    );
+
+    // Re-add it — current_tool_list() should include it again
+    executor.handle_tool_changed("added", "cap/list", "").await;
+    let names_after_add: Vec<_> = executor
+        .current_tool_list()
+        .into_iter()
+        .filter_map(|t| t["name"].as_str().map(|s| s.to_string()))
+        .collect();
+    assert!(
+        names_after_add.contains(&"cap/list".to_string()),
+        "cap/list should be present again after added event"
+    );
+}
+
+#[tokio::test]
+async fn tool_changed_current_tool_list_excludes_removed_immediately() {
+    let (mut executor, _) = spawn_with_caps(321, &[]).await;
+    let count_before = executor.current_tool_list().len();
+    executor.handle_tool_changed("removed", "cap/escalate", "").await;
+    // current_tool_list() filters removed_tools dynamically — no manual refresh needed
+    assert_eq!(
+        executor.current_tool_list().len(),
+        count_before - 1,
+        "current_tool_list() should shrink by 1 immediately after removed event"
+    );
+}
+
+// ---- cap/escalate pending_messages injection tests ----
+
+#[tokio::test]
+async fn cap_escalate_injects_guidance_into_pending_messages() {
+    let (mut executor, _) = spawn_with_caps(310, &[]).await;
+    let call = avix_core::llm_svc::adapter::AvixToolCall {
+        call_id: "esc-1".into(),
+        name: "cap/escalate".into(),
+        args: json!({
+            "reason": "Found sensitive PII data",
+            "context": "user record contains SSN",
+            "options": []
+        }),
+    };
+    executor.dispatch_category2(&call).await.unwrap();
+    // The guidance should have been injected into pending_messages
+    assert_eq!(
+        executor.pending_messages.len(),
+        1,
+        "cap/escalate should inject one pending message"
+    );
+    assert!(
+        executor.pending_messages[0].contains("Found sensitive PII data"),
+        "pending message should contain the escalation reason: {:?}",
+        executor.pending_messages[0]
+    );
+}
+
+#[tokio::test]
+async fn cap_escalate_returns_guidance_in_response() {
+    let (mut executor, _) = spawn_with_caps(311, &[]).await;
+    let call = avix_core::llm_svc::adapter::AvixToolCall {
+        call_id: "esc-2".into(),
+        name: "cap/escalate".into(),
+        args: json!({ "reason": "Need human judgment", "context": "", "options": [] }),
+    };
+    let result = executor.dispatch_category2(&call).await.unwrap();
+    assert!(result.get("guidance").is_some(), "response should have guidance field");
+    assert!(result.get("selectedOption").is_some(), "response should have selectedOption field");
 }

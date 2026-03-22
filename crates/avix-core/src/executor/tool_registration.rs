@@ -211,10 +211,7 @@ mod tests {
     use crate::types::token::CapabilityToken;
 
     fn token_with_tools(tools: &[&str]) -> CapabilityToken {
-        CapabilityToken {
-            granted_tools: tools.iter().map(|s| s.to_string()).collect(),
-            signature: "test-sig".into(),
-        }
+        CapabilityToken::test_token(tools)
     }
 
     #[test]

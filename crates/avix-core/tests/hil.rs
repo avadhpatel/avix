@@ -132,16 +132,10 @@ async fn hil_approval_note_and_reason_passed_through() {
 #[tokio::test]
 async fn cap_upgrade_approved_updates_token() {
     let bus = Arc::new(SignalBus::new());
-    let initial_token = CapabilityToken {
-        granted_tools: vec!["fs/read".into()],
-        signature: "sig1".into(),
-    };
+    let initial_token = CapabilityToken::test_token(&["fs/read"]);
     let mut upgrader = CapabilityUpgrader::new(Pid::new(10), initial_token, Arc::clone(&bus));
 
-    let new_token = CapabilityToken {
-        granted_tools: vec!["fs/read".into(), "fs/write".into()],
-        signature: "sig2".into(),
-    };
+    let new_token = CapabilityToken::test_token(&["fs/read", "fs/write"]);
 
     let bus2 = Arc::clone(&bus);
     let new_token_val = serde_json::to_value(&new_token).unwrap();
@@ -175,10 +169,7 @@ async fn cap_upgrade_approved_updates_token() {
 #[tokio::test]
 async fn cap_upgrade_denied_returns_error() {
     let bus = Arc::new(SignalBus::new());
-    let token = CapabilityToken {
-        granted_tools: vec![],
-        signature: "sig".into(),
-    };
+    let token = CapabilityToken::test_token(&[]);
     let mut upgrader = CapabilityUpgrader::new(Pid::new(11), token, Arc::clone(&bus));
 
     let bus2 = Arc::clone(&bus);
@@ -204,10 +195,7 @@ async fn cap_upgrade_denied_returns_error() {
 #[tokio::test]
 async fn cap_upgrade_timeout_returns_error() {
     let bus = Arc::new(SignalBus::new());
-    let token = CapabilityToken {
-        granted_tools: vec![],
-        signature: "sig".into(),
-    };
+    let token = CapabilityToken::test_token(&[]);
     let mut upgrader = CapabilityUpgrader::new(Pid::new(12), token, Arc::clone(&bus));
     let result = upgrader
         .request_tool(

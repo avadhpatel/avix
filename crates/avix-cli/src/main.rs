@@ -120,15 +120,12 @@ async fn main() -> Result<()> {
             );
 
             // Spawn executor with minimal capability token
-            let token = CapabilityToken {
-                granted_tools: vec![
-                    "cap/request-tool".into(),
-                    "cap/escalate".into(),
-                    "cap/list".into(),
-                    "job/watch".into(),
-                ],
-                signature: "self-signed-test".into(),
-            };
+            let token = CapabilityToken::test_token(&[
+                "cap/request-tool",
+                "cap/escalate",
+                "cap/list",
+                "job/watch",
+            ]);
             let params = SpawnParams {
                 pid: Pid::new(100),
                 agent_name: name.clone(),
