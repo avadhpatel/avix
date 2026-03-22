@@ -150,42 +150,20 @@ async fn phase1_creates_kernel_defaults_agent_yaml() {
     let runtime = Runtime::bootstrap_with_root(tmp.path()).await.unwrap();
     std::env::remove_var("AVIX_MASTER_KEY");
 
-    let path = VfsPath::parse("/kernel/defaults/agent.yaml").unwrap();
+    let path = VfsPath::parse("/kernel/defaults/agent-manifest.yaml").unwrap();
     assert!(
         runtime.vfs().exists(&path).await,
-        "/kernel/defaults/agent.yaml must be written at boot"
+        "/kernel/defaults/agent-manifest.yaml must be written at boot"
     );
     let content = runtime.vfs().read(&path).await.unwrap();
     let text = String::from_utf8(content).unwrap();
     assert!(
-        text.contains("contextWindowTokens"),
-        "agent defaults must include contextWindowTokens"
+        text.contains("maxToolChain"),
+        "agent defaults must include maxToolChain"
     );
     assert!(
-        text.contains("maxToolChainLength"),
-        "agent defaults must include maxToolChainLength"
-    );
-}
-
-#[tokio::test]
-#[serial]
-async fn phase1_creates_kernel_defaults_pipe_yaml() {
-    let tmp = tempdir().unwrap();
-    write_minimal_auth_conf(tmp.path());
-    std::env::set_var("AVIX_MASTER_KEY", "test_key_32_bytes_exactly_here!!");
-    let runtime = Runtime::bootstrap_with_root(tmp.path()).await.unwrap();
-    std::env::remove_var("AVIX_MASTER_KEY");
-
-    let path = VfsPath::parse("/kernel/defaults/pipe.yaml").unwrap();
-    assert!(
-        runtime.vfs().exists(&path).await,
-        "/kernel/defaults/pipe.yaml must be written at boot"
-    );
-    let content = runtime.vfs().read(&path).await.unwrap();
-    let text = String::from_utf8(content).unwrap();
-    assert!(
-        text.contains("bufferTokens"),
-        "pipe defaults must include bufferTokens"
+        text.contains("modelPreference"),
+        "agent defaults must include modelPreference"
     );
 }
 
@@ -198,17 +176,51 @@ async fn phase1_creates_kernel_limits_agent_yaml() {
     let runtime = Runtime::bootstrap_with_root(tmp.path()).await.unwrap();
     std::env::remove_var("AVIX_MASTER_KEY");
 
-    let path = VfsPath::parse("/kernel/limits/agent.yaml").unwrap();
+    let path = VfsPath::parse("/kernel/limits/agent-manifest.yaml").unwrap();
     assert!(
         runtime.vfs().exists(&path).await,
-        "/kernel/limits/agent.yaml must be written at boot"
+        "/kernel/limits/agent-manifest.yaml must be written at boot"
     );
     let content = runtime.vfs().read(&path).await.unwrap();
     let text = String::from_utf8(content).unwrap();
     assert!(
-        text.contains("maxContextWindowTokens"),
-        "limits must include maxContextWindowTokens"
+        text.contains("maxToolChain"),
+        "limits must include maxToolChain"
     );
+    assert!(
+        text.contains("temperature"),
+        "limits must include temperature"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn phase1_defaults_round_trips_through_typed_structs() {
+    use avix_core::params::{DefaultsFile, LimitsFile};
+
+    let tmp = tempdir().unwrap();
+    write_minimal_auth_conf(tmp.path());
+    std::env::set_var("AVIX_MASTER_KEY", "test_key_32_bytes_exactly_here!!");
+    let runtime = Runtime::bootstrap_with_root(tmp.path()).await.unwrap();
+    std::env::remove_var("AVIX_MASTER_KEY");
+
+    let raw = runtime
+        .vfs()
+        .read(&VfsPath::parse("/kernel/defaults/agent-manifest.yaml").unwrap())
+        .await
+        .unwrap();
+    let file = DefaultsFile::from_str(&String::from_utf8(raw).unwrap()).unwrap();
+    let d = file.as_agent_defaults().unwrap();
+    assert_eq!(d.entrypoint.as_ref().unwrap().max_tool_chain, Some(5));
+
+    let raw = runtime
+        .vfs()
+        .read(&VfsPath::parse("/kernel/limits/agent-manifest.yaml").unwrap())
+        .await
+        .unwrap();
+    let file = LimitsFile::from_str(&String::from_utf8(raw).unwrap()).unwrap();
+    let l = file.as_agent_limits().unwrap();
+    assert!(l.entrypoint.as_ref().unwrap().max_tool_chain.is_some());
 }
 
 #[tokio::test]

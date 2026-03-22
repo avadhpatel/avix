@@ -1,4 +1,6 @@
 use crate::memfs::{MemFs, VfsPath};
+use crate::params::defaults::{system_agent_defaults, DefaultsFile, DefaultsLayer};
+use crate::params::limits::{system_agent_limits, LimitsFile, LimitsLayer};
 
 /// Phase 1: Write the kernel VFS skeleton.
 ///
@@ -7,29 +9,31 @@ use crate::memfs::{MemFs, VfsPath};
 /// All paths written here are kernel-owned ephemeral trees — they are
 /// re-created on every boot, never persisted to disk.
 pub async fn run(memfs: &MemFs) {
-    memfs
-        .write(
-            &VfsPath::parse("/kernel/defaults/agent.yaml").unwrap(),
-            AGENT_DEFAULTS_YAML.as_bytes().to_vec(),
-        )
-        .await
-        .expect("phase1: write /kernel/defaults/agent.yaml");
+    // System defaults — serialised from typed structs (no hard-coded YAML strings)
+    let agent_defaults_yaml =
+        DefaultsFile::from_agent_defaults(DefaultsLayer::System, None, &system_agent_defaults())
+            .expect("phase1: serialise system agent defaults");
 
     memfs
         .write(
-            &VfsPath::parse("/kernel/defaults/pipe.yaml").unwrap(),
-            PIPE_DEFAULTS_YAML.as_bytes().to_vec(),
+            &VfsPath::parse("/kernel/defaults/agent-manifest.yaml").unwrap(),
+            agent_defaults_yaml.into_bytes(),
         )
         .await
-        .expect("phase1: write /kernel/defaults/pipe.yaml");
+        .expect("phase1: write /kernel/defaults/agent-manifest.yaml");
+
+    // System limits — serialised from typed structs
+    let agent_limits_yaml =
+        LimitsFile::from_agent_limits(LimitsLayer::System, None, &system_agent_limits())
+            .expect("phase1: serialise system agent limits");
 
     memfs
         .write(
-            &VfsPath::parse("/kernel/limits/agent.yaml").unwrap(),
-            AGENT_LIMITS_YAML.as_bytes().to_vec(),
+            &VfsPath::parse("/kernel/limits/agent-manifest.yaml").unwrap(),
+            agent_limits_yaml.into_bytes(),
         )
         .await
-        .expect("phase1: write /kernel/limits/agent.yaml");
+        .expect("phase1: write /kernel/limits/agent-manifest.yaml");
 
     // Anchor /proc/spawn-errors/ so the directory is listable
     memfs
@@ -42,29 +46,3 @@ pub async fn run(memfs: &MemFs) {
 
     tracing::info!("phase1: VFS skeleton initialised");
 }
-
-// ── Compiled-in defaults ──────────────────────────────────────────────────────
-
-const AGENT_DEFAULTS_YAML: &str = r#"apiVersion: avix/v1
-kind: AgentDefaults
-spec:
-  contextWindowTokens: 64000
-  maxToolChainLength: 50
-  tokenTtlSecs: 3600
-  renewalWindowSecs: 300
-"#;
-
-const PIPE_DEFAULTS_YAML: &str = r#"apiVersion: avix/v1
-kind: PipeDefaults
-spec:
-  bufferTokens: 8192
-  direction: out
-"#;
-
-const AGENT_LIMITS_YAML: &str = r#"apiVersion: avix/v1
-kind: AgentLimits
-spec:
-  maxContextWindowTokens: 200000
-  maxToolChainLength: 200
-  maxConcurrentAgents: 100
-"#;
