@@ -1,5 +1,45 @@
 use serde::{Deserialize, Serialize};
 
+/// A JSON-RPC 2.0 notification — no `id` field, no response expected.
+/// Used for signals delivered to agents and for jobs.emit / jobs.complete / jobs.fail.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRpcNotification {
+    pub jsonrpc: String,
+    pub method: String,
+    #[serde(default)]
+    pub params: serde_json::Value,
+}
+
+impl JsonRpcNotification {
+    pub fn new(method: impl Into<String>, params: serde_json::Value) -> Self {
+        Self {
+            jsonrpc: "2.0".into(),
+            method: method.into(),
+            params,
+        }
+    }
+}
+
+/// Either a full request (has `id`) or a notification (no `id`).
+/// Used by IpcServer to distinguish the two wire shapes.
+#[derive(Debug, Clone)]
+pub enum IpcMessage {
+    Request(JsonRpcRequest),
+    Notification(JsonRpcNotification),
+}
+
+impl IpcMessage {
+    /// Parse a raw JSON value into an IpcMessage.
+    /// Presence of the `id` key determines which variant.
+    pub fn from_value(v: serde_json::Value) -> Result<Self, serde_json::Error> {
+        if v.get("id").is_some() {
+            serde_json::from_value(v).map(IpcMessage::Request)
+        } else {
+            serde_json::from_value(v).map(IpcMessage::Notification)
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
     pub jsonrpc: String,

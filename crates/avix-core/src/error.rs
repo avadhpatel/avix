@@ -28,4 +28,13 @@ pub enum AvixError {
 
     #[error("adapter error: {0}")]
     AdapterError(String),
+
+    #[error("IO error: {0}")]
+    Io(String),
+
+    #[error("IPC call timed out")]
+    IpcTimeout,
+
+    #[error("IPC frame too large")]
+    IpcFrameTooLarge,
 }
