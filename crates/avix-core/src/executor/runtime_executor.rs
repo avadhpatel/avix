@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -117,6 +119,12 @@ pub struct RuntimeExecutor {
     /// VFS handle — when set, pipe/open writes a /proc/<pid>/pipes/<pipeId>.yaml record.
     vfs: Option<Arc<MemFs>>,
     registry_ref: RegistryRef,
+    /// Set to `true` by the signal listener when SIGPAUSE is received.
+    /// The LLM loop should check this at each tool boundary and wait until cleared.
+    pub paused: Arc<AtomicBool>,
+    /// Set to `true` by the signal listener when SIGKILL or SIGSTOP is received.
+    /// The LLM loop should check this and exit cleanly.
+    pub killed: Arc<AtomicBool>,
 }
 
 enum RegistryRef {
@@ -159,6 +167,8 @@ impl RuntimeExecutor {
             resource_handler: None,
             vfs: None,
             registry_ref: RegistryRef::Mock(registry),
+            paused: Arc::new(AtomicBool::new(false)),
+            killed: Arc::new(AtomicBool::new(false)),
         };
 
         // GAP 3: populate tool_list at spawn time
@@ -288,6 +298,99 @@ impl RuntimeExecutor {
     /// GAP 4: Set a per-tool call budget.
     pub fn set_tool_budget(&mut self, tool: &str, n: u32) {
         self.tool_budgets.set(tool, n);
+    }
+
+    /// Start the agent's inbound signal socket listener as a background task.
+    ///
+    /// Binds `/run/avix/agents/<pid>.sock` and spawns a task that processes
+    /// incoming signal notifications:
+    /// - `SIGPAUSE`  → sets `self.paused = true`
+    /// - `SIGRESUME` → sets `self.paused = false`
+    /// - `SIGKILL`   → sets `self.killed = true`
+    /// - `SIGSTOP`   → sets `self.killed = true` (graceful stop treated same as kill for now)
+    /// - Others      → logged and ignored
+    ///
+    /// Returns `(task_handle, server_handle)`. Call `server_handle.cancel()` at shutdown
+    /// to stop accepting new signals; the task will then drain and finish.
+    pub async fn start_signal_listener(
+        &self,
+        run_dir: &Path,
+    ) -> Result<(tokio::task::JoinHandle<()>, crate::ipc::IpcServerHandle), AvixError> {
+        use crate::ipc::message::IpcMessage;
+        use crate::signal::agent_socket::create_agent_socket;
+
+        let (server, handle) = create_agent_socket(run_dir, self.pid).await?;
+        let paused = Arc::clone(&self.paused);
+        let killed = Arc::clone(&self.killed);
+        let pid = self.pid;
+
+        let task = tokio::spawn(async move {
+            server
+                .serve(move |msg| {
+                    let paused = Arc::clone(&paused);
+                    let killed = Arc::clone(&killed);
+                    Box::pin(async move {
+                        let (method, params) = match msg {
+                            IpcMessage::Notification(n) => (n.method, n.params),
+                            IpcMessage::Request(r) => {
+                                tracing::warn!(
+                                    pid = pid.as_u32(),
+                                    "agent signal socket received unexpected request: {}",
+                                    r.method
+                                );
+                                return None;
+                            }
+                        };
+
+                        if method != "signal" {
+                            tracing::warn!(
+                                pid = pid.as_u32(),
+                                "agent signal socket: unexpected method '{method}'"
+                            );
+                            return None;
+                        }
+
+                        let signal_name = params
+                            .get("signal")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+
+                        tracing::debug!(pid = pid.as_u32(), signal = signal_name, "signal received");
+
+                        match signal_name {
+                            "SIGPAUSE" => paused.store(true, Ordering::Release),
+                            "SIGRESUME" => paused.store(false, Ordering::Release),
+                            "SIGKILL" | "SIGSTOP" => killed.store(true, Ordering::Release),
+                            "SIGSAVE" => {
+                                tracing::info!(
+                                    pid = pid.as_u32(),
+                                    "SIGSAVE received; snapshot not yet implemented"
+                                );
+                            }
+                            other => {
+                                tracing::debug!(
+                                    pid = pid.as_u32(),
+                                    signal = other,
+                                    "unhandled signal"
+                                );
+                            }
+                        }
+
+                        None // notifications never send a response
+                    })
+                        as std::pin::Pin<
+                            Box<
+                                dyn std::future::Future<
+                                        Output = Option<crate::ipc::message::JsonRpcResponse>,
+                                    > + Send,
+                            >,
+                        >
+                })
+                .await
+                .ok();
+        });
+
+        Ok((task, handle))
     }
 
     pub async fn shutdown(&mut self) {

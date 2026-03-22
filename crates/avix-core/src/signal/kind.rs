@@ -11,6 +11,10 @@ pub enum SignalKind {
     Save,
     Pipe,
     Escalate,
+    /// Agent-defined event, agent → kernel direction.
+    Usr1,
+    /// Secondary agent-defined event, agent → kernel direction.
+    Usr2,
 }
 
 impl SignalKind {
@@ -24,6 +28,8 @@ impl SignalKind {
             Self::Save => "SIGSAVE",
             Self::Pipe => "SIGPIPE",
             Self::Escalate => "SIGESCALATE",
+            Self::Usr1 => "SIGUSR1",
+            Self::Usr2 => "SIGUSR2",
         }
     }
 }

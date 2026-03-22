@@ -37,4 +37,7 @@ pub enum AvixError {
 
     #[error("IPC frame too large")]
     IpcFrameTooLarge,
+
+    #[error("not found: {0}")]
+    NotFound(String),
 }
