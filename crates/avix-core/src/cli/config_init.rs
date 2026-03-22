@@ -1,5 +1,5 @@
 use crate::error::AvixError;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct ConfigInitParams {
     pub root: PathBuf,
@@ -12,6 +12,19 @@ pub struct ConfigInitParams {
 
 pub struct ConfigInitResult {
     pub api_key: String,
+}
+
+/// Write `content` to `path` only if the file does not already exist.
+/// Returns `true` if the file was written, `false` if it was skipped.
+fn write_if_absent(path: &Path, content: &str) -> Result<bool, AvixError> {
+    if path.exists() {
+        return Ok(false);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+    }
+    std::fs::write(path, content).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+    Ok(true)
 }
 
 pub fn run_config_init(params: ConfigInitParams) -> Result<ConfigInitResult, AvixError> {
@@ -58,8 +71,122 @@ identities:
     std::fs::write(etc_dir.join("auth.conf"), auth_conf)
         .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
+    // ── Additional /etc/avix/ config files ───────────────────────────────────
+
+    let root = &params.root;
+    let now = chrono::Utc::now().to_rfc3339();
+    let identity = &params.identity_name;
+    let role = &params.role;
+    let cred_type = &params.credential_type;
+    let root_str = root.display();
+
+    write_if_absent(
+        &root.join("etc/kernel.yaml"),
+        &KERNEL_YAML_TEMPLATE.replace("{now}", &now),
+    )?;
+
+    write_if_absent(
+        &root.join("etc/users.yaml"),
+        &USERS_YAML_TEMPLATE
+            .replace("{identity}", identity)
+            .replace("{role}", role)
+            .replace("{cred_type}", cred_type)
+            .replace("{key_hash}", &key_hash),
+    )?;
+
+    write_if_absent(&root.join("etc/crews.yaml"), CREWS_YAML_TEMPLATE)?;
+
+    write_if_absent(&root.join("etc/crontab.yaml"), CRONTAB_YAML_TEMPLATE)?;
+
+    let root_s = root_str.to_string();
+    write_if_absent(
+        &root.join("etc/fstab.yaml"),
+        &FSTAB_YAML_TEMPLATE
+            .replace("{root}", &root_s)
+            .replace("{identity}", identity),
+    )?;
+
+    // Data directories referenced by fstab mounts
+    std::fs::create_dir_all(root.join(format!("data/users/{identity}")))
+        .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+    std::fs::create_dir_all(root.join("secrets"))
+        .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+
     Ok(ConfigInitResult { api_key: raw_key })
 }
+
+// ── YAML templates ────────────────────────────────────────────────────────────
+
+const KERNEL_YAML_TEMPLATE: &str = "apiVersion: avix/v1
+kind: KernelConfig
+metadata:
+  createdAt: \"{now}\"
+spec:
+  log:
+    level: info
+    format: json
+  secrets:
+    algorithm: aes-256-gcm
+    masterKey:
+      source: env
+      envVar: AVIX_MASTER_KEY
+    store:
+      path: /secrets
+      provider: local
+    audit:
+      enabled: true
+      logReads: true
+      logWrites: true
+";
+
+const USERS_YAML_TEMPLATE: &str = "apiVersion: avix/v1
+kind: Users
+spec:
+  users:
+    - name: \"{identity}\"
+      uid: 1001
+      role: \"{role}\"
+      credential:
+        type: \"{cred_type}\"
+        keyHash: \"{key_hash}\"
+";
+
+const CREWS_YAML_TEMPLATE: &str = "apiVersion: avix/v1
+kind: Crews
+spec:
+  crews: []
+";
+
+const CRONTAB_YAML_TEMPLATE: &str = "apiVersion: avix/v1
+kind: Crontab
+spec:
+  jobs: []
+";
+
+const FSTAB_YAML_TEMPLATE: &str = "apiVersion: avix/v1
+kind: Fstab
+spec:
+  mounts:
+    - path: /etc/avix
+      provider: local
+      config:
+        root: \"{root}/etc\"
+      options:
+        readonly: false
+
+    - path: /users/{identity}
+      provider: local
+      config:
+        root: \"{root}/data/users/{identity}\"
+      options: {{}}
+
+    - path: /secrets
+      provider: local
+      config:
+        root: \"{root}/secrets\"
+      options:
+        encrypted: true
+";
 
 #[cfg(test)]
 mod tests {

@@ -321,3 +321,133 @@ spec:
 "#;
     assert!(LlmConfig::from_str(yaml).is_err());
 }
+
+// ── Finding C: config init writes all /etc/avix/ files ───────────────────────
+
+use avix_core::cli::config_init::{ConfigInitParams, run_config_init};
+use tempfile::tempdir;
+
+fn make_params(tmp: &std::path::Path, identity: &str, role: &str) -> ConfigInitParams {
+    ConfigInitParams {
+        root: tmp.to_path_buf(),
+        identity_name: identity.into(),
+        credential_type: "api_key".into(),
+        role: role.into(),
+        master_key_source: "env".into(),
+        mode: "cli".into(),
+    }
+}
+
+#[test]
+fn config_init_creates_kernel_yaml() {
+    let tmp = tempdir().unwrap();
+    run_config_init(make_params(tmp.path(), "alice", "admin")).unwrap();
+
+    let path = tmp.path().join("etc/kernel.yaml");
+    assert!(path.exists(), "kernel.yaml must exist after config init");
+    let content = std::fs::read_to_string(path).unwrap();
+    assert!(
+        content.contains("KernelConfig"),
+        "kernel.yaml must have kind: KernelConfig"
+    );
+    assert!(
+        content.contains("AVIX_MASTER_KEY"),
+        "kernel.yaml must reference AVIX_MASTER_KEY"
+    );
+}
+
+#[test]
+fn config_init_creates_users_yaml_with_identity() {
+    let tmp = tempdir().unwrap();
+    run_config_init(make_params(tmp.path(), "bob", "user")).unwrap();
+
+    let content = std::fs::read_to_string(tmp.path().join("etc/users.yaml")).unwrap();
+    assert!(content.contains("bob"), "users.yaml must contain the identity name");
+    assert!(content.contains("user"), "users.yaml must contain the role");
+    assert!(
+        content.contains("UsersConfig") || content.contains("Users"),
+        "users.yaml must have kind: Users or UsersConfig"
+    );
+}
+
+#[test]
+fn config_init_creates_crews_yaml() {
+    let tmp = tempdir().unwrap();
+    run_config_init(make_params(tmp.path(), "alice", "admin")).unwrap();
+
+    let path = tmp.path().join("etc/crews.yaml");
+    assert!(path.exists(), "crews.yaml must exist after config init");
+    let content = std::fs::read_to_string(path).unwrap();
+    assert!(content.contains("Crews"), "crews.yaml must have kind: Crews");
+}
+
+#[test]
+fn config_init_creates_crontab_yaml() {
+    let tmp = tempdir().unwrap();
+    run_config_init(make_params(tmp.path(), "alice", "admin")).unwrap();
+
+    let path = tmp.path().join("etc/crontab.yaml");
+    assert!(path.exists(), "crontab.yaml must exist after config init");
+    let content = std::fs::read_to_string(path).unwrap();
+    assert!(
+        content.contains("Crontab"),
+        "crontab.yaml must have kind: Crontab"
+    );
+}
+
+#[test]
+fn config_init_creates_fstab_yaml_with_local_mounts() {
+    let tmp = tempdir().unwrap();
+    run_config_init(make_params(tmp.path(), "alice", "admin")).unwrap();
+
+    let path = tmp.path().join("etc/fstab.yaml");
+    assert!(path.exists(), "fstab.yaml must exist after config init");
+    let content = std::fs::read_to_string(path).unwrap();
+    assert!(content.contains("Fstab"), "fstab.yaml must have kind: Fstab");
+    assert!(
+        content.contains("local"),
+        "fstab.yaml must define at least one local mount"
+    );
+    assert!(
+        content.contains("/etc/avix") || content.contains("etc"),
+        "fstab.yaml must mount the etc/avix tree"
+    );
+    assert!(content.contains("/secrets"), "fstab.yaml must mount /secrets");
+}
+
+#[test]
+fn config_init_all_files_idempotent_without_force() {
+    let tmp = tempdir().unwrap();
+
+    run_config_init(make_params(tmp.path(), "alice", "admin")).unwrap();
+    let mtime1 = std::fs::metadata(tmp.path().join("etc/kernel.yaml"))
+        .unwrap()
+        .modified()
+        .unwrap();
+
+    run_config_init(make_params(tmp.path(), "alice", "admin")).unwrap();
+    let mtime2 = std::fs::metadata(tmp.path().join("etc/kernel.yaml"))
+        .unwrap()
+        .modified()
+        .unwrap();
+
+    assert_eq!(
+        mtime1, mtime2,
+        "kernel.yaml must not be rewritten on second config init without --force"
+    );
+}
+
+#[test]
+fn config_init_creates_data_dirs_for_mounts() {
+    let tmp = tempdir().unwrap();
+    run_config_init(make_params(tmp.path(), "alice", "admin")).unwrap();
+
+    assert!(
+        tmp.path().join("data/users/alice").exists(),
+        "data/users/<identity> directory must be created at config init"
+    );
+    assert!(
+        tmp.path().join("secrets").exists(),
+        "secrets directory must be created at config init"
+    );
+}
