@@ -23,6 +23,7 @@ async fn spawn_with_caps(pid_val: u32, caps: &[&str]) -> (RuntimeExecutor, Arc<M
         agent_name: "test-agent".into(),
         goal: "do something".into(),
         spawned_by: "kernel".into(),
+        session_id: "test-session".into(),
         token: token_with_caps(caps),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
@@ -84,6 +85,7 @@ async fn shutdown_deregisters_all_category2_tools() {
         agent_name: "test".into(),
         goal: "test".into(),
         spawned_by: "kernel".into(),
+        session_id: "test-session".into(),
         token: token_with_caps(&["spawn", "pipe"]),
     };
     let mut executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
@@ -106,6 +108,7 @@ async fn category2_tools_registered_with_user_visibility() {
         agent_name: "test".into(),
         goal: "test".into(),
         spawned_by: "kernel".into(),
+        session_id: "test-session".into(),
         token: token_with_caps(&["spawn"]),
     };
     RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
@@ -125,16 +128,16 @@ async fn category2_tools_registered_with_user_visibility() {
 async fn system_prompt_block1_contains_identity() {
     let (executor, _) = spawn_with_caps(20, &[]).await;
     let prompt = executor.build_system_prompt();
-    assert!(prompt.contains("Name: test-agent"));
+    assert!(prompt.contains("test-agent"));
     assert!(prompt.contains("PID: 20"));
-    assert!(prompt.contains("Goal: do something"));
+    assert!(prompt.contains("do something"));
 }
 
 #[tokio::test]
 async fn system_prompt_block4_empty_without_pending_messages() {
     let (executor, _) = spawn_with_caps(21, &[]).await;
     let prompt = executor.build_system_prompt();
-    assert!(!prompt.contains("Pending Messages"));
+    assert!(!prompt.contains("Pending Instructions"));
 }
 
 #[tokio::test]
@@ -142,7 +145,7 @@ async fn system_prompt_block4_shows_pending_messages() {
     let (mut executor, _) = spawn_with_caps(22, &[]).await;
     executor.inject_pending_message("You have a new task from the operator.".into());
     let prompt = executor.build_system_prompt();
-    assert!(prompt.contains("Pending Messages"));
+    assert!(prompt.contains("Pending Instructions"));
     assert!(prompt.contains("You have a new task from the operator."));
 }
 
@@ -282,6 +285,7 @@ async fn agent_spawn_translates_to_kernel_proc_spawn() {
         agent_name: "orchestrator".into(),
         goal: "spawn subagents".into(),
         spawned_by: "kernel".into(),
+        session_id: "test-session".into(),
         token: token_with_caps(&["spawn"]),
     };
     let mut executor =
@@ -311,6 +315,7 @@ async fn cap_request_tool_triggers_resource_request() {
         agent_name: "worker".into(),
         goal: "request caps".into(),
         spawned_by: "kernel".into(),
+        session_id: "test-session".into(),
         token: token_with_caps(&[]),
     };
     let mut executor =
@@ -336,6 +341,7 @@ async fn build_test_executor_with_mocks() -> RuntimeExecutor {
         agent_name: "test-agent".into(),
         goal: "test goal".into(),
         spawned_by: "kernel".into(),
+        session_id: "test-session".into(),
         token: token_with_caps(&["spawn", "pipe"]),
     };
     RuntimeExecutor::spawn_with_registry(params, registry)
@@ -350,6 +356,7 @@ async fn build_test_executor_with_max_chain(max: usize) -> RuntimeExecutor {
         agent_name: "chain-agent".into(),
         goal: "chain test".into(),
         spawned_by: "kernel".into(),
+        session_id: "test-session".into(),
         token: token_with_caps(&[]),
     };
     let mut executor = RuntimeExecutor::spawn_with_registry(params, registry)

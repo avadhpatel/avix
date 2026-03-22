@@ -134,6 +134,7 @@ async fn main() -> Result<()> {
                 agent_name: name.clone(),
                 goal: goal.clone(),
                 spawned_by: "cli".into(),
+                session_id: uuid::Uuid::new_v4().to_string(),
                 token,
             };
             let registry = Arc::new(MockToolRegistry::new());

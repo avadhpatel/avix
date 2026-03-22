@@ -6,4 +6,5 @@ pub struct SpawnParams {
     pub goal: String,
     pub spawned_by: String,
     pub token: CapabilityToken,
+    pub session_id: String,
 }
