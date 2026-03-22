@@ -8,7 +8,11 @@ name = "avix"
 path = "src/main.rs"
 
 [dependencies]
-avix-core           = { path = "../avix-core" }
+avix-core            = { path = "../avix-core" }
 tokio.workspace      = true
 serde_json.workspace = true
 anyhow.workspace     = true
+clap.workspace       = true
+tracing.workspace    = true
+tracing-subscriber.workspace = true
+autoagents           = { version = "0.3.6", features = ["anthropic", "openai", "ollama"] }

@@ -269,6 +269,77 @@ impl RuntimeExecutor {
         // Token renewal is transparent — no-op in tests
     }
 
+    /// Run the turn loop against a real LLM client.
+    pub async fn run_with_client(
+        &mut self,
+        goal: &str,
+        client: &dyn crate::llm_client::LlmClient,
+    ) -> Result<TurnResult, AvixError> {
+        let system = self.build_system_prompt();
+        let mut messages: Vec<serde_json::Value> =
+            vec![serde_json::json!({"role": "user", "content": goal})];
+        let mut chain_count = 0;
+
+        loop {
+            let req = crate::llm_client::LlmCompleteRequest {
+                model: String::new(), // client picks its default
+                messages: messages.clone(),
+                tools: self.current_tool_list(),
+                system: Some(system.clone()),
+                max_tokens: 4096,
+            };
+
+            let response = client
+                .complete(req)
+                .await
+                .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+
+            match super::stop_reason::interpret_stop_reason(&response) {
+                super::stop_reason::TurnAction::ReturnResult(text) => {
+                    return Ok(TurnResult { text });
+                }
+                super::stop_reason::TurnAction::SummariseContext => {
+                    // summarise not yet implemented — treat as end
+                    let text = response
+                        .content
+                        .iter()
+                        .filter_map(|c| c["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("");
+                    return Ok(TurnResult { text });
+                }
+                super::stop_reason::TurnAction::DispatchTools(calls) => {
+                    chain_count += calls.len();
+                    if chain_count > self.max_tool_chain_length {
+                        return Err(AvixError::ConfigParse(format!(
+                            "exceeded max tool chain limit of {}",
+                            self.max_tool_chain_length
+                        )));
+                    }
+                    // Append assistant message with tool_use blocks
+                    messages.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": response.content
+                    }));
+                    // Dispatch each call and collect results
+                    let mut tool_results = Vec::new();
+                    for call in &calls {
+                        let result = self.dispatch_category2(call).await?;
+                        tool_results.push(serde_json::json!({
+                            "type": "tool_result",
+                            "tool_use_id": call.call_id,
+                            "content": result.to_string()
+                        }));
+                    }
+                    messages.push(serde_json::json!({
+                        "role": "user",
+                        "content": tool_results
+                    }));
+                }
+            }
+        }
+    }
+
     pub async fn run_until_complete(&mut self, goal: &str) -> Result<TurnResult, AvixError> {
         let mut messages: Vec<serde_json::Value> =
             vec![serde_json::json!({"role": "user", "content": goal})];

@@ -38,3 +38,5 @@ rand               = { version = "0.8" }
 base64             = { version = "0.21" }
 cron               = { version = "0.12" }
 tokio-tungstenite  = { version = "0.21" }
+clap               = { version = "4", features = ["derive"] }
+autoagents         = { version = "0.3.6" }
