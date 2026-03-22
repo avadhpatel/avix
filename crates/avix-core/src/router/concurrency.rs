@@ -50,6 +50,20 @@ impl ConcurrencyLimiter {
         })
     }
 
+    /// Non-blocking acquire. Returns `None` if the limit is already reached.
+    pub fn try_acquire(&self) -> Option<ConcurrencyGuard> {
+        Arc::clone(&self.semaphore)
+            .try_acquire_owned()
+            .ok()
+            .map(|permit| {
+                self.active.fetch_add(1, Ordering::Relaxed);
+                ConcurrencyGuard {
+                    _permit: permit,
+                    counter: Arc::clone(&self.active),
+                }
+            })
+    }
+
     pub async fn active_count(&self) -> usize {
         self.active.load(Ordering::Relaxed)
     }
