@@ -1,0 +1,7 @@
+/target
+Cargo.lock
+*.enc
+.env
+*.log
+tarpaulin-report.html
+coverage/

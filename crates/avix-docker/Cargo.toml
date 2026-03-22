@@ -1,0 +1,14 @@
+[package]
+name    = "avix-docker"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "avix-headless"
+path = "src/main.rs"
+
+[dependencies]
+avix-core           = { path = "../avix-core" }
+tokio.workspace      = true
+serde_json.workspace = true
+anyhow.workspace     = true

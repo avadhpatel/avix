@@ -1,0 +1,40 @@
+# Cargo.toml — workspace root
+[workspace]
+members = [
+    "crates/avix-core",
+    "crates/avix-cli",
+    "crates/avix-app",
+    "crates/avix-docker",
+]
+resolver = "2"
+
+[workspace.package]
+version     = "0.1.0"
+edition     = "2021"
+authors     = ["Avix Contributors"]
+license     = "MIT"
+repository  = "https://github.com/avix-os/avix"
+
+[workspace.dependencies]
+tokio              = { version = "1",   features = ["full"] }
+serde              = { version = "1",   features = ["derive"] }
+serde_json         = { version = "1" }
+serde_yaml         = { version = "0.9" }
+tracing            = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["json"] }
+anyhow             = { version = "1" }
+thiserror          = { version = "1" }
+uuid               = { version = "1",   features = ["v4"] }
+hmac               = { version = "0.12" }
+sha2               = { version = "0.10" }
+hex                = { version = "0.4" }
+chrono             = { version = "0.4", features = ["serde"] }
+tempfile           = { version = "3" }
+async-trait        = { version = "0.1" }
+redb               = { version = "2" }
+serial_test        = { version = "3" }
+aes-gcm            = { version = "0.10" }
+rand               = { version = "0.8" }
+base64             = { version = "0.21" }
+cron               = { version = "0.12" }
+tokio-tungstenite  = { version = "0.21" }

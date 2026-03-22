@@ -1,0 +1,172 @@
+use avix_core::process::{ProcessEntry, ProcessKind, ProcessStatus, ProcessTable};
+use avix_core::types::Pid;
+use std::sync::Arc;
+
+fn make_agent_entry(pid: u32, name: &str) -> ProcessEntry {
+    ProcessEntry {
+        pid: Pid::new(pid),
+        name: name.to_string(),
+        kind: ProcessKind::Agent,
+        status: ProcessStatus::Running,
+        parent: None,
+        spawned_by_user: "alice".to_string(),
+    }
+}
+
+fn make_service_entry(pid: u32, name: &str) -> ProcessEntry {
+    ProcessEntry {
+        pid: Pid::new(pid),
+        name: name.to_string(),
+        kind: ProcessKind::Service,
+        status: ProcessStatus::Running,
+        parent: None,
+        spawned_by_user: "system".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn insert_and_lookup_by_pid() {
+    let table = ProcessTable::new();
+    table.insert(make_agent_entry(57, "researcher")).await;
+    let entry = table.get(Pid::new(57)).await.unwrap();
+    assert_eq!(entry.name, "researcher");
+}
+
+#[tokio::test]
+async fn lookup_missing_pid_returns_none() {
+    let table = ProcessTable::new();
+    assert!(table.get(Pid::new(99)).await.is_none());
+}
+
+#[tokio::test]
+async fn remove_entry() {
+    let table = ProcessTable::new();
+    table.insert(make_agent_entry(57, "researcher")).await;
+    table.remove(Pid::new(57)).await;
+    assert!(table.get(Pid::new(57)).await.is_none());
+}
+
+#[tokio::test]
+async fn remove_nonexistent_is_noop() {
+    let table = ProcessTable::new();
+    table.remove(Pid::new(999)).await;
+}
+
+#[tokio::test]
+async fn update_status() {
+    let table = ProcessTable::new();
+    table.insert(make_agent_entry(57, "researcher")).await;
+    table
+        .set_status(Pid::new(57), ProcessStatus::Paused)
+        .await
+        .unwrap();
+    let entry = table.get(Pid::new(57)).await.unwrap();
+    assert_eq!(entry.status, ProcessStatus::Paused);
+}
+
+#[tokio::test]
+async fn update_status_missing_pid_returns_err() {
+    let table = ProcessTable::new();
+    let result = table.set_status(Pid::new(99), ProcessStatus::Paused).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn list_all() {
+    let table = ProcessTable::new();
+    table.insert(make_agent_entry(57, "researcher")).await;
+    table.insert(make_agent_entry(58, "writer")).await;
+    table.insert(make_service_entry(2, "router")).await;
+    let all = table.list_all().await;
+    assert_eq!(all.len(), 3);
+}
+
+#[tokio::test]
+async fn list_agents_only() {
+    let table = ProcessTable::new();
+    table.insert(make_agent_entry(57, "researcher")).await;
+    table.insert(make_service_entry(2, "router")).await;
+    let agents = table.list_by_kind(ProcessKind::Agent).await;
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].name, "researcher");
+}
+
+#[tokio::test]
+async fn list_by_parent() {
+    let table = ProcessTable::new();
+    let mut child = make_agent_entry(58, "child");
+    child.parent = Some(Pid::new(57));
+    table.insert(make_agent_entry(57, "parent")).await;
+    table.insert(child).await;
+    let children = table.list_children(Pid::new(57)).await;
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].pid, Pid::new(58));
+}
+
+#[tokio::test]
+async fn list_by_status() {
+    let table = ProcessTable::new();
+    table.insert(make_agent_entry(57, "running-agent")).await;
+    let mut paused = make_agent_entry(58, "paused-agent");
+    paused.status = ProcessStatus::Paused;
+    table.insert(paused).await;
+    let running = table.list_by_status(ProcessStatus::Running).await;
+    assert_eq!(running.len(), 1);
+    assert_eq!(running[0].name, "running-agent");
+}
+
+#[tokio::test]
+async fn find_by_name() {
+    let table = ProcessTable::new();
+    table.insert(make_agent_entry(57, "researcher")).await;
+    let found = table.find_by_name("researcher").await.unwrap();
+    assert_eq!(found.pid, Pid::new(57));
+}
+
+#[tokio::test]
+async fn find_by_name_missing_returns_none() {
+    let table = ProcessTable::new();
+    assert!(table.find_by_name("ghost").await.is_none());
+}
+
+#[tokio::test]
+async fn concurrent_inserts_all_visible() {
+    let table = Arc::new(ProcessTable::new());
+    let mut handles = Vec::new();
+    for i in 0..100u32 {
+        let t = Arc::clone(&table);
+        handles.push(tokio::spawn(async move {
+            t.insert(make_agent_entry(i + 100, &format!("agent-{i}")))
+                .await;
+        }));
+    }
+    for h in handles {
+        h.await.unwrap();
+    }
+    assert_eq!(table.list_all().await.len(), 100);
+}
+
+#[tokio::test]
+async fn concurrent_reads_do_not_block_each_other() {
+    let table = Arc::new(ProcessTable::new());
+    table.insert(make_agent_entry(57, "researcher")).await;
+    let mut handles = Vec::new();
+    for _ in 0..50 {
+        let t = Arc::clone(&table);
+        handles.push(tokio::spawn(
+            async move { t.get(Pid::new(57)).await.is_some() },
+        ));
+    }
+    let results: Vec<_> = futures::future::join_all(handles).await;
+    assert!(results.iter().all(|r| *r.as_ref().unwrap()));
+}
+
+#[tokio::test]
+async fn count_is_accurate() {
+    let table = ProcessTable::new();
+    assert_eq!(table.count().await, 0);
+    table.insert(make_agent_entry(57, "a")).await;
+    assert_eq!(table.count().await, 1);
+    table.remove(Pid::new(57)).await;
+    assert_eq!(table.count().await, 0);
+}
