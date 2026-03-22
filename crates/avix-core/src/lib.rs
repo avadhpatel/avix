@@ -7,6 +7,7 @@ pub mod error;
 pub mod exec_svc;
 pub mod executor;
 pub mod gateway;
+pub mod jobs;
 pub mod ipc;
 pub mod kernel;
 pub mod llm_client;
