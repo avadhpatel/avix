@@ -34,6 +34,22 @@ impl VfsPath {
     pub fn file_name(&self) -> Option<&str> {
         self.0.rsplit_once('/').map(|(_, name)| name)
     }
+
+    /// Returns `true` if an agent (non-kernel caller) may write to this path.
+    /// The following trees are kernel-owned and must never be written by agents:
+    ///   `/proc/`      — kernel-generated runtime state
+    ///   `/kernel/`    — compiled-in defaults and dynamic limits
+    ///   `/secrets/`   — kernel-managed encrypted store
+    ///   `/etc/avix/`  — system configuration (operator-only)
+    ///   `/bin/`       — system agents (operator-only)
+    pub fn is_agent_writable(&self) -> bool {
+        let s = self.as_str();
+        !s.starts_with("/proc/")
+            && !s.starts_with("/kernel/")
+            && !s.starts_with("/secrets/")
+            && !s.starts_with("/etc/avix/")
+            && !s.starts_with("/bin/")
+    }
 }
 
 #[cfg(test)]

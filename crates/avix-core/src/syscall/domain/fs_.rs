@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 
+use crate::memfs::VfsPath;
 use crate::syscall::{SyscallContext, SyscallError, SyscallResult};
 
 pub fn read(_ctx: &SyscallContext, params: Value) -> SyscallResult {
@@ -17,8 +18,8 @@ pub fn read(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "path": path, "content": "" }))
 }
 
-pub fn write(_ctx: &SyscallContext, params: Value) -> SyscallResult {
-    let path = params
+pub fn write(ctx: &SyscallContext, params: Value) -> SyscallResult {
+    let path_str = params
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or_else(|| SyscallError::Einval("missing path".into()))?;
@@ -26,7 +27,17 @@ pub fn write(_ctx: &SyscallContext, params: Value) -> SyscallResult {
         .get("content")
         .and_then(|v| v.as_str())
         .ok_or_else(|| SyscallError::Einval("missing content".into()))?;
-    Ok(json!({ "path": path, "bytes_written": content.len() }))
+
+    let path = VfsPath::parse(path_str)
+        .map_err(|e| SyscallError::Einval(e.to_string()))?;
+    if !path.is_agent_writable() {
+        return Err(SyscallError::Eperm(
+            ctx.caller_pid,
+            format!("EPERM: {path_str} is kernel-owned and not writable by agents"),
+        ));
+    }
+
+    Ok(json!({ "path": path_str, "bytes_written": content.len() }))
 }
 
 pub fn list(_ctx: &SyscallContext, params: Value) -> SyscallResult {

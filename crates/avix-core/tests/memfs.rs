@@ -122,3 +122,61 @@ async fn concurrent_writes_to_different_paths() {
         assert!(fs.exists(&path).await);
     }
 }
+
+// ── Finding D: path protection helper ────────────────────────────────────────
+
+#[test]
+fn agent_writable_path_allows_user_workspace() {
+    assert!(VfsPath::parse("/users/alice/workspace/file.txt")
+        .unwrap()
+        .is_agent_writable());
+}
+
+#[test]
+fn agent_writable_path_allows_services_workspace() {
+    assert!(VfsPath::parse("/services/svc-pipeline/workspace/out.txt")
+        .unwrap()
+        .is_agent_writable());
+}
+
+#[test]
+fn agent_writable_path_allows_crews_shared() {
+    assert!(VfsPath::parse("/crews/researchers/shared/report.md")
+        .unwrap()
+        .is_agent_writable());
+}
+
+#[test]
+fn agent_writable_blocks_proc() {
+    assert!(!VfsPath::parse("/proc/57/status.yaml")
+        .unwrap()
+        .is_agent_writable());
+}
+
+#[test]
+fn agent_writable_blocks_kernel() {
+    assert!(!VfsPath::parse("/kernel/defaults/agent.yaml")
+        .unwrap()
+        .is_agent_writable());
+}
+
+#[test]
+fn agent_writable_blocks_secrets() {
+    assert!(!VfsPath::parse("/secrets/alice/openai-key.enc")
+        .unwrap()
+        .is_agent_writable());
+}
+
+#[test]
+fn agent_writable_blocks_etc_avix() {
+    assert!(!VfsPath::parse("/etc/avix/kernel.yaml")
+        .unwrap()
+        .is_agent_writable());
+}
+
+#[test]
+fn agent_writable_blocks_bin() {
+    assert!(!VfsPath::parse("/bin/researcher/manifest.yaml")
+        .unwrap()
+        .is_agent_writable());
+}
