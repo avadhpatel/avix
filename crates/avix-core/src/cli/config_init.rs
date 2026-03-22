@@ -120,11 +120,45 @@ identities:
 const KERNEL_YAML_TEMPLATE: &str = "apiVersion: avix/v1
 kind: KernelConfig
 metadata:
-  createdAt: \"{now}\"
+  lastUpdated: \"{now}\"
 spec:
-  log:
-    level: info
-    format: json
+  scheduler:
+    algorithm: priority_deadline
+    tickMs: 100
+    preemption: true
+    maxConcurrentAgents: 50
+
+  memory:
+    defaultContextLimit: 200000
+    evictionPolicy: lru_salience
+    maxEpisodicRetentionDays: 30
+    sharedMemoryPath: /shared/
+
+  ipc:
+    transport: local-ipc
+    socketName: avix-kernel
+    maxMessageBytes: 65536
+    timeoutMs: 5000
+
+  safety:
+    policyEngine: enabled
+    hilOnEscalation: true
+    maxToolChainLength: 10
+    blockedToolChains: []
+
+  models:
+    default: claude-sonnet-4
+    kernel: claude-opus-4
+    fallback: claude-haiku-4
+    temperature: 0.7
+
+  observability:
+    logLevel: info
+    logPath: /var/log/avix/kernel.log
+    metricsEnabled: true
+    metricsPath: /var/log/avix/metrics/
+    traceEnabled: false
+
   secrets:
     algorithm: aes-256-gcm
     masterKey:
@@ -135,6 +169,7 @@ spec:
       provider: local
     audit:
       enabled: true
+      logPath: /var/log/avix/secrets-audit.log
       logReads: true
       logWrites: true
 ";

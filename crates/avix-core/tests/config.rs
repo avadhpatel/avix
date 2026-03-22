@@ -87,7 +87,59 @@ kind: KernelConfig
 spec:
   ipc:
     transport: local-ipc
-    socket_name: avix-kernel
+    socketName: avix-kernel
+"#
+}
+
+fn kernel_yaml_full() -> &'static str {
+    r#"
+apiVersion: avix/v1
+kind: KernelConfig
+spec:
+  scheduler:
+    algorithm: priority_deadline
+    tickMs: 100
+    preemption: true
+    maxConcurrentAgents: 50
+  memory:
+    defaultContextLimit: 200000
+    evictionPolicy: lru_salience
+    maxEpisodicRetentionDays: 30
+    sharedMemoryPath: /shared/
+  ipc:
+    transport: local-ipc
+    socketName: avix-kernel
+    maxMessageBytes: 65536
+    timeoutMs: 5000
+  safety:
+    policyEngine: enabled
+    hilOnEscalation: true
+    maxToolChainLength: 10
+    blockedToolChains: []
+  models:
+    default: claude-sonnet-4
+    kernel: claude-opus-4
+    fallback: claude-haiku-4
+    temperature: 0.7
+  observability:
+    logLevel: info
+    logPath: /var/log/avix/kernel.log
+    metricsEnabled: true
+    metricsPath: /var/log/avix/metrics/
+    traceEnabled: false
+  secrets:
+    algorithm: aes-256-gcm
+    masterKey:
+      source: env
+      envVar: AVIX_MASTER_KEY
+    store:
+      path: /secrets
+      provider: local
+    audit:
+      enabled: true
+      logPath: /var/log/avix/secrets-audit.log
+      logReads: true
+      logWrites: true
 "#
 }
 
@@ -108,6 +160,116 @@ fn kernel_config_ipc_transport() {
 fn kernel_config_socket_name() {
     let cfg = KernelConfig::from_str(kernel_yaml()).unwrap();
     assert_eq!(cfg.spec.ipc.socket_name, "avix-kernel");
+}
+
+#[test]
+fn kernel_config_full_parse() {
+    use avix_core::config::{EvictionPolicy, LogLevel, SchedulerAlgorithm};
+    let cfg = KernelConfig::from_str(kernel_yaml_full()).unwrap();
+    assert_eq!(
+        cfg.spec.scheduler.algorithm,
+        SchedulerAlgorithm::PriorityDeadline
+    );
+    assert_eq!(cfg.spec.scheduler.tick_ms, 100);
+    assert_eq!(cfg.spec.memory.default_context_limit, 200_000);
+    assert_eq!(cfg.spec.memory.eviction_policy, EvictionPolicy::LruSalience);
+    assert_eq!(cfg.spec.safety.max_tool_chain_length, 10);
+    assert!(cfg.spec.safety.hil_on_escalation);
+    assert!(!cfg.spec.observability.trace_enabled);
+    assert_eq!(cfg.spec.observability.log_level, LogLevel::Info);
+    assert!((cfg.spec.models.temperature - 0.7).abs() < f32::EPSILON);
+    assert_eq!(cfg.spec.models.default, "claude-sonnet-4");
+    assert_eq!(cfg.spec.models.kernel, "claude-opus-4");
+}
+
+#[test]
+fn kernel_config_defaults_applied_for_missing_fields() {
+    // Minimal YAML — all sections default
+    let minimal = "apiVersion: avix/v1\nkind: KernelConfig\n";
+    let cfg = KernelConfig::from_str(minimal).unwrap();
+    assert_eq!(cfg.spec.scheduler.tick_ms, 100);
+    assert_eq!(cfg.spec.scheduler.max_concurrent_agents, 50);
+    assert!(cfg.spec.safety.hil_on_escalation);
+    assert_eq!(cfg.spec.ipc.max_message_bytes, 65_536);
+    assert!(!cfg.spec.observability.trace_enabled);
+}
+
+#[test]
+fn kernel_config_validate_passes_for_valid_config() {
+    let cfg = KernelConfig::from_str(kernel_yaml_full()).unwrap();
+    cfg.validate().unwrap();
+}
+
+#[test]
+fn kernel_config_validate_rejects_zero_tick_ms() {
+    let yaml = r#"
+apiVersion: avix/v1
+kind: KernelConfig
+spec:
+  scheduler:
+    tickMs: 0
+"#;
+    let cfg = KernelConfig::from_str(yaml).unwrap();
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn kernel_config_validate_rejects_bad_temperature() {
+    let yaml = r#"
+apiVersion: avix/v1
+kind: KernelConfig
+spec:
+  models:
+    temperature: 3.0
+"#;
+    let cfg = KernelConfig::from_str(yaml).unwrap();
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn kernel_config_validate_rejects_low_max_message_bytes() {
+    let yaml = r#"
+apiVersion: avix/v1
+kind: KernelConfig
+spec:
+  ipc:
+    maxMessageBytes: 100
+"#;
+    let cfg = KernelConfig::from_str(yaml).unwrap();
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn kernel_config_requires_restart_for_ipc_change() {
+    let a = KernelConfig::from_str(kernel_yaml_full()).unwrap();
+    let mut b = a.clone();
+    b.spec.ipc.max_message_bytes = 131_072;
+    assert!(a.requires_restart(&b));
+}
+
+#[test]
+fn kernel_config_no_restart_for_observability_change() {
+    use avix_core::config::LogLevel;
+    let a = KernelConfig::from_str(kernel_yaml_full()).unwrap();
+    let mut b = a.clone();
+    b.spec.observability.log_level = LogLevel::Debug;
+    assert!(!a.requires_restart(&b));
+}
+
+#[test]
+fn kernel_config_requires_restart_for_kernel_model_change() {
+    let a = KernelConfig::from_str(kernel_yaml_full()).unwrap();
+    let mut b = a.clone();
+    b.spec.models.kernel = "claude-haiku-4".into();
+    assert!(a.requires_restart(&b));
+}
+
+#[test]
+fn kernel_config_no_restart_for_safety_change() {
+    let a = KernelConfig::from_str(kernel_yaml_full()).unwrap();
+    let mut b = a.clone();
+    b.spec.safety.max_tool_chain_length = 20;
+    assert!(!a.requires_restart(&b));
 }
 
 // ─── UsersConfig tests ───────────────────────────────────────────────────────
@@ -447,6 +609,48 @@ fn config_init_all_files_idempotent_without_force() {
         mtime1, mtime2,
         "kernel.yaml must not be rewritten on second config init without --force"
     );
+}
+
+#[test]
+fn config_init_kernel_yaml_has_all_sections() {
+    let tmp = tempdir().unwrap();
+    run_config_init(make_params(tmp.path(), "alice", "admin")).unwrap();
+
+    let content = std::fs::read_to_string(tmp.path().join("etc/kernel.yaml")).unwrap();
+    assert!(
+        content.contains("scheduler:"),
+        "kernel.yaml must have scheduler section"
+    );
+    assert!(
+        content.contains("memory:"),
+        "kernel.yaml must have memory section"
+    );
+    assert!(
+        content.contains("safety:"),
+        "kernel.yaml must have safety section"
+    );
+    assert!(
+        content.contains("models:"),
+        "kernel.yaml must have models section"
+    );
+    assert!(
+        content.contains("observability:"),
+        "kernel.yaml must have observability section"
+    );
+    assert!(
+        content.contains("secrets:"),
+        "kernel.yaml must have secrets section"
+    );
+}
+
+#[test]
+fn config_init_kernel_yaml_is_valid() {
+    let tmp = tempdir().unwrap();
+    run_config_init(make_params(tmp.path(), "alice", "admin")).unwrap();
+
+    let raw = std::fs::read_to_string(tmp.path().join("etc/kernel.yaml")).unwrap();
+    let cfg = KernelConfig::from_str(&raw).unwrap();
+    cfg.validate().unwrap();
 }
 
 #[test]
