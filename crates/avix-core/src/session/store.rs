@@ -1,16 +1,22 @@
-use super::entry::SessionEntry;
-use crate::error::AvixError;
-use redb::{Database, TableDefinition};
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use redb::{Database, TableDefinition};
+
+use super::entry::{SessionEntry, SessionStatus};
+use crate::error::AvixError;
+use crate::memfs::{MemFs, VfsPath};
 
 const TABLE: TableDefinition<&str, &str> = TableDefinition::new("sessions");
 
 pub struct SessionStore {
     db: Database,
+    vfs: Option<Arc<MemFs>>,
 }
 
 impl SessionStore {
-    pub async fn open(path: PathBuf) -> Result<Self, AvixError> {
+    pub async fn open(path: impl Into<PathBuf>) -> Result<Self, AvixError> {
+        let path = path.into();
         let db = Database::create(&path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         // Ensure table exists
         let write_txn = db
@@ -24,7 +30,12 @@ impl SessionStore {
         write_txn
             .commit()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        Ok(Self { db })
+        Ok(Self { db, vfs: None })
+    }
+
+    pub fn with_vfs(mut self, vfs: Arc<MemFs>) -> Self {
+        self.vfs = Some(vfs);
+        self
     }
 
     pub async fn save(&self, entry: &SessionEntry) -> Result<(), AvixError> {
@@ -45,6 +56,7 @@ impl SessionStore {
         write_txn
             .commit()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        self.write_vfs_manifest(entry).await;
         Ok(())
     }
 
@@ -70,6 +82,13 @@ impl SessionStore {
     }
 
     pub async fn delete(&self, session_id: &str) -> Result<(), AvixError> {
+        // Load username before deleting so we can clean up the VFS entry
+        let username = self
+            .load(session_id)
+            .await?
+            .map(|e| e.username)
+            .unwrap_or_default();
+
         let write_txn = self
             .db
             .begin_write()
@@ -85,6 +104,7 @@ impl SessionStore {
         write_txn
             .commit()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        self.remove_vfs_manifest(session_id, &username).await;
         Ok(())
     }
 
@@ -108,5 +128,54 @@ impl SessionStore {
             entries.push(entry);
         }
         Ok(entries)
+    }
+
+    // ── VFS manifest helpers ──────────────────────────────────────────────────
+
+    async fn write_vfs_manifest(&self, entry: &SessionEntry) {
+        let vfs = match &self.vfs {
+            Some(v) => v,
+            None => return,
+        };
+        if entry.username.is_empty() {
+            return;
+        }
+        let message_count = entry.messages.len();
+        let status_str = match entry.status {
+            SessionStatus::Active => "active",
+            SessionStatus::Completed => "completed",
+            SessionStatus::Error => "error",
+        };
+        let manifest = format!(
+            "apiVersion: avix/v1\nkind: SessionManifest\nmetadata:\n  sessionId: {id}\n  username: {username}\n  createdAt: {created}\n  updatedAt: {updated}\nspec:\n  agentName: {agent}\n  goal: {goal:?}\n  status: {status}\n  messageCount: {message_count}\n",
+            id = entry.session_id,
+            username = entry.username,
+            created = entry.created_at.to_rfc3339(),
+            updated = entry.updated_at.to_rfc3339(),
+            agent = entry.agent_name,
+            goal = entry.goal,
+            status = status_str,
+        );
+        let path_str = format!(
+            "/proc/users/{}/sessions/{}.yaml",
+            entry.username, entry.session_id
+        );
+        if let Ok(path) = VfsPath::parse(&path_str) {
+            let _ = vfs.write(&path, manifest.into_bytes()).await;
+        }
+    }
+
+    async fn remove_vfs_manifest(&self, session_id: &str, username: &str) {
+        let vfs = match &self.vfs {
+            Some(v) => v,
+            None => return,
+        };
+        if username.is_empty() {
+            return;
+        }
+        let path_str = format!("/proc/users/{username}/sessions/{session_id}.yaml");
+        if let Ok(path) = VfsPath::parse(&path_str) {
+            let _ = vfs.delete(&path).await;
+        }
     }
 }
