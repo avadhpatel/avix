@@ -99,10 +99,24 @@ async fn built_in_services_get_low_pids() {
     write_minimal_auth_conf(tmp.path());
     std::env::set_var("AVIX_MASTER_KEY", "test_key_32_bytes_exactly_here!!");
     let runtime = Runtime::bootstrap_with_root(tmp.path()).await.unwrap();
-    let router_pid = runtime.service_pid("router").await.unwrap();
+    let router_pid = runtime.service_pid("router").unwrap();
     assert!(
         router_pid.as_u32() <= 9,
         "router should have PID ≤ 9, got {}",
         router_pid
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn llm_service_pid_present_after_bootstrap() {
+    let tmp = tempdir().unwrap();
+    write_minimal_auth_conf(tmp.path());
+    std::env::set_var("AVIX_MASTER_KEY", "test_key_32_bytes_exactly_here!!");
+    let runtime = Runtime::bootstrap_with_root(tmp.path()).await.unwrap();
+    let llm_pid = runtime.service_pid("llm");
+    assert!(
+        llm_pid.is_some(),
+        "expected llm service to have a PID after bootstrap"
     );
 }

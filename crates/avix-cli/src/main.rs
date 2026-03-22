@@ -9,8 +9,11 @@ use avix_core::executor::runtime_executor::{MockToolRegistry, RuntimeExecutor};
 use avix_core::executor::spawn::SpawnParams;
 use avix_core::llm_client::LlmClient;
 use avix_core::llm_svc::autoagents_client::AutoAgentsChatClient;
+// TODO: in daemon mode use IpcLlmClient to call a running llm.svc
 use avix_core::types::token::CapabilityToken;
 use avix_core::types::Pid;
+#[allow(unused_imports)]
+use avix_core::IpcLlmClient;
 
 #[derive(Parser)]
 #[command(name = "avix", about = "Avix agent OS", version)]

@@ -1,4 +1,4 @@
-use avix_core::tool_registry::{EventReceiver, ToolEntry, ToolRegistry};
+use avix_core::tool_registry::{ToolEntry, ToolRegistry};
 use avix_core::types::tool::{ToolName, ToolState, ToolVisibility};
 use std::sync::Arc;
 use std::time::Duration;

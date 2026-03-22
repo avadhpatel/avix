@@ -19,4 +19,13 @@ pub enum AvixError {
 
     #[error("capability denied: {0}")]
     CapabilityDenied(String),
+
+    #[error("no provider available for modality: {0}")]
+    NoProviderAvailable(String),
+
+    #[error("provider not permitted: {0}")]
+    ProviderNotPermitted(String),
+
+    #[error("adapter error: {0}")]
+    AdapterError(String),
 }

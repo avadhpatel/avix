@@ -1,3 +1,7 @@
+pub mod ipc_client;
+
+pub use ipc_client::IpcLlmClient;
+
 use crate::error::AvixError;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

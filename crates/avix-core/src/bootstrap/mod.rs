@@ -61,7 +61,17 @@ impl Runtime {
         });
 
         // Phase 3: start built-in services
-        let builtins = ["logger", "memfs", "auth", "router"];
+        let builtins = [
+            "logger",
+            "memfs",
+            "auth",
+            "router",
+            "tool-registry",
+            "llm",
+            "exec",
+            "mcp-bridge",
+            "gateway",
+        ];
         for (i, svc) in builtins.iter().enumerate() {
             service_pids.insert(svc.to_string(), Pid::new((i + 1) as u32));
         }
@@ -85,7 +95,8 @@ impl Runtime {
         &self.boot_log
     }
 
-    pub async fn service_pid(&self, name: &str) -> Option<Pid> {
+    /// Returns the Pid assigned to a named built-in service, if it was started.
+    pub fn service_pid(&self, name: &str) -> Option<Pid> {
         self.service_pids.get(name).copied()
     }
 }

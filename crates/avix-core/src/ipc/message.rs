@@ -58,4 +58,6 @@ pub enum JsonRpcErrorCode {
     Ebusy = -32004,
     Etimeout = -32005,
     Eused = -32009,
+    Eprovider = -32010,
+    Eprovperm = -32018,
 }

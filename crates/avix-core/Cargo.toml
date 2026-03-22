@@ -27,6 +27,7 @@ base64.workspace      = true
 cron.workspace        = true
 tokio-tungstenite.workspace = true
 autoagents.workspace        = true
+reqwest.workspace           = true
 
 [dev-dependencies]
 tempfile.workspace   = true

@@ -10,6 +10,7 @@ pub mod gateway;
 pub mod ipc;
 pub mod kernel;
 pub mod llm_client;
+pub use llm_client::IpcLlmClient;
 pub mod llm_svc;
 pub mod mcp_bridge;
 pub mod memfs;
