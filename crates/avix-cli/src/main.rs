@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use avix_core::bootstrap::Runtime;
 use avix_core::cli::config_init::{run_config_init, ConfigInitParams};
+use avix_core::cli::config_reload::{run_config_reload, ReloadParams};
+use avix_core::cli::resolve::{run_resolve, ResolveParams};
 use avix_core::executor::runtime_executor::{MockToolRegistry, RuntimeExecutor};
 use avix_core::executor::spawn::SpawnParams;
 use avix_core::llm_client::LlmClient;
@@ -47,6 +49,32 @@ enum Cmd {
         #[arg(long)]
         model: Option<String>,
     },
+    /// Resolve agent parameters for a user (without spawning an agent)
+    Resolve {
+        /// Parameter kind to resolve (currently always `agent-manifest`)
+        kind: String,
+        /// User to resolve parameters for
+        #[arg(long)]
+        user: String,
+        /// Agent manifest name (optional)
+        #[arg(long)]
+        agent: Option<String>,
+        /// Include full annotation/provenance block in output
+        #[arg(long)]
+        explain: bool,
+        /// Show effective limits only (no defaults merging)
+        #[arg(long)]
+        limits_only: bool,
+        /// Simulate adding this crew membership for the resolution
+        #[arg(long, name = "crew")]
+        extra_crew: Option<String>,
+        /// Print what would happen without writing any file
+        #[arg(long)]
+        dry_run: bool,
+        /// Runtime root directory
+        #[arg(long, default_value = "~/avix-data")]
+        root: PathBuf,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -69,6 +97,15 @@ enum ConfigCmd {
         /// User role
         #[arg(long, default_value = "admin")]
         role: String,
+    },
+    /// Validate and apply hot-reloadable kernel config changes
+    Reload {
+        /// Only validate and classify sections — do not write reload-pending marker
+        #[arg(long)]
+        check: bool,
+        /// Runtime root directory
+        #[arg(long, default_value = "~/avix-data")]
+        root: PathBuf,
     },
 }
 
@@ -98,6 +135,57 @@ async fn main() -> Result<()> {
                 "  AVIX_MASTER_KEY=<32-char-key> ANTHROPIC_API_KEY=<key> \\\n  avix run --root {} --goal \"say hello world\"",
                 root.display()
             );
+        }
+
+        Cmd::Config {
+            sub: ConfigCmd::Reload { check, root },
+        } => {
+            let root = expand_home(root);
+            let result = run_config_reload(ReloadParams {
+                root,
+                check_only: check,
+            })
+            .await?;
+            if result.restart_required.is_empty() {
+                println!("Config valid — hot-reloadable sections: {}", result.reloaded_sections.join(", "));
+                if check {
+                    println!("(--check mode: no reload-pending marker written)");
+                }
+            } else {
+                eprintln!(
+                    "WARNING: sections requiring restart: {}",
+                    result.restart_required.join(", ")
+                );
+                if !result.reloaded_sections.is_empty() {
+                    println!("Hot-reloadable sections: {}", result.reloaded_sections.join(", "));
+                }
+                std::process::exit(1);
+            }
+        }
+
+        Cmd::Resolve {
+            kind,
+            user,
+            agent,
+            explain,
+            limits_only,
+            extra_crew,
+            dry_run,
+            root,
+        } => {
+            let root = expand_home(root);
+            let result = run_resolve(ResolveParams {
+                root,
+                kind,
+                username: user,
+                agent_name: agent,
+                explain,
+                limits_only,
+                extra_crew,
+                dry_run,
+            })
+            .await?;
+            println!("{}", result.output);
         }
 
         Cmd::Run {
