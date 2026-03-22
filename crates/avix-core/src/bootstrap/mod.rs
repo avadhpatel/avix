@@ -1,4 +1,7 @@
+mod phase1;
+
 use crate::error::AvixError;
+use crate::memfs::MemFs;
 use crate::types::Pid;
 use std::path::Path;
 
@@ -11,11 +14,11 @@ pub struct BootLogEntry {
     pub message: String,
 }
 
-#[allow(dead_code)]
 pub struct Runtime {
     master_key_set: bool,
     boot_log: Vec<BootLogEntry>,
     service_pids: std::collections::HashMap<String, Pid>,
+    memfs: MemFs,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -30,6 +33,7 @@ impl Runtime {
     pub async fn bootstrap_with_root(root: &Path) -> Result<Self, AvixError> {
         let mut log = Vec::new();
         let mut service_pids = std::collections::HashMap::new();
+        let memfs = MemFs::new();
 
         // Phase 0: init
         log.push(BootLogEntry {
@@ -37,13 +41,14 @@ impl Runtime {
             message: "phase 0: init".into(),
         });
 
-        // Phase 1: check auth.conf
+        // Phase 1: check auth.conf + VFS skeleton
         let auth_conf = root.join("etc/auth.conf");
         if !auth_conf.exists() {
             return Err(AvixError::ConfigParse(
                 "auth.conf not found — run `avix config init` first".into(),
             ));
         }
+        phase1::run(&memfs).await;
         log.push(BootLogEntry {
             phase: BootPhase(1),
             message: "phase 1: VFS mount".into(),
@@ -84,7 +89,12 @@ impl Runtime {
             master_key_set: true,
             boot_log: log,
             service_pids,
+            memfs,
         })
+    }
+
+    pub fn vfs(&self) -> &MemFs {
+        &self.memfs
     }
 
     pub fn has_master_key(&self) -> bool {

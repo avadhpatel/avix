@@ -140,17 +140,8 @@ mod tests {
     #[test]
     fn test_prompt_block3_with_budgets() {
         let budgets = make_budgets(&[("fs/write", 3), ("send_email", 1)]);
-        let prompt = build_system_prompt(
-            1,
-            "agent",
-            "goal",
-            "user",
-            "sess-1",
-            5,
-            &budgets,
-            &[],
-            &[],
-        );
+        let prompt =
+            build_system_prompt(1, "agent", "goal", "user", "sess-1", 5, &budgets, &[], &[]);
         assert!(prompt.contains("fs/write: 3 use(s) remaining"));
         assert!(prompt.contains("send_email: 1 use(s) remaining"));
     }

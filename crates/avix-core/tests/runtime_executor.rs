@@ -43,7 +43,17 @@ async fn executor_spawns_with_correct_pid_and_token() {
 
 #[tokio::test]
 async fn spawn_cap_registers_agent_tools() {
-    let (_, registry) = spawn_with_caps(10, &["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"]).await;
+    let (_, registry) = spawn_with_caps(
+        10,
+        &[
+            "agent/spawn",
+            "agent/kill",
+            "agent/list",
+            "agent/wait",
+            "agent/send-message",
+        ],
+    )
+    .await;
     let tools = registry.tools_registered_by_pid(10).await;
     assert!(tools.contains("agent/spawn"));
     assert!(tools.contains("agent/kill"));
@@ -54,7 +64,8 @@ async fn spawn_cap_registers_agent_tools() {
 
 #[tokio::test]
 async fn pipe_cap_registers_pipe_tools() {
-    let (_, registry) = spawn_with_caps(11, &["pipe/open", "pipe/write", "pipe/read", "pipe/close"]).await;
+    let (_, registry) =
+        spawn_with_caps(11, &["pipe/open", "pipe/write", "pipe/read", "pipe/close"]).await;
     let tools = registry.tools_registered_by_pid(11).await;
     assert!(tools.contains("pipe/open"));
     assert!(tools.contains("pipe/write"));
@@ -88,7 +99,17 @@ async fn shutdown_deregisters_all_category2_tools() {
         goal: "test".into(),
         spawned_by: "kernel".into(),
         session_id: "test-session".into(),
-        token: token_with_caps(&["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message", "pipe/open", "pipe/write", "pipe/read", "pipe/close"]),
+        token: token_with_caps(&[
+            "agent/spawn",
+            "agent/kill",
+            "agent/list",
+            "agent/wait",
+            "agent/send-message",
+            "pipe/open",
+            "pipe/write",
+            "pipe/read",
+            "pipe/close",
+        ]),
     };
     let mut executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -111,7 +132,13 @@ async fn category2_tools_registered_with_user_visibility() {
         goal: "test".into(),
         spawned_by: "kernel".into(),
         session_id: "test-session".into(),
-        token: token_with_caps(&["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"]),
+        token: token_with_caps(&[
+            "agent/spawn",
+            "agent/kill",
+            "agent/list",
+            "agent/wait",
+            "agent/send-message",
+        ]),
     };
     RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -328,7 +355,13 @@ async fn agent_spawn_translates_to_kernel_proc_spawn() {
         goal: "spawn subagents".into(),
         spawned_by: "kernel".into(),
         session_id: "test-session".into(),
-        token: token_with_caps(&["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"]),
+        token: token_with_caps(&[
+            "agent/spawn",
+            "agent/kill",
+            "agent/list",
+            "agent/wait",
+            "agent/send-message",
+        ]),
     };
     let mut executor =
         RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
@@ -356,7 +389,13 @@ async fn agent_kill_records_in_kernel() {
         goal: "kill subagent".into(),
         spawned_by: "kernel".into(),
         session_id: "test-session".into(),
-        token: token_with_caps(&["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"]),
+        token: token_with_caps(&[
+            "agent/spawn",
+            "agent/kill",
+            "agent/list",
+            "agent/wait",
+            "agent/send-message",
+        ]),
     };
     let mut executor =
         RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
@@ -413,7 +452,17 @@ async fn build_test_executor_with_mocks() -> RuntimeExecutor {
         goal: "test goal".into(),
         spawned_by: "kernel".into(),
         session_id: "test-session".into(),
-        token: token_with_caps(&["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message", "pipe/open", "pipe/write", "pipe/read", "pipe/close"]),
+        token: token_with_caps(&[
+            "agent/spawn",
+            "agent/kill",
+            "agent/list",
+            "agent/wait",
+            "agent/send-message",
+            "pipe/open",
+            "pipe/write",
+            "pipe/read",
+            "pipe/close",
+        ]),
     };
     RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -648,7 +697,9 @@ async fn maybe_renew_extends_near_expiry_token() {
 async fn tool_changed_added_re_enables_previously_removed_tool() {
     let (mut executor, _) = spawn_with_caps(320, &[]).await;
     // Remove cap/list — current_tool_list() filters it out dynamically
-    executor.handle_tool_changed("removed", "cap/list", "").await;
+    executor
+        .handle_tool_changed("removed", "cap/list", "")
+        .await;
     let names_after_remove: Vec<_> = executor
         .current_tool_list()
         .into_iter()
@@ -676,7 +727,9 @@ async fn tool_changed_added_re_enables_previously_removed_tool() {
 async fn tool_changed_current_tool_list_excludes_removed_immediately() {
     let (mut executor, _) = spawn_with_caps(321, &[]).await;
     let count_before = executor.current_tool_list().len();
-    executor.handle_tool_changed("removed", "cap/escalate", "").await;
+    executor
+        .handle_tool_changed("removed", "cap/escalate", "")
+        .await;
     // current_tool_list() filters removed_tools dynamically — no manual refresh needed
     assert_eq!(
         executor.current_tool_list().len(),
@@ -722,13 +775,22 @@ async fn cap_escalate_returns_guidance_in_response() {
         args: json!({ "reason": "Need human judgment", "context": "", "options": [] }),
     };
     let result = executor.dispatch_category2(&call).await.unwrap();
-    assert!(result.get("guidance").is_some(), "response should have guidance field");
-    assert!(result.get("selectedOption").is_some(), "response should have selectedOption field");
+    assert!(
+        result.get("guidance").is_some(),
+        "response should have guidance field"
+    );
+    assert!(
+        result.get("selectedOption").is_some(),
+        "response should have selectedOption field"
+    );
 }
 
 // ── Resource handler wiring tests ──────────────────────────────────────────
 
-async fn spawn_with_signed_token(pid_val: u32, tools: &[&str]) -> (RuntimeExecutor, Arc<MockToolRegistry>) {
+async fn spawn_with_signed_token(
+    pid_val: u32,
+    tools: &[&str],
+) -> (RuntimeExecutor, Arc<MockToolRegistry>) {
     let registry = Arc::new(MockToolRegistry::new());
     let token = avix_core::types::token::CapabilityToken::mint(
         tools.iter().map(|s| s.to_string()).collect(),
@@ -763,7 +825,11 @@ async fn cap_request_tool_returns_denied_via_resource_handler() {
         args: json!({ "tool": "send_email", "reason": "notify user" }),
     };
     let result = executor.dispatch_category2(&call).await.unwrap();
-    assert_eq!(result["approved"], json!(false), "handler should deny tool grants (HIL required)");
+    assert_eq!(
+        result["approved"],
+        json!(false),
+        "handler should deny tool grants (HIL required)"
+    );
     assert_eq!(result["tool"], json!("send_email"));
 }
 
@@ -815,7 +881,10 @@ async fn pipe_open_via_resource_handler_writes_proc_entry() {
         args: json!({ "targetPid": 99, "direction": "out", "bufferTokens": 8192 }),
     };
     let result = executor.dispatch_category2(&call).await.unwrap();
-    assert!(result.get("pipeId").is_some(), "pipe/open should return a pipeId");
+    assert!(
+        result.get("pipeId").is_some(),
+        "pipe/open should return a pipeId"
+    );
     let pipe_id = result["pipeId"].as_str().unwrap();
 
     // The VFS entry must exist at /proc/<pid>/pipes/<pipeId>.yaml
@@ -846,7 +915,10 @@ async fn pipe_open_proc_entry_contains_pipe_metadata() {
     let path = VfsPath::parse(&format!("/proc/{}/pipes/{}.yaml", 501, pipe_id)).unwrap();
     let raw = vfs.read(&path).await.expect("VFS entry should be readable");
     let content = String::from_utf8(raw).unwrap();
-    assert!(content.contains("target_pid") || content.contains("targetPid"), "entry should include target_pid");
+    assert!(
+        content.contains("target_pid") || content.contains("targetPid"),
+        "entry should include target_pid"
+    );
     assert!(content.contains("77"), "entry should include target pid 77");
 }
 
@@ -860,5 +932,8 @@ async fn pipe_open_without_handler_returns_stub() {
         args: json!({ "targetPid": 10, "direction": "out" }),
     };
     let result = executor.dispatch_category2(&call).await.unwrap();
-    assert!(result.get("pipeId").is_some(), "stub should still return pipeId");
+    assert!(
+        result.get("pipeId").is_some(),
+        "stub should still return pipeId"
+    );
 }

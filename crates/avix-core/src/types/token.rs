@@ -92,8 +92,7 @@ impl CapabilityToken {
             self.expires_at.timestamp(),
             tools.join(","),
         );
-        let mut mac =
-            Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts keys of any length");
+        let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts keys of any length");
         mac.update(payload.as_bytes());
         let result = mac.finalize().into_bytes();
         format!("sha256:{}", hex::encode(result))
@@ -241,7 +240,10 @@ mod tests {
     #[test]
     fn test_fresh_token_is_not_expired() {
         let token = fresh_token(&[]);
-        assert!(!token.is_expired(), "a freshly minted token should not be expired");
+        assert!(
+            !token.is_expired(),
+            "a freshly minted token should not be expired"
+        );
     }
 
     #[test]
@@ -371,12 +373,7 @@ mod tests {
             agent_name: "researcher".into(),
             spawned_by: "alice".into(),
         };
-        let token = CapabilityToken::mint(
-            vec!["fs/read".into()],
-            Some(issued_to),
-            3600,
-            TEST_KEY,
-        );
+        let token = CapabilityToken::mint(vec!["fs/read".into()], Some(issued_to), 3600, TEST_KEY);
         let yaml = token.to_manifest_yaml().unwrap();
         assert!(yaml.contains("issuedTo"), "missing issuedTo in manifest");
         assert!(yaml.contains("researcher"), "missing agent_name");

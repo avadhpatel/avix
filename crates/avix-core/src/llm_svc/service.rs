@@ -699,10 +699,7 @@ spec:
             }),
         };
         let resp = svc.dispatch(&req).await;
-        assert!(
-            resp.error.is_some(),
-            "expected error for unknown provider"
-        );
+        assert!(resp.error.is_some(), "expected error for unknown provider");
     }
 
     #[tokio::test]

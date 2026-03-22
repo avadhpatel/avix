@@ -221,7 +221,10 @@ mod tests {
             refresh_token: "ref_xyz".into(),
             expiry: Utc::now() + chrono::Duration::hours(24),
         };
-        store.write().await.insert("test-provider".into(), token.clone());
+        store
+            .write()
+            .await
+            .insert("test-provider".into(), token.clone());
 
         let guard = store.read().await;
         let retrieved = guard.get("test-provider").unwrap();
@@ -307,9 +310,7 @@ mod tests {
             refresh_before_expiry_min: 5,
         };
         let http_client = Arc::new(reqwest::Client::new());
-        scheduler
-            .schedule(config, store, http_client, |_| {})
-            .await;
+        scheduler.schedule(config, store, http_client, |_| {}).await;
         scheduler.cancel("empty-provider").await;
     }
 }

@@ -136,8 +136,8 @@ mod tests {
     use autoagents::llm::chat::{
         ChatMessage, ChatProvider, ChatResponse, StructuredOutputFormat, Tool, Usage,
     };
-    use autoagents::llm::{FunctionCall, ToolCall};
     use autoagents::llm::error::LLMError;
+    use autoagents::llm::{FunctionCall, ToolCall};
 
     #[derive(Debug)]
     struct MockChatResponse {

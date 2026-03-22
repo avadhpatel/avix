@@ -1,4 +1,5 @@
 use avix_core::bootstrap::Runtime;
+use avix_core::memfs::VfsPath;
 use serial_test::serial;
 use std::time::Instant;
 use tempfile::tempdir;
@@ -118,5 +119,129 @@ async fn llm_service_pid_present_after_bootstrap() {
     assert!(
         llm_pid.is_some(),
         "expected llm service to have a PID after bootstrap"
+    );
+}
+
+// ── Finding A: Phase 1 VFS tree initialization ────────────────────────────────
+
+#[tokio::test]
+#[serial]
+async fn phase1_creates_proc_directory_anchor() {
+    let tmp = tempdir().unwrap();
+    write_minimal_auth_conf(tmp.path());
+    std::env::set_var("AVIX_MASTER_KEY", "test_key_32_bytes_exactly_here!!");
+    let runtime = Runtime::bootstrap_with_root(tmp.path()).await.unwrap();
+    std::env::remove_var("AVIX_MASTER_KEY");
+
+    let result = runtime.vfs().list(&VfsPath::parse("/proc").unwrap()).await;
+    assert!(
+        result.is_ok(),
+        "/proc should exist after Phase 1: {:?}",
+        result
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn phase1_creates_kernel_defaults_agent_yaml() {
+    let tmp = tempdir().unwrap();
+    write_minimal_auth_conf(tmp.path());
+    std::env::set_var("AVIX_MASTER_KEY", "test_key_32_bytes_exactly_here!!");
+    let runtime = Runtime::bootstrap_with_root(tmp.path()).await.unwrap();
+    std::env::remove_var("AVIX_MASTER_KEY");
+
+    let path = VfsPath::parse("/kernel/defaults/agent.yaml").unwrap();
+    assert!(
+        runtime.vfs().exists(&path).await,
+        "/kernel/defaults/agent.yaml must be written at boot"
+    );
+    let content = runtime.vfs().read(&path).await.unwrap();
+    let text = String::from_utf8(content).unwrap();
+    assert!(
+        text.contains("contextWindowTokens"),
+        "agent defaults must include contextWindowTokens"
+    );
+    assert!(
+        text.contains("maxToolChainLength"),
+        "agent defaults must include maxToolChainLength"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn phase1_creates_kernel_defaults_pipe_yaml() {
+    let tmp = tempdir().unwrap();
+    write_minimal_auth_conf(tmp.path());
+    std::env::set_var("AVIX_MASTER_KEY", "test_key_32_bytes_exactly_here!!");
+    let runtime = Runtime::bootstrap_with_root(tmp.path()).await.unwrap();
+    std::env::remove_var("AVIX_MASTER_KEY");
+
+    let path = VfsPath::parse("/kernel/defaults/pipe.yaml").unwrap();
+    assert!(
+        runtime.vfs().exists(&path).await,
+        "/kernel/defaults/pipe.yaml must be written at boot"
+    );
+    let content = runtime.vfs().read(&path).await.unwrap();
+    let text = String::from_utf8(content).unwrap();
+    assert!(
+        text.contains("bufferTokens"),
+        "pipe defaults must include bufferTokens"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn phase1_creates_kernel_limits_agent_yaml() {
+    let tmp = tempdir().unwrap();
+    write_minimal_auth_conf(tmp.path());
+    std::env::set_var("AVIX_MASTER_KEY", "test_key_32_bytes_exactly_here!!");
+    let runtime = Runtime::bootstrap_with_root(tmp.path()).await.unwrap();
+    std::env::remove_var("AVIX_MASTER_KEY");
+
+    let path = VfsPath::parse("/kernel/limits/agent.yaml").unwrap();
+    assert!(
+        runtime.vfs().exists(&path).await,
+        "/kernel/limits/agent.yaml must be written at boot"
+    );
+    let content = runtime.vfs().read(&path).await.unwrap();
+    let text = String::from_utf8(content).unwrap();
+    assert!(
+        text.contains("maxContextWindowTokens"),
+        "limits must include maxContextWindowTokens"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn phase1_creates_spawn_errors_directory() {
+    let tmp = tempdir().unwrap();
+    write_minimal_auth_conf(tmp.path());
+    std::env::set_var("AVIX_MASTER_KEY", "test_key_32_bytes_exactly_here!!");
+    let runtime = Runtime::bootstrap_with_root(tmp.path()).await.unwrap();
+    std::env::remove_var("AVIX_MASTER_KEY");
+
+    let sentinel = VfsPath::parse("/proc/spawn-errors/.keep").unwrap();
+    let write_result = runtime.vfs().write(&sentinel, b"".to_vec()).await;
+    assert!(
+        write_result.is_ok(),
+        "/proc/spawn-errors/ must be navigable after Phase 1"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn phase1_runs_before_phase2() {
+    let tmp = tempdir().unwrap();
+    write_minimal_auth_conf(tmp.path());
+    std::env::set_var("AVIX_MASTER_KEY", "test_key_32_bytes_exactly_here!!");
+    let runtime = Runtime::bootstrap_with_root(tmp.path()).await.unwrap();
+    std::env::remove_var("AVIX_MASTER_KEY");
+
+    let log = runtime.boot_log();
+    let phase1_idx = log.iter().position(|e| e.phase.0 == 1).unwrap();
+    let phase2_idx = log.iter().position(|e| e.phase.0 == 2).unwrap();
+    assert!(
+        phase1_idx < phase2_idx,
+        "Phase 1 must complete before Phase 2"
     );
 }

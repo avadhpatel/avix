@@ -101,8 +101,7 @@ mod tests {
         token.expires_at = Utc::now() - chrono::Duration::seconds(1);
         let mut budgets = ToolBudgets::default();
         // Even always-present tools are blocked by expiry
-        let err =
-            validate_tool_call(&token, &make_call("cap/list"), &mut budgets).unwrap_err();
+        let err = validate_tool_call(&token, &make_call("cap/list"), &mut budgets).unwrap_err();
         assert!(
             err.to_string().contains("expired"),
             "expired token should block always-present tools too: {err}"
@@ -144,8 +143,7 @@ mod tests {
         // First call succeeds and decrements
         assert!(validate_tool_call(&token, &make_call("send_email"), &mut budgets).is_ok());
         // Second call fails — budget exhausted
-        let err =
-            validate_tool_call(&token, &make_call("send_email"), &mut budgets).unwrap_err();
+        let err = validate_tool_call(&token, &make_call("send_email"), &mut budgets).unwrap_err();
         assert!(err.to_string().contains("budget exhausted"));
     }
 }

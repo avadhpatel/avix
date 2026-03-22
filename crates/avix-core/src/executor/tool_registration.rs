@@ -10,7 +10,10 @@ use std::collections::HashSet;
 ///   2. Scans all known Cat2 gated tools; includes each one that appears in the token.
 ///
 /// All Cat2 tools are scoped to the agent's owning user (ToolVisibility::User).
-pub fn compute_cat2_tools(token: &CapabilityToken, username: &str) -> Vec<(String, ToolVisibility)> {
+pub fn compute_cat2_tools(
+    token: &CapabilityToken,
+    username: &str,
+) -> Vec<(String, ToolVisibility)> {
     let map = CapabilityToolMap::default();
     let mut tools = Vec::new();
 
@@ -300,7 +303,10 @@ mod tests {
         let token = token_with_tools(&["agent/spawn"]);
         let tools = compute_cat2_tools(&token, "bob");
         for (_, vis) in &tools {
-            assert_eq!(*vis, crate::types::tool::ToolVisibility::User("bob".to_string()));
+            assert_eq!(
+                *vis,
+                crate::types::tool::ToolVisibility::User("bob".to_string())
+            );
         }
     }
 

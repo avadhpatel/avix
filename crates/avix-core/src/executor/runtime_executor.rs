@@ -7,9 +7,9 @@ use crate::error::AvixError;
 use crate::kernel::resource_request::{
     KernelResourceHandler, ResourceGrant, ResourceItem, ResourceRequest, Urgency,
 };
-use crate::memfs::{MemFs, VfsPath};
 use crate::llm_client::LlmCompleteResponse;
 use crate::llm_svc::adapter::AvixToolCall;
+use crate::memfs::{MemFs, VfsPath};
 use crate::types::{token::CapabilityToken, tool::ToolVisibility, Pid};
 
 use super::mock_kernel::MockKernelHandle;
@@ -346,21 +346,26 @@ impl RuntimeExecutor {
                     );
                     match handler.handle(&req, &self.token) {
                         Ok(resp) => {
-                            if let Some(ResourceGrant::Tool { granted, new_token, .. }) =
-                                resp.grants.into_iter().next()
+                            if let Some(ResourceGrant::Tool {
+                                granted, new_token, ..
+                            }) = resp.grants.into_iter().next()
                             {
                                 if granted {
                                     if let Some(tok) = new_token {
                                         self.token = tok;
                                         self.refresh_tool_list();
                                     }
-                                    return Ok(serde_json::json!({"approved": true, "tool": tool_name}));
+                                    return Ok(
+                                        serde_json::json!({"approved": true, "tool": tool_name}),
+                                    );
                                 }
                             }
                             return Ok(serde_json::json!({"approved": false, "tool": tool_name}));
                         }
                         Err(e) => {
-                            return Ok(serde_json::json!({"approved": false, "error": e.to_string()}));
+                            return Ok(
+                                serde_json::json!({"approved": false, "error": e.to_string()}),
+                            );
                         }
                     }
                 }
@@ -430,7 +435,9 @@ impl RuntimeExecutor {
                 if let Some(handler) = &self.resource_handler {
                     let pipe_direction = match direction.as_str() {
                         "in" => crate::kernel::resource_request::PipeDirection::In,
-                        "bidirectional" => crate::kernel::resource_request::PipeDirection::Bidirectional,
+                        "bidirectional" => {
+                            crate::kernel::resource_request::PipeDirection::Bidirectional
+                        }
                         _ => crate::kernel::resource_request::PipeDirection::Out,
                     };
                     let req = ResourceRequest::new(
@@ -445,8 +452,11 @@ impl RuntimeExecutor {
                     );
                     match handler.handle(&req, &self.token) {
                         Ok(resp) => {
-                            if let Some(ResourceGrant::Pipe { granted: true, pipe_id: Some(pipe_id), .. }) =
-                                resp.grants.into_iter().next()
+                            if let Some(ResourceGrant::Pipe {
+                                granted: true,
+                                pipe_id: Some(pipe_id),
+                                ..
+                            }) = resp.grants.into_iter().next()
                             {
                                 // Write /proc/<pid>/pipes/<pipeId>.yaml to VFS when handle available
                                 if let Some(vfs) = &self.vfs {
@@ -464,7 +474,9 @@ impl RuntimeExecutor {
                                         let _ = vfs.write(&path, entry.into_bytes()).await;
                                     }
                                 }
-                                return Ok(serde_json::json!({ "pipeId": pipe_id, "state": "open" }));
+                                return Ok(
+                                    serde_json::json!({ "pipeId": pipe_id, "state": "open" }),
+                                );
                             }
                         }
                         Err(e) => {
@@ -513,8 +525,8 @@ impl RuntimeExecutor {
 
     /// Set the token's expiry to `now + d`. Used in tests to simulate near-expiry tokens.
     pub fn set_token_expiry_in(&mut self, d: Duration) {
-        self.token.expires_at =
-            chrono::Utc::now() + chrono::Duration::from_std(d).unwrap_or(chrono::Duration::hours(1));
+        self.token.expires_at = chrono::Utc::now()
+            + chrono::Duration::from_std(d).unwrap_or(chrono::Duration::hours(1));
     }
 
     pub fn on_fs_read(&self, path: &str, content: &[u8]) {
@@ -534,8 +546,13 @@ impl RuntimeExecutor {
     /// Falls back to in-place extension when no handler is attached (tests).
     /// Already-expired tokens are NOT renewed here; the expiry guard handles those.
     fn maybe_renew_token(&mut self) {
-        let until_expiry = self.token.expires_at.signed_duration_since(chrono::Utc::now());
-        if !(until_expiry > chrono::Duration::zero() && until_expiry <= chrono::Duration::minutes(5)) {
+        let until_expiry = self
+            .token
+            .expires_at
+            .signed_duration_since(chrono::Utc::now());
+        if !(until_expiry > chrono::Duration::zero()
+            && until_expiry <= chrono::Duration::minutes(5))
+        {
             return;
         }
 
@@ -543,12 +560,17 @@ impl RuntimeExecutor {
             let req = ResourceRequest::new(
                 self.pid.as_u32(),
                 self.token.signature.clone(),
-                vec![ResourceItem::TokenRenewal { reason: "auto-renewal within 5 min window".into() }],
+                vec![ResourceItem::TokenRenewal {
+                    reason: "auto-renewal within 5 min window".into(),
+                }],
             );
             match handler.handle(&req, &self.token) {
                 Ok(resp) => {
-                    if let Some(ResourceGrant::TokenRenewal { granted: true, new_token: Some(tok), .. }) =
-                        resp.grants.into_iter().next()
+                    if let Some(ResourceGrant::TokenRenewal {
+                        granted: true,
+                        new_token: Some(tok),
+                        ..
+                    }) = resp.grants.into_iter().next()
                     {
                         tracing::info!(pid = ?self.pid, "token renewed via KernelResourceHandler");
                         self.token = tok;
@@ -635,7 +657,9 @@ impl RuntimeExecutor {
                     let mut tool_results = Vec::new();
                     for call in &calls {
                         // GAP 4: capability validation + budget check (budget decremented on success)
-                        if let Err(e) = validate_tool_call(&self.token, call, &mut self.tool_budgets) {
+                        if let Err(e) =
+                            validate_tool_call(&self.token, call, &mut self.tool_budgets)
+                        {
                             tool_results.push(serde_json::json!({
                                 "type": "tool_result",
                                 "tool_use_id": call.call_id,
@@ -892,7 +916,17 @@ mod tests {
     // GAP 5 tests
     #[tokio::test]
     async fn test_dispatch_cap_list() {
-        let mut executor = make_executor(210, &["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"]).await;
+        let mut executor = make_executor(
+            210,
+            &[
+                "agent/spawn",
+                "agent/kill",
+                "agent/list",
+                "agent/wait",
+                "agent/send-message",
+            ],
+        )
+        .await;
         let call = AvixToolCall {
             call_id: "c1".into(),
             name: "cap/list".into(),
@@ -926,7 +960,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_pipe_open() {
-        let mut executor = make_executor(212, &["pipe/open", "pipe/write", "pipe/read", "pipe/close"]).await;
+        let mut executor =
+            make_executor(212, &["pipe/open", "pipe/write", "pipe/read", "pipe/close"]).await;
         let call = AvixToolCall {
             call_id: "c3".into(),
             name: "pipe/open".into(),
@@ -1042,7 +1077,16 @@ mod tests {
     async fn test_dispatch_agent_kill() {
         let registry = Arc::new(MockToolRegistry::new());
         let kernel = Arc::new(MockKernelHandle::new());
-        let params = make_params(250, &["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"]);
+        let params = make_params(
+            250,
+            &[
+                "agent/spawn",
+                "agent/kill",
+                "agent/list",
+                "agent/wait",
+                "agent/send-message",
+            ],
+        );
         let mut executor =
             RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
                 .await
@@ -1059,7 +1103,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_is_cat2_tool() {
-        let executor = make_executor(251, &["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"]).await;
+        let executor = make_executor(
+            251,
+            &[
+                "agent/spawn",
+                "agent/kill",
+                "agent/list",
+                "agent/wait",
+                "agent/send-message",
+            ],
+        )
+        .await;
         assert!(executor.is_cat2_tool("cap/list"));
         assert!(executor.is_cat2_tool("agent/spawn"));
         assert!(!executor.is_cat2_tool("fs/read"));
@@ -1071,10 +1125,9 @@ mod tests {
         let registry = Arc::new(MockToolRegistry::new());
         let kernel = Arc::new(MockKernelHandle::new());
         let params = make_params(240, &["cap/list"]);
-        let executor =
-            RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, kernel)
-                .await
-                .unwrap();
+        let executor = RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, kernel)
+            .await
+            .unwrap();
         assert!(!executor.tool_list.is_empty());
         // kernel is set
     }
@@ -1295,7 +1348,10 @@ mod tests {
         ]);
 
         let result = executor.run_with_client("do something", &mock_client).await;
-        assert!(result.is_ok(), "auto-approved HIL should complete: {result:?}");
+        assert!(
+            result.is_ok(),
+            "auto-approved HIL should complete: {result:?}"
+        );
     }
 
     #[tokio::test]
@@ -1303,17 +1359,15 @@ mod tests {
         let mut executor = make_executor(253, &[]).await;
         executor.set_max_tool_chain_length(1);
 
-        let mock_client = MockLlmClient::new(vec![
-            LlmCompleteResponse {
-                content: vec![
-                    json!({"type": "tool_use", "id": "c1", "name": "cap__list", "input": {}}),
-                    json!({"type": "tool_use", "id": "c2", "name": "cap__list", "input": {}}),
-                ],
-                stop_reason: StopReason::ToolUse,
-                input_tokens: 5,
-                output_tokens: 2,
-            },
-        ]);
+        let mock_client = MockLlmClient::new(vec![LlmCompleteResponse {
+            content: vec![
+                json!({"type": "tool_use", "id": "c1", "name": "cap__list", "input": {}}),
+                json!({"type": "tool_use", "id": "c2", "name": "cap__list", "input": {}}),
+            ],
+            stop_reason: StopReason::ToolUse,
+            input_tokens: 5,
+            output_tokens: 2,
+        }]);
 
         let result = executor.run_with_client("do it", &mock_client).await;
         assert!(result.is_err());
@@ -1328,7 +1382,10 @@ mod tests {
             .handle_tool_changed("removed", "cap/list", "test")
             .await;
         let after_count = executor.current_tool_list().len();
-        assert!(after_count < initial_count, "removed tool should reduce list");
+        assert!(
+            after_count < initial_count,
+            "removed tool should reduce list"
+        );
     }
 
     #[tokio::test]

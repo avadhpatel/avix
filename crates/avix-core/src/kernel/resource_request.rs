@@ -90,7 +90,11 @@ pub struct ResourceRequest {
 }
 
 impl ResourceRequest {
-    pub fn new(agent_pid: u32, capability_token_signature: String, requests: Vec<ResourceItem>) -> Self {
+    pub fn new(
+        agent_pid: u32,
+        capability_token_signature: String,
+        requests: Vec<ResourceItem>,
+    ) -> Self {
         Self {
             agent_pid,
             request_id: format!("req-{}", Uuid::new_v4()),
@@ -225,7 +229,11 @@ impl KernelResourceHandler {
                 }
             }
 
-            ResourceItem::Tool { name, urgency, reason } => {
+            ResourceItem::Tool {
+                name,
+                urgency,
+                reason,
+            } => {
                 // Tool grants require HIL approval — return denied with a suggestion.
                 // The RuntimeExecutor sends SIGPAUSE and waits; on SIGRESUME with
                 // decision=="approved", it re-issues a token with the new tool.
@@ -236,12 +244,18 @@ impl KernelResourceHandler {
                     new_token: None,
                     reason: Some("Requires human-in-the-loop approval".into()),
                     suggestion: Some(
-                        "Send SIGPAUSE and present request to user via cap/request-tool HIL flow".into(),
+                        "Send SIGPAUSE and present request to user via cap/request-tool HIL flow"
+                            .into(),
                     ),
                 }
             }
 
-            ResourceItem::Pipe { target_pid, direction, buffer_tokens, .. } => {
+            ResourceItem::Pipe {
+                target_pid,
+                direction,
+                buffer_tokens,
+                ..
+            } => {
                 // Grant the pipe — in production this calls pipe::registry::open()
                 ResourceGrant::Pipe {
                     granted: true,
@@ -305,7 +319,10 @@ mod tests {
         token.granted_tools.push("extra".into()); // tamper — invalidates sig
         let req = make_req(&token, vec![]);
         let err = handler().handle(&req, &token).unwrap_err();
-        assert!(err.to_string().contains("invalid"), "should reject invalid signature: {err}");
+        assert!(
+            err.to_string().contains("invalid"),
+            "should reject invalid signature: {err}"
+        );
     }
 
     #[test]
@@ -322,13 +339,19 @@ mod tests {
     #[test]
     fn context_tokens_granted() {
         let token = signed_token(&["fs/read"]);
-        let req = make_req(&token, vec![
-            ResourceItem::ContextTokens { amount: 10_000, reason: "need more".into() },
-        ]);
+        let req = make_req(
+            &token,
+            vec![ResourceItem::ContextTokens {
+                amount: 10_000,
+                reason: "need more".into(),
+            }],
+        );
         let resp = handler().handle(&req, &token).unwrap();
         assert_eq!(resp.grants.len(), 1);
         match &resp.grants[0] {
-            ResourceGrant::ContextTokens { granted, amount, .. } => {
+            ResourceGrant::ContextTokens {
+                granted, amount, ..
+            } => {
                 assert!(granted);
                 assert_eq!(*amount, 10_000);
             }
@@ -341,16 +364,22 @@ mod tests {
     #[test]
     fn tool_request_returns_denied_with_suggestion() {
         let token = signed_token(&["fs/read"]);
-        let req = make_req(&token, vec![
-            ResourceItem::Tool {
+        let req = make_req(
+            &token,
+            vec![ResourceItem::Tool {
                 name: "send_email".into(),
                 urgency: Urgency::Normal,
                 reason: "need to notify user".into(),
-            },
-        ]);
+            }],
+        );
         let resp = handler().handle(&req, &token).unwrap();
         match &resp.grants[0] {
-            ResourceGrant::Tool { granted, name, suggestion, .. } => {
+            ResourceGrant::Tool {
+                granted,
+                name,
+                suggestion,
+                ..
+            } => {
                 assert!(!granted, "tool grants require HIL");
                 assert_eq!(name, "send_email");
                 assert!(suggestion.is_some());
@@ -364,17 +393,23 @@ mod tests {
     #[test]
     fn pipe_request_granted_with_pipe_id() {
         let token = signed_token(&["pipe/open"]);
-        let req = make_req(&token, vec![
-            ResourceItem::Pipe {
+        let req = make_req(
+            &token,
+            vec![ResourceItem::Pipe {
                 target_pid: 58,
                 direction: PipeDirection::Out,
                 buffer_tokens: 16_384,
                 reason: "stream to writer".into(),
-            },
-        ]);
+            }],
+        );
         let resp = handler().handle(&req, &token).unwrap();
         match &resp.grants[0] {
-            ResourceGrant::Pipe { granted, pipe_id, target_pid, .. } => {
+            ResourceGrant::Pipe {
+                granted,
+                pipe_id,
+                target_pid,
+                ..
+            } => {
                 assert!(granted);
                 assert_eq!(*target_pid, 58);
                 assert!(pipe_id.is_some(), "granted pipe must have a pipe_id");
@@ -388,18 +423,35 @@ mod tests {
     #[test]
     fn token_renewal_returns_new_signed_token() {
         let token = signed_token(&["fs/read", "llm/complete"]);
-        let req = make_req(&token, vec![
-            ResourceItem::TokenRenewal { reason: "expiring soon".into() },
-        ]);
+        let req = make_req(
+            &token,
+            vec![ResourceItem::TokenRenewal {
+                reason: "expiring soon".into(),
+            }],
+        );
         let resp = handler().handle(&req, &token).unwrap();
         match &resp.grants[0] {
-            ResourceGrant::TokenRenewal { granted, new_token, expires_at, .. } => {
+            ResourceGrant::TokenRenewal {
+                granted,
+                new_token,
+                expires_at,
+                ..
+            } => {
                 assert!(granted);
                 let new_tok = new_token.as_ref().unwrap();
-                assert!(new_tok.verify_signature(TEST_KEY), "renewed token must be signed");
-                assert_eq!(new_tok.granted_tools, token.granted_tools, "tools must be preserved");
+                assert!(
+                    new_tok.verify_signature(TEST_KEY),
+                    "renewed token must be signed"
+                );
+                assert_eq!(
+                    new_tok.granted_tools, token.granted_tools,
+                    "tools must be preserved"
+                );
                 assert!(expires_at.is_some());
-                assert!(expires_at.unwrap() > token.expires_at, "new expiry must be later");
+                assert!(
+                    expires_at.unwrap() > token.expires_at,
+                    "new expiry must be later"
+                );
             }
             _ => panic!("expected TokenRenewal grant"),
         }
@@ -409,13 +461,18 @@ mod tests {
     fn token_renewal_preserves_issued_to() {
         let token = CapabilityToken::mint(
             vec!["fs/read".into()],
-            Some(IssuedTo { pid: 57, agent_name: "researcher".into(), spawned_by: "alice".into() }),
+            Some(IssuedTo {
+                pid: 57,
+                agent_name: "researcher".into(),
+                spawned_by: "alice".into(),
+            }),
             3600,
             TEST_KEY,
         );
-        let req = make_req(&token, vec![
-            ResourceItem::TokenRenewal { reason: "".into() },
-        ]);
+        let req = make_req(
+            &token,
+            vec![ResourceItem::TokenRenewal { reason: "".into() }],
+        );
         let resp = handler().handle(&req, &token).unwrap();
         match &resp.grants[0] {
             ResourceGrant::TokenRenewal { new_token, .. } => {
@@ -431,16 +488,32 @@ mod tests {
     #[test]
     fn batched_requests_return_grants_in_order() {
         let token = signed_token(&["fs/read"]);
-        let req = make_req(&token, vec![
-            ResourceItem::ContextTokens { amount: 5_000, reason: "".into() },
-            ResourceItem::Tool { name: "email".into(), urgency: Urgency::Low, reason: "".into() },
-            ResourceItem::TokenRenewal { reason: "".into() },
-        ]);
+        let req = make_req(
+            &token,
+            vec![
+                ResourceItem::ContextTokens {
+                    amount: 5_000,
+                    reason: "".into(),
+                },
+                ResourceItem::Tool {
+                    name: "email".into(),
+                    urgency: Urgency::Low,
+                    reason: "".into(),
+                },
+                ResourceItem::TokenRenewal { reason: "".into() },
+            ],
+        );
         let resp = handler().handle(&req, &token).unwrap();
         assert_eq!(resp.grants.len(), 3);
-        assert!(matches!(&resp.grants[0], ResourceGrant::ContextTokens { .. }));
+        assert!(matches!(
+            &resp.grants[0],
+            ResourceGrant::ContextTokens { .. }
+        ));
         assert!(matches!(&resp.grants[1], ResourceGrant::Tool { .. }));
-        assert!(matches!(&resp.grants[2], ResourceGrant::TokenRenewal { .. }));
+        assert!(matches!(
+            &resp.grants[2],
+            ResourceGrant::TokenRenewal { .. }
+        ));
     }
 
     #[test]

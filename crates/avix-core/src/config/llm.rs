@@ -405,7 +405,10 @@ spec:
         let result = LlmConfig::from_str(yaml);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("nonexistent") || err.contains("not found"), "err: {err}");
+        assert!(
+            err.contains("nonexistent") || err.contains("not found"),
+            "err: {err}"
+        );
     }
 
     #[test]
@@ -433,7 +436,10 @@ spec:
         let result = LlmConfig::from_str(yaml);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("modality") || err.contains("anthropic"), "err: {err}");
+        assert!(
+            err.contains("modality") || err.contains("anthropic"),
+            "err: {err}"
+        );
     }
 
     #[test]
