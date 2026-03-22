@@ -41,6 +41,17 @@ impl Pipe {
         })
     }
 
+    /// Send a message, awaiting buffer space (Block backpressure policy).
+    pub async fn send_blocking(&self, msg: String) -> Result<(), PipeError> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(PipeError::Closed(self.id.clone()));
+        }
+        self.tx
+            .send(msg)
+            .await
+            .map_err(|_| PipeError::Closed(self.id.clone()))
+    }
+
     pub async fn read(&self) -> Option<String> {
         let mut rx = self.rx.lock().await;
         rx.recv().await

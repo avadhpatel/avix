@@ -114,7 +114,9 @@ async fn server_ignores_notification_response() {
                     }
                     None
                 })
-                    as std::pin::Pin<Box<dyn std::future::Future<Output = Option<JsonRpcResponse>> + Send>>
+                    as std::pin::Pin<
+                        Box<dyn std::future::Future<Output = Option<JsonRpcResponse>> + Send>,
+                    >
             })
             .await
             .unwrap();
@@ -152,7 +154,9 @@ async fn client_timeout_on_slow_server() {
                         IpcMessage::Notification(_) => None,
                     }
                 })
-                    as std::pin::Pin<Box<dyn std::future::Future<Output = Option<JsonRpcResponse>> + Send>>
+                    as std::pin::Pin<
+                        Box<dyn std::future::Future<Output = Option<JsonRpcResponse>> + Send>,
+                    >
             })
             .await
             .unwrap();
@@ -243,7 +247,9 @@ async fn server_graceful_shutdown_drains_inflight() {
                         IpcMessage::Notification(_) => None,
                     }
                 })
-                    as std::pin::Pin<Box<dyn std::future::Future<Output = Option<JsonRpcResponse>> + Send>>
+                    as std::pin::Pin<
+                        Box<dyn std::future::Future<Output = Option<JsonRpcResponse>> + Send>,
+                    >
             })
             .await
             .unwrap();
@@ -271,7 +277,10 @@ async fn server_graceful_shutdown_drains_inflight() {
         .expect("serve did not finish within 300ms")
         .unwrap();
 
-    assert!(*completed.lock().unwrap(), "in-flight call was not completed before shutdown");
+    assert!(
+        *completed.lock().unwrap(),
+        "in-flight call was not completed before shutdown"
+    );
     call_task.await.unwrap().unwrap();
 }
 

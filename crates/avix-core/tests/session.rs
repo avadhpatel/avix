@@ -183,9 +183,15 @@ async fn session_vfs_manifest_contains_correct_fields() {
     let raw = vfs.read(&path).await.unwrap();
     let text = String::from_utf8(raw).unwrap();
 
-    assert!(text.contains("sess-vfs-02"), "manifest must contain session id");
+    assert!(
+        text.contains("sess-vfs-02"),
+        "manifest must contain session id"
+    );
     assert!(text.contains("bob"), "manifest must contain username");
-    assert!(text.contains("Write a report"), "manifest must contain goal");
+    assert!(
+        text.contains("Write a report"),
+        "manifest must contain goal"
+    );
     assert!(
         text.contains("active") || text.contains("Active"),
         "manifest must show active status"
@@ -209,7 +215,10 @@ async fn delete_session_removes_vfs_manifest() {
     store.save(&entry).await.unwrap();
 
     let path = VfsPath::parse("/proc/users/alice/sessions/sess-vfs-del.yaml").unwrap();
-    assert!(vfs.exists(&path).await, "manifest should exist before delete");
+    assert!(
+        vfs.exists(&path).await,
+        "manifest should exist before delete"
+    );
 
     store.delete("sess-vfs-del").await.unwrap();
 

@@ -25,7 +25,8 @@ where
     let job_id = {
         let mut reg = registry.write().await;
         let id = reg.create(tool, owner_pid);
-        reg.start(&id).expect("job was just created; start must succeed");
+        reg.start(&id)
+            .expect("job was just created; start must succeed");
         id
     };
 

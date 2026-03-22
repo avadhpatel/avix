@@ -1,5 +1,7 @@
 use crate::error::AvixError;
-use crate::ipc::{frame, message::JsonRpcNotification, message::JsonRpcRequest, message::JsonRpcResponse};
+use crate::ipc::{
+    frame, message::JsonRpcNotification, message::JsonRpcRequest, message::JsonRpcResponse,
+};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::net::UnixStream;
@@ -34,9 +36,9 @@ impl IpcClient {
     pub async fn call(&self, req: JsonRpcRequest) -> Result<JsonRpcResponse, AvixError> {
         let target = self.target.clone();
         let fut = async move {
-            let mut conn = UnixStream::connect(&target)
-                .await
-                .map_err(|e| AvixError::Io(format!("IpcClient connect to {}: {e}", target.display())))?;
+            let mut conn = UnixStream::connect(&target).await.map_err(|e| {
+                AvixError::Io(format!("IpcClient connect to {}: {e}", target.display()))
+            })?;
             frame::write_to(&mut conn, &req).await?;
             let resp: JsonRpcResponse = frame::read_from(&mut conn).await?;
             Ok(resp)
@@ -50,9 +52,12 @@ impl IpcClient {
     /// Send a notification (fire-and-forget — no response read).
     /// Opens a fresh connection, writes the frame, closes immediately.
     pub async fn notify(&self, notif: JsonRpcNotification) -> Result<(), AvixError> {
-        let mut conn = UnixStream::connect(&self.target)
-            .await
-            .map_err(|e| AvixError::Io(format!("IpcClient connect to {}: {e}", self.target.display())))?;
+        let mut conn = UnixStream::connect(&self.target).await.map_err(|e| {
+            AvixError::Io(format!(
+                "IpcClient connect to {}: {e}",
+                self.target.display()
+            ))
+        })?;
         frame::write_to(&mut conn, &notif).await?;
         Ok(())
     }

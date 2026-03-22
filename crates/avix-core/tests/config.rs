@@ -324,7 +324,7 @@ spec:
 
 // ── Finding C: config init writes all /etc/avix/ files ───────────────────────
 
-use avix_core::cli::config_init::{ConfigInitParams, run_config_init};
+use avix_core::cli::config_init::{run_config_init, ConfigInitParams};
 use tempfile::tempdir;
 
 fn make_params(tmp: &std::path::Path, identity: &str, role: &str) -> ConfigInitParams {
@@ -362,7 +362,10 @@ fn config_init_creates_users_yaml_with_identity() {
     run_config_init(make_params(tmp.path(), "bob", "user")).unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("etc/users.yaml")).unwrap();
-    assert!(content.contains("bob"), "users.yaml must contain the identity name");
+    assert!(
+        content.contains("bob"),
+        "users.yaml must contain the identity name"
+    );
     assert!(content.contains("user"), "users.yaml must contain the role");
     assert!(
         content.contains("UsersConfig") || content.contains("Users"),
@@ -378,7 +381,10 @@ fn config_init_creates_crews_yaml() {
     let path = tmp.path().join("etc/crews.yaml");
     assert!(path.exists(), "crews.yaml must exist after config init");
     let content = std::fs::read_to_string(path).unwrap();
-    assert!(content.contains("Crews"), "crews.yaml must have kind: Crews");
+    assert!(
+        content.contains("Crews"),
+        "crews.yaml must have kind: Crews"
+    );
 }
 
 #[test]
@@ -403,7 +409,10 @@ fn config_init_creates_fstab_yaml_with_local_mounts() {
     let path = tmp.path().join("etc/fstab.yaml");
     assert!(path.exists(), "fstab.yaml must exist after config init");
     let content = std::fs::read_to_string(path).unwrap();
-    assert!(content.contains("Fstab"), "fstab.yaml must have kind: Fstab");
+    assert!(
+        content.contains("Fstab"),
+        "fstab.yaml must have kind: Fstab"
+    );
     assert!(
         content.contains("local"),
         "fstab.yaml must define at least one local mount"
@@ -412,7 +421,10 @@ fn config_init_creates_fstab_yaml_with_local_mounts() {
         content.contains("/etc/avix") || content.contains("etc"),
         "fstab.yaml must mount the etc/avix tree"
     );
-    assert!(content.contains("/secrets"), "fstab.yaml must mount /secrets");
+    assert!(
+        content.contains("/secrets"),
+        "fstab.yaml must mount /secrets"
+    );
 }
 
 #[test]

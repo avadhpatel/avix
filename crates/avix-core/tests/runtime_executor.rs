@@ -986,7 +986,10 @@ async fn spawn_status_yaml_contains_pid_and_name() {
         "status.yaml must contain agent name"
     );
     assert!(text.contains("alice"), "status.yaml must contain spawnedBy");
-    assert!(text.contains("running"), "status.yaml must show status: running");
+    assert!(
+        text.contains("running"),
+        "status.yaml must show status: running"
+    );
 }
 
 #[tokio::test]
@@ -1014,7 +1017,10 @@ async fn spawn_writes_resolved_yaml_to_vfs() {
     );
     let raw = vfs.read(&path).await.unwrap();
     let text = String::from_utf8(raw).unwrap();
-    assert!(text.contains("fs/read"), "resolved.yaml must list granted tools");
+    assert!(
+        text.contains("fs/read"),
+        "resolved.yaml must list granted tools"
+    );
     assert!(
         text.contains("fs/write"),
         "resolved.yaml must list all granted tools"

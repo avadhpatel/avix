@@ -28,8 +28,7 @@ pub fn write(ctx: &SyscallContext, params: Value) -> SyscallResult {
         .and_then(|v| v.as_str())
         .ok_or_else(|| SyscallError::Einval("missing content".into()))?;
 
-    let path = VfsPath::parse(path_str)
-        .map_err(|e| SyscallError::Einval(e.to_string()))?;
+    let path = VfsPath::parse(path_str).map_err(|e| SyscallError::Einval(e.to_string()))?;
     if !path.is_agent_writable() {
         return Err(SyscallError::Eperm(
             ctx.caller_pid,

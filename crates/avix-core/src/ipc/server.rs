@@ -53,9 +53,8 @@ impl IpcServer {
             })?;
         }
 
-        let listener = UnixListener::bind(&path).map_err(|e| {
-            AvixError::Io(format!("failed to bind socket {}: {e}", path.display()))
-        })?;
+        let listener = UnixListener::bind(&path)
+            .map_err(|e| AvixError::Io(format!("failed to bind socket {}: {e}", path.display())))?;
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let handle = IpcServerHandle { shutdown_tx };

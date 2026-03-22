@@ -106,9 +106,7 @@ impl RouterDispatcher {
         // 5. Acquire global concurrency slot — non-blocking → EBUSY.
         let _slot = match self.concurrency.try_acquire() {
             Some(g) => g,
-            None => {
-                return JsonRpcResponse::err(&id, EBUSY, "dispatcher at max capacity", None)
-            }
+            None => return JsonRpcResponse::err(&id, EBUSY, "dispatcher at max capacity", None),
         };
 
         // 6. Resolve owning service name then endpoint path.

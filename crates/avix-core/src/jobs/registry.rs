@@ -112,11 +112,7 @@ impl JobRegistry {
     }
 
     /// Transition `Running` → `Done` and emit a `Complete` event.
-    pub fn complete(
-        &mut self,
-        job_id: &str,
-        result: serde_json::Value,
-    ) -> Result<(), AvixError> {
+    pub fn complete(&mut self, job_id: &str, result: serde_json::Value) -> Result<(), AvixError> {
         let job = self.get_mut(job_id)?;
         if job.state.is_terminal() {
             return Err(AvixError::ConfigParse(format!(

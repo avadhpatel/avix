@@ -1,8 +1,6 @@
 /// Integration tests for the jobs service (Gap D).
 use avix_core::{
-    jobs::{
-        handle_job_watch, start_job, JobError, JobRegistry, JobState,
-    },
+    jobs::{handle_job_watch, start_job, JobError, JobRegistry, JobState},
     types::Pid,
 };
 use serde_json::json;
@@ -61,7 +59,13 @@ async fn progress_event_emitted() {
     assert_eq!(reg.get(&id).unwrap().state, JobState::Running);
     let event = rx.0.try_recv().unwrap();
     assert!(
-        matches!(event, avix_core::jobs::JobEvent::Progress { percent: Some(50), .. }),
+        matches!(
+            event,
+            avix_core::jobs::JobEvent::Progress {
+                percent: Some(50),
+                ..
+            }
+        ),
         "unexpected event: {event:?}"
     );
 }
@@ -83,7 +87,10 @@ async fn complete_job_transitions_to_done() {
     let e1 = rx.0.try_recv().unwrap();
     assert!(matches!(
         e1,
-        avix_core::jobs::JobEvent::StatusChange { new_state: JobState::Done, .. }
+        avix_core::jobs::JobEvent::StatusChange {
+            new_state: JobState::Done,
+            ..
+        }
     ));
     let e2 = rx.0.try_recv().unwrap();
     assert!(matches!(e2, avix_core::jobs::JobEvent::Complete { .. }));
@@ -111,7 +118,10 @@ async fn fail_job_transitions_to_failed() {
     let e1 = rx.0.try_recv().unwrap();
     assert!(matches!(
         e1,
-        avix_core::jobs::JobEvent::StatusChange { new_state: JobState::Failed, .. }
+        avix_core::jobs::JobEvent::StatusChange {
+            new_state: JobState::Failed,
+            ..
+        }
     ));
     let e2 = rx.0.try_recv().unwrap();
     assert!(matches!(e2, avix_core::jobs::JobEvent::Fail { .. }));
@@ -219,21 +229,28 @@ async fn start_job_helper_runs_to_completion() {
     let reg = make_registry();
     let mut rx = reg.read().await.subscribe();
 
-    let id = start_job("fs/write", Pid::new(10), reg.clone(), |job_id, registry| async move {
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        registry
-            .write()
-            .await
-            .complete(&job_id, json!({"bytes": 42}))
-            .unwrap();
-    })
+    let id = start_job(
+        "fs/write",
+        Pid::new(10),
+        reg.clone(),
+        |job_id, registry| async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            registry
+                .write()
+                .await
+                .complete(&job_id, json!({"bytes": 42}))
+                .unwrap();
+        },
+    )
     .await;
 
     // Wait for Complete event.
     let found = tokio::time::timeout(std::time::Duration::from_millis(500), async {
         loop {
             match rx.recv().await {
-                Ok(avix_core::jobs::JobEvent::Complete { job_id, .. }) if job_id == id => break true,
+                Ok(avix_core::jobs::JobEvent::Complete { job_id, .. }) if job_id == id => {
+                    break true
+                }
                 Ok(_) => continue,
                 Err(_) => break false,
             }
@@ -243,10 +260,7 @@ async fn start_job_helper_runs_to_completion() {
     .expect("timeout waiting for Complete event");
 
     assert!(found);
-    assert_eq!(
-        reg.read().await.get(&id).unwrap().state,
-        JobState::Done
-    );
+    assert_eq!(reg.read().await.get(&id).unwrap().state, JobState::Done);
 }
 
 // ── T-D-12: Concurrent jobs are tracked independently ────────────────────────

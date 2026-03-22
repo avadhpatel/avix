@@ -9,12 +9,7 @@ use std::sync::Arc;
 
 /// Tools that are always available to every agent, regardless of capability grants.
 /// Defined in ADR-04 and §13 of CLAUDE.md.
-pub const ALWAYS_PRESENT: &[&str] = &[
-    "cap/request-tool",
-    "cap/escalate",
-    "cap/list",
-    "job/watch",
-];
+pub const ALWAYS_PRESENT: &[&str] = &["cap/request-tool", "cap/escalate", "cap/list", "job/watch"];
 
 /// Check that `caller_pid`'s process entry grants the named tool.
 ///
@@ -33,12 +28,9 @@ pub async fn check_capability(
         return Ok(());
     }
 
-    let entry = process_table
-        .get(caller_pid)
-        .await
-        .ok_or_else(|| {
-            AvixError::CapabilityDenied(format!("no process entry for pid {caller_pid}"))
-        })?;
+    let entry = process_table.get(caller_pid).await.ok_or_else(|| {
+        AvixError::CapabilityDenied(format!("no process entry for pid {caller_pid}"))
+    })?;
 
     if entry.granted_tools.iter().any(|t| t == tool) {
         Ok(())

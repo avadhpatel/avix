@@ -1,10 +1,6 @@
 /// Integration tests for signal delivery over IPC (Gap C).
 use avix_core::{
-    executor::{
-        runtime_executor::MockToolRegistry,
-        spawn::SpawnParams,
-        RuntimeExecutor,
-    },
+    executor::{runtime_executor::MockToolRegistry, spawn::SpawnParams, RuntimeExecutor},
     ipc::message::{IpcMessage, JsonRpcResponse},
     signal::{
         agent_socket::{create_agent_socket, remove_agent_socket},
@@ -32,8 +28,7 @@ async fn deliver_sends_notification_to_agent_socket() {
     let dir = tempdir().unwrap();
 
     // Bind agent socket for pid=57 — the delivery path requires agents/57.sock to exist.
-    let (server, _handle) =
-        create_agent_socket(dir.path(), Pid::new(57)).await.unwrap();
+    let (server, _handle) = create_agent_socket(dir.path(), Pid::new(57)).await.unwrap();
 
     let received_signal = Arc::new(tokio::sync::Mutex::new(None::<String>));
     let received_clone = received_signal.clone();
@@ -107,9 +102,7 @@ async fn broadcast_reaches_multiple_agents() {
                 .serve(|_| {
                     Box::pin(async move { None })
                         as std::pin::Pin<
-                            Box<
-                                dyn std::future::Future<Output = Option<JsonRpcResponse>> + Send,
-                            >,
+                            Box<dyn std::future::Future<Output = Option<JsonRpcResponse>> + Send>,
                         >
                 })
                 .await
@@ -152,9 +145,7 @@ async fn broadcast_tolerates_missing_agents() {
 
     let pids = [Pid::new(1), Pid::new(2), Pid::new(3)];
     let delivery = SignalDelivery::new(dir.path().to_path_buf());
-    let results = delivery
-        .broadcast(&pids, SignalKind::Stop, json!({}))
-        .await;
+    let results = delivery.broadcast(&pids, SignalKind::Stop, json!({})).await;
 
     assert_eq!(results.len(), 3);
 
@@ -184,12 +175,12 @@ async fn agent_pause_resume_via_signal() {
         .unwrap();
 
     let paused = executor.paused.clone();
-    assert!(!paused.load(std::sync::atomic::Ordering::Acquire), "should not start paused");
+    assert!(
+        !paused.load(std::sync::atomic::Ordering::Acquire),
+        "should not start paused"
+    );
 
-    let (_task, server_handle) = executor
-        .start_signal_listener(dir.path())
-        .await
-        .unwrap();
+    let (_task, server_handle) = executor.start_signal_listener(dir.path()).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
@@ -205,7 +196,10 @@ async fn agent_pause_resume_via_signal() {
         .unwrap();
 
     tokio::time::sleep(Duration::from_millis(30)).await;
-    assert!(paused.load(std::sync::atomic::Ordering::Acquire), "should be paused after SIGPAUSE");
+    assert!(
+        paused.load(std::sync::atomic::Ordering::Acquire),
+        "should be paused after SIGPAUSE"
+    );
 
     // Deliver SIGRESUME.
     delivery
@@ -218,7 +212,10 @@ async fn agent_pause_resume_via_signal() {
         .unwrap();
 
     tokio::time::sleep(Duration::from_millis(30)).await;
-    assert!(!paused.load(std::sync::atomic::Ordering::Acquire), "should be resumed after SIGRESUME");
+    assert!(
+        !paused.load(std::sync::atomic::Ordering::Acquire),
+        "should be resumed after SIGRESUME"
+    );
 
     server_handle.cancel();
 }
@@ -245,10 +242,7 @@ async fn agent_kill_sets_killed_flag() {
     let killed = executor.killed.clone();
     assert!(!killed.load(std::sync::atomic::Ordering::Acquire));
 
-    let (_task, server_handle) = executor
-        .start_signal_listener(dir.path())
-        .await
-        .unwrap();
+    let (_task, server_handle) = executor.start_signal_listener(dir.path()).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
@@ -286,9 +280,7 @@ async fn agent_socket_created_and_removed() {
     let sock = agents_dir.join("42.sock");
     assert!(!sock.exists());
 
-    let (server, handle) = create_agent_socket(dir.path(), Pid::new(42))
-        .await
-        .unwrap();
+    let (server, handle) = create_agent_socket(dir.path(), Pid::new(42)).await.unwrap();
     assert!(sock.exists(), "socket should exist after bind");
 
     // Serve briefly then cancel.

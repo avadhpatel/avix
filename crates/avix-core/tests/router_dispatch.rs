@@ -11,10 +11,7 @@ use avix_core::{
         RouterDispatcher, ServiceRegistry,
     },
     tool_registry::{ToolEntry, ToolRegistry, ToolState, ToolVisibility},
-    types::{
-        tool::ToolName,
-        Pid,
-    },
+    types::{tool::ToolName, Pid},
 };
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
@@ -22,9 +19,7 @@ use tempfile::tempdir;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-async fn simple_mock_service(
-    sock_path: std::path::PathBuf,
-) -> avix_core::ipc::IpcServerHandle {
+async fn simple_mock_service(sock_path: std::path::PathBuf) -> avix_core::ipc::IpcServerHandle {
     let (server, handle) = IpcServer::bind(sock_path).await.unwrap();
     tokio::spawn(async move {
         server
@@ -57,9 +52,7 @@ async fn build_dispatcher(
     service_registry
         .register("echo-svc", sock_path.to_str().unwrap())
         .await;
-    service_registry
-        .register_tool(tool_name, "echo-svc")
-        .await;
+    service_registry.register_tool(tool_name, "echo-svc").await;
 
     let tool_registry = Arc::new(ToolRegistry::new());
     tool_registry
@@ -91,12 +84,8 @@ async fn build_dispatcher(
         })
         .await;
 
-    let dispatcher = RouterDispatcher::new(
-        service_registry,
-        tool_registry,
-        process_table.clone(),
-    )
-    .with_call_timeout(Duration::from_millis(500));
+    let dispatcher = RouterDispatcher::new(service_registry, tool_registry, process_table.clone())
+        .with_call_timeout(Duration::from_millis(500));
 
     (dispatcher, process_table)
 }
@@ -118,8 +107,7 @@ async fn dispatch_routes_to_correct_service() {
     let sock = dir.path().join("echo.sock");
     let _handle = simple_mock_service(sock.clone()).await;
 
-    let (dispatcher, _) =
-        build_dispatcher(&sock, "echo/ping", vec!["echo/ping".into()]).await;
+    let (dispatcher, _) = build_dispatcher(&sock, "echo/ping", vec!["echo/ping".into()]).await;
 
     let resp = dispatcher
         .dispatch(make_request("echo/ping"), Pid::new(10), "alice", "tok")
@@ -137,8 +125,7 @@ async fn dispatch_unknown_tool_returns_not_found() {
     let sock = dir.path().join("echo2.sock");
     let _handle = simple_mock_service(sock.clone()).await;
 
-    let (dispatcher, _) =
-        build_dispatcher(&sock, "echo/ping", vec!["echo/ping".into()]).await;
+    let (dispatcher, _) = build_dispatcher(&sock, "echo/ping", vec!["echo/ping".into()]).await;
 
     let resp = dispatcher
         .dispatch(make_request("ghost/unknown"), Pid::new(10), "alice", "tok")
@@ -192,9 +179,8 @@ async fn dispatch_unavailable_tool_returns_eunavail() {
         })
         .await;
 
-    let dispatcher =
-        RouterDispatcher::new(service_registry, tool_registry, process_table)
-            .with_call_timeout(Duration::from_millis(500));
+    let dispatcher = RouterDispatcher::new(service_registry, tool_registry, process_table)
+        .with_call_timeout(Duration::from_millis(500));
 
     let resp = dispatcher
         .dispatch(make_request("down/tool"), Pid::new(10), "alice", "tok")
@@ -234,8 +220,7 @@ async fn dispatch_at_capacity_returns_ebusy() {
     });
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let (_dispatcher, _) =
-        build_dispatcher(&sock, "slow/op", vec!["slow/op".into()]).await;
+    let (_dispatcher, _) = build_dispatcher(&sock, "slow/op", vec!["slow/op".into()]).await;
 
     // Override to max_concurrent=1.
     let service_registry = Arc::new(ServiceRegistry::new());
@@ -274,13 +259,11 @@ async fn dispatch_at_capacity_returns_ebusy() {
         })
         .await;
 
-    let limited = Arc::new(RouterDispatcher::new(
-        service_registry,
-        tool_registry,
-        process_table,
-    )
-    .with_max_concurrent(1)
-    .with_call_timeout(Duration::from_millis(500)));
+    let limited = Arc::new(
+        RouterDispatcher::new(service_registry, tool_registry, process_table)
+            .with_max_concurrent(1)
+            .with_call_timeout(Duration::from_millis(500)),
+    );
 
     let lim_clone = limited.clone();
 
@@ -300,11 +283,7 @@ async fn dispatch_at_capacity_returns_ebusy() {
         .await;
 
     assert!(resp.error.is_some(), "expected EBUSY error, got: {resp:?}");
-    assert_eq!(
-        resp.error.unwrap().code,
-        -32008,
-        "expected EBUSY (-32008)"
-    );
+    assert_eq!(resp.error.unwrap().code, -32008, "expected EBUSY (-32008)");
 
     first.await.unwrap();
 }
@@ -323,9 +302,7 @@ async fn dispatch_slow_service_returns_etimeout() {
                 Box::pin(async move {
                     tokio::time::sleep(Duration::from_millis(300)).await;
                     match msg {
-                        IpcMessage::Request(req) => {
-                            Some(JsonRpcResponse::ok(&req.id, json!({})))
-                        }
+                        IpcMessage::Request(req) => Some(JsonRpcResponse::ok(&req.id, json!({}))),
                         IpcMessage::Notification(_) => None,
                     }
                 })
@@ -382,7 +359,11 @@ async fn dispatch_slow_service_returns_etimeout() {
         .await;
 
     assert!(resp.error.is_some());
-    assert_eq!(resp.error.unwrap().code, -32007, "expected ETIMEOUT (-32007)");
+    assert_eq!(
+        resp.error.unwrap().code,
+        -32007,
+        "expected ETIMEOUT (-32007)"
+    );
 }
 
 // ── T-B-06: _caller is injected into forwarded params ────────────────────────
@@ -414,8 +395,7 @@ async fn dispatch_injects_caller() {
     });
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let (dispatcher, _) =
-        build_dispatcher(&sock, "echo/ping", vec!["echo/ping".into()]).await;
+    let (dispatcher, _) = build_dispatcher(&sock, "echo/ping", vec!["echo/ping".into()]).await;
 
     let resp = dispatcher
         .dispatch(make_request("echo/ping"), Pid::new(10), "alice", "tok")

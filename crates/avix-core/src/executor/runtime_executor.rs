@@ -350,12 +350,14 @@ impl RuntimeExecutor {
                             return None;
                         }
 
-                        let signal_name = params
-                            .get("signal")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
+                        let signal_name =
+                            params.get("signal").and_then(|v| v.as_str()).unwrap_or("");
 
-                        tracing::debug!(pid = pid.as_u32(), signal = signal_name, "signal received");
+                        tracing::debug!(
+                            pid = pid.as_u32(),
+                            signal = signal_name,
+                            "signal received"
+                        );
 
                         match signal_name {
                             "SIGPAUSE" => paused.store(true, Ordering::Release),
