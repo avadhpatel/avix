@@ -35,6 +35,8 @@ async fn make_executor_with_vfs(
         token: token_with_caps(caps),
         system_prompt: None,
         selected_model: "claude-sonnet-4".into(),
+        denied_tools: vec![],
+        context_limit: 0,
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -127,6 +129,8 @@ async fn memory_write_tools_registered_at_spawn() {
             token: token_with_caps(&write_tools),
             system_prompt: None,
             selected_model: "claude-sonnet-4".into(),
+            denied_tools: vec![],
+            context_limit: 0,
         };
         let executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&reg))
             .await

@@ -76,11 +76,9 @@ async fn build_dispatcher(
             name: "agent".into(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Running,
-            parent: None,
             spawned_by_user: "alice".into(),
             granted_tools: granted,
-            token_expires_at: None,
-            tool_chain_depth: 0,
+            ..Default::default()
         })
         .await;
 
@@ -171,11 +169,9 @@ async fn dispatch_unavailable_tool_returns_eunavail() {
             name: "a".into(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Running,
-            parent: None,
             spawned_by_user: "alice".into(),
             granted_tools: vec!["down/tool".into()],
-            token_expires_at: None,
-            tool_chain_depth: 0,
+            ..Default::default()
         })
         .await;
 
@@ -254,8 +250,7 @@ async fn dispatch_at_capacity_returns_ebusy() {
             parent: None,
             spawned_by_user: "alice".into(),
             granted_tools: vec!["slow/op".into()],
-            token_expires_at: None,
-            tool_chain_depth: 0,
+            ..Default::default()
         })
         .await;
 
@@ -346,8 +341,7 @@ async fn dispatch_slow_service_returns_etimeout() {
             parent: None,
             spawned_by_user: "alice".into(),
             granted_tools: vec!["slow/op".into()],
-            token_expires_at: None,
-            tool_chain_depth: 0,
+            ..Default::default()
         })
         .await;
 
@@ -430,8 +424,7 @@ async fn capability_check_blocks_unauthorized() {
             parent: None,
             spawned_by_user: "alice".into(),
             granted_tools: vec!["fs/read".into()],
-            token_expires_at: None,
-            tool_chain_depth: 0,
+            ..Default::default()
         })
         .await;
 
@@ -457,8 +450,7 @@ async fn always_present_tools_are_always_allowed() {
             parent: None,
             spawned_by_user: "alice".into(),
             granted_tools: vec![], // empty
-            token_expires_at: None,
-            tool_chain_depth: 0,
+            ..Default::default()
         })
         .await;
 

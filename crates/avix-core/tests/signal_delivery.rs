@@ -171,6 +171,8 @@ async fn agent_pause_resume_via_signal() {
         token: CapabilityToken::test_token(&[]),
         system_prompt: None,
         selected_model: "claude-sonnet-4".into(),
+        denied_tools: vec![],
+        context_limit: 0,
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -238,6 +240,8 @@ async fn agent_kill_sets_killed_flag() {
         token: CapabilityToken::test_token(&[]),
         system_prompt: None,
         selected_model: "claude-sonnet-4".into(),
+        denied_tools: vec![],
+        context_limit: 0,
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await

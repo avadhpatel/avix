@@ -38,11 +38,8 @@ fn bench_process_table_get(c: &mut Criterion) {
                     name: format!("proc-{i}"),
                     kind: ProcessKind::Agent,
                     status: ProcessStatus::Running,
-                    parent: None,
                     spawned_by_user: "alice".to_string(),
-                    granted_tools: Vec::new(),
-                    token_expires_at: None,
-                    tool_chain_depth: 0,
+                    ..Default::default()
                 })
                 .await;
         }

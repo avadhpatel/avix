@@ -11,9 +11,7 @@ fn make_agent_entry(pid: u32, name: &str) -> ProcessEntry {
         status: ProcessStatus::Running,
         parent: None,
         spawned_by_user: "alice".to_string(),
-        granted_tools: Vec::new(),
-        token_expires_at: None,
-        tool_chain_depth: 0,
+        ..Default::default()
     }
 }
 
@@ -25,9 +23,7 @@ fn make_service_entry(pid: u32, name: &str) -> ProcessEntry {
         status: ProcessStatus::Running,
         parent: None,
         spawned_by_user: "system".to_string(),
-        granted_tools: Vec::new(),
-        token_expires_at: None,
-        tool_chain_depth: 0,
+        ..Default::default()
     }
 }
 

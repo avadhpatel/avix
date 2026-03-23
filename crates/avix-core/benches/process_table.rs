@@ -8,11 +8,8 @@ fn entry(pid: u32) -> ProcessEntry {
         name: format!("agent-{pid}"),
         kind: ProcessKind::Agent,
         status: ProcessStatus::Running,
-        parent: None,
         spawned_by_user: "alice".to_string(),
-        granted_tools: Vec::new(),
-        token_expires_at: None,
-        tool_chain_depth: 0,
+        ..Default::default()
     }
 }
 

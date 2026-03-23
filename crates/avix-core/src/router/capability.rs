@@ -56,11 +56,9 @@ mod tests {
                 name: "test-agent".into(),
                 kind: ProcessKind::Agent,
                 status: ProcessStatus::Running,
-                parent: None,
                 spawned_by_user: "alice".into(),
                 granted_tools: tools,
-                token_expires_at: None,
-                tool_chain_depth: 0,
+                ..Default::default()
             })
             .await;
         table

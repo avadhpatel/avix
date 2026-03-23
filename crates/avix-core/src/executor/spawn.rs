@@ -11,4 +11,9 @@ pub struct SpawnParams {
     pub system_prompt: Option<String>,
     /// The resolved model name (from `--model` arg or `KernelConfig.models.default`).
     pub selected_model: String,
+    /// Tools explicitly denied at spawn (not in the user's crew or capability set).
+    #[allow(dead_code)]
+    pub denied_tools: Vec<String>,
+    /// Maximum context-window token limit for this agent (0 = unknown).
+    pub context_limit: u64,
 }

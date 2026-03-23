@@ -78,7 +78,6 @@ enum Cmd {
     },
 }
 
-
 #[derive(Subcommand)]
 enum ConfigCmd {
     /// Create auth.conf and print the generated API key
@@ -216,8 +215,7 @@ async fn main() -> Result<()> {
                 })?;
 
             // Build the LLM client via AutoAgents — type-erased as Box<dyn LlmClient>
-            let llm_client: Box<dyn LlmClient> =
-                build_llm_client(provider_cfg, &resolved_model)?;
+            let llm_client: Box<dyn LlmClient> = build_llm_client(provider_cfg, &resolved_model)?;
 
             // Bootstrap: checks auth.conf, reads+zeroes AVIX_MASTER_KEY
             let runtime = Runtime::bootstrap_with_root(&root).await?;
@@ -242,6 +240,8 @@ async fn main() -> Result<()> {
                 token,
                 system_prompt: None,
                 selected_model: resolved_model.clone(),
+                denied_tools: vec![],
+                context_limit: 0,
             };
             let registry = Arc::new(MockToolRegistry::new());
             let mut executor = RuntimeExecutor::spawn_with_registry(params, registry).await?;

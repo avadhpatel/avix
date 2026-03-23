@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -135,6 +135,24 @@ pub struct RuntimeExecutor {
     memory_context: Option<String>,
     /// Conversation history: list of (role, content) pairs, stored for session auto-log.
     pub conversation_history: Vec<(String, String)>,
+
+    // ── status tracking fields ────────────────────────────────────────────────
+    /// When this agent was spawned (used for wallTimeSec in status.yaml).
+    pub spawned_at: chrono::DateTime<chrono::Utc>,
+    /// Tokens occupying the working context window (updated each turn).
+    pub context_used: u64,
+    /// Maximum context-window token limit passed at spawn (0 = unknown).
+    pub context_limit: u64,
+    /// Tools denied at spawn.
+    pub denied_tools: Vec<String>,
+    /// Total tokens consumed in this session (accumulates across turns).
+    pub tokens_consumed: u64,
+    /// Total tool calls dispatched over the agent's lifetime.
+    pub tool_calls_total: u32,
+    /// Name of the last signal received (interior-mutable; updated by signal listener).
+    last_signal_received: Arc<Mutex<Option<String>>>,
+    /// Pending signal count (interior-mutable; updated by signal listener).
+    pub pending_signal_count: Arc<AtomicU32>,
 }
 
 enum RegistryRef {
@@ -182,6 +200,14 @@ impl RuntimeExecutor {
             memory_svc: None,
             memory_context: None,
             conversation_history: Vec::new(),
+            spawned_at: chrono::Utc::now(),
+            context_used: 0,
+            context_limit: params.context_limit,
+            denied_tools: params.denied_tools,
+            tokens_consumed: 0,
+            tool_calls_total: 0,
+            last_signal_received: Arc::new(Mutex::new(None)),
+            pending_signal_count: Arc::new(AtomicU32::new(0)),
         };
 
         // GAP 3: populate tool_list at spawn time
@@ -349,17 +375,44 @@ impl RuntimeExecutor {
     ///
     /// SIGSTOP: runs auto-log if memory service is attached, then sets killed flag.
     /// SIGKILL: sets killed flag immediately.
+    /// All signals update `last_signal_received` and increment `pending_signal_count`.
     pub async fn deliver_signal(&self, signal: &str) {
+        // Record the signal in tracking state
+        *self.last_signal_received.lock().await = Some(signal.to_string());
+        self.pending_signal_count.fetch_add(1, Ordering::AcqRel);
+
         match signal {
             "SIGSTOP" => {
                 self.auto_log_session_end().await;
                 self.killed.store(true, Ordering::Release);
+                // Write updated status (stopped) to VFS
+                if let Some(vfs) = &self.vfs {
+                    self.write_status_yaml(vfs).await;
+                }
             }
             "SIGKILL" => {
                 self.killed.store(true, Ordering::Release);
+                if let Some(vfs) = &self.vfs {
+                    self.write_status_yaml(vfs).await;
+                }
+            }
+            "SIGPAUSE" => {
+                self.paused.store(true, Ordering::Release);
+                if let Some(vfs) = &self.vfs {
+                    self.write_status_yaml(vfs).await;
+                }
+            }
+            "SIGRESUME" => {
+                self.paused.store(false, Ordering::Release);
+                if let Some(vfs) = &self.vfs {
+                    self.write_status_yaml(vfs).await;
+                }
             }
             _ => {
-                tracing::debug!(pid = self.pid.as_u32(), signal, "ignored signal");
+                tracing::debug!(pid = self.pid.as_u32(), signal, "signal received");
+                if let Some(vfs) = &self.vfs {
+                    self.write_status_yaml(vfs).await;
+                }
             }
         }
     }
@@ -424,28 +477,63 @@ impl RuntimeExecutor {
             Some(v) => Arc::clone(v),
             None => return,
         };
-        self.write_status_file(&vfs).await;
+        self.write_status_yaml(&vfs).await;
         self.write_resolved_file(&vfs, username, crews).await;
     }
 
-    async fn write_status_file(&self, vfs: &VfsRouter) {
+    /// Build and write `/proc/<pid>/status.yaml` from current executor state.
+    ///
+    /// Called at spawn and after every lifecycle event (signal, tool call, LLM turn).
+    /// No-op when no VFS is attached.
+    async fn write_status_yaml(&self, vfs: &VfsRouter) {
+        use crate::process::entry::{ProcessEntry, ProcessKind, WaitingOn};
+        use crate::process::status_file::AgentStatusFile;
+
         let pid = self.pid.as_u32();
-        let tools_yaml = self
-            .token
-            .granted_tools
-            .iter()
-            .map(|t| format!("    - {t}\n"))
-            .collect::<String>();
-        let status_yaml = format!(
-            "apiVersion: avix/v1\nkind: AgentStatus\nmetadata:\n  pid: {pid}\n  name: {name}\nspec:\n  status: running\n  goal: {goal:?}\n  spawnedBy: {spawned_by}\n  sessionId: {session_id}\n  grantedTools:\n{tools}  toolChainDepth: 0\n  contextTokensUsed: 0\n",
-            name = self.agent_name,
-            goal = self.goal,
-            spawned_by = self.spawned_by,
-            session_id = self.session_id,
-            tools = tools_yaml,
-        );
-        if let Ok(path) = VfsPath::parse(&format!("/proc/{pid}/status.yaml")) {
-            let _ = vfs.write(&path, status_yaml.into_bytes()).await;
+
+        // Determine state from atomic flags
+        let state = if self.killed.load(Ordering::Acquire) {
+            crate::process::entry::ProcessStatus::Stopped
+        } else if self.paused.load(Ordering::Acquire) {
+            crate::process::entry::ProcessStatus::Paused
+        } else {
+            crate::process::entry::ProcessStatus::Running
+        };
+
+        let last_signal = self.last_signal_received.lock().await.clone();
+
+        let entry = ProcessEntry {
+            pid: self.pid,
+            name: self.agent_name.clone(),
+            kind: ProcessKind::Agent,
+            status: state,
+            spawned_by_user: self.spawned_by.clone(),
+            goal: self.goal.clone(),
+            spawned_at: self.spawned_at,
+            context_used: self.context_used,
+            context_limit: self.context_limit,
+            last_activity_at: chrono::Utc::now(),
+            waiting_on: None::<WaitingOn>,
+            granted_tools: self.token.granted_tools.clone(),
+            denied_tools: self.denied_tools.clone(),
+            tool_chain_depth: 0, // reset at turn start; not tracked per-write here
+            tokens_consumed: self.tokens_consumed,
+            tool_calls_total: self.tool_calls_total,
+            last_signal_received: last_signal,
+            pending_signal_count: self.pending_signal_count.load(Ordering::Relaxed),
+            ..ProcessEntry::default()
+        };
+
+        let file = AgentStatusFile::from_entry(&entry, vec![]);
+        match file.to_yaml() {
+            Ok(yaml) => {
+                if let Ok(path) = VfsPath::parse(&format!("/proc/{pid}/status.yaml")) {
+                    let _ = vfs.write(&path, yaml).await;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(pid, "failed to serialise status.yaml: {e}");
+            }
         }
     }
 
@@ -1048,6 +1136,16 @@ impl RuntimeExecutor {
                 .await
                 .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
+            // Track token usage and context size from this response
+            self.tokens_consumed = self
+                .tokens_consumed
+                .saturating_add(response.total_tokens() as u64);
+            self.context_used = response.input_tokens as u64;
+            if let Some(vfs) = &self.vfs {
+                let vfs = Arc::clone(vfs);
+                self.write_status_yaml(&vfs).await;
+            }
+
             match super::stop_reason::interpret_stop_reason(&response) {
                 super::stop_reason::TurnAction::ReturnResult(text) => {
                     return Ok(TurnResult { text });
@@ -1116,6 +1214,9 @@ impl RuntimeExecutor {
                                 continue;
                             }
                         }
+
+                        // Track lifetime tool call count
+                        self.tool_calls_total = self.tool_calls_total.saturating_add(1);
 
                         // Cat2: handled locally; Cat1/3: forwarded to router.svc
                         let result = if self.is_cat2_tool(&call.name) {
@@ -1231,6 +1332,8 @@ mod tests {
             token: CapabilityToken::test_token(caps),
             system_prompt: None,
             selected_model: "claude-sonnet-4".into(),
+            denied_tools: vec![],
+            context_limit: 0,
         }
     }
 
@@ -1307,6 +1410,8 @@ mod tests {
             token: CapabilityToken::test_token(&["cap/list"]), // has cap/list, not fs/read
             system_prompt: None,
             selected_model: "claude-sonnet-4".into(),
+            denied_tools: vec![],
+            context_limit: 0,
         };
         let mut executor = RuntimeExecutor::spawn_with_registry(params, registry)
             .await
