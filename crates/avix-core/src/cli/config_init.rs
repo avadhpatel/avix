@@ -95,7 +95,15 @@ identities:
         &CREWS_YAML_TEMPLATE.replace("{now}", &now),
     )?;
 
-    write_if_absent(&root.join("etc/crontab.yaml"), CRONTAB_YAML_TEMPLATE)?;
+    write_if_absent(
+        &root.join("etc/crontab.yaml"),
+        &CRONTAB_YAML_TEMPLATE.replace("{now}", &now),
+    )?;
+
+    write_if_absent(
+        &root.join("kernel/defaults/crontab.yaml"),
+        CRONTAB_DEFAULTS_YAML_TEMPLATE,
+    )?;
 
     let root_s = root_str.to_string();
     write_if_absent(
@@ -223,8 +231,25 @@ spec:
 
 const CRONTAB_YAML_TEMPLATE: &str = "apiVersion: avix/v1
 kind: Crontab
+metadata:
+  lastUpdated: \"{now}\"
 spec:
+  timezone: UTC
   jobs: []
+";
+
+const CRONTAB_DEFAULTS_YAML_TEMPLATE: &str = "# /kernel/defaults/crontab.yaml
+# Read-only kernel defaults applied when per-job fields are absent.
+apiVersion: avix/v1
+kind: CrontabDefaults
+spec:
+  timezone: UTC
+  jobs:
+    timeout: 3600
+    onFailure: alert
+    retryPolicy:
+      maxAttempts: 3
+      backoffSec: 60
 ";
 
 const FSTAB_YAML_TEMPLATE: &str = "apiVersion: avix/v1
