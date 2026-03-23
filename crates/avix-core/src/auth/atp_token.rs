@@ -1,3 +1,4 @@
+use base64::Engine;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -7,12 +8,38 @@ use tokio::sync::RwLock;
 use crate::error::AvixError;
 use crate::types::Role;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Claims embedded in an ATPToken (§3.1).
+/// Serialised to JSON then base64url-encoded before HMAC signing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ATPTokenClaims {
-    pub session_id: String,
-    pub identity_name: String,
+    /// Username (subject).
+    pub sub: String,
+    /// Numeric user ID.
+    pub uid: u32,
     pub role: Role,
-    pub expires_at: DateTime<Utc>,
+    /// Crew memberships.
+    pub crews: Vec<String>,
+    /// Session identifier.
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    /// Issued-at timestamp.
+    pub iat: DateTime<Utc>,
+    /// Expiry timestamp.
+    pub exp: DateTime<Utc>,
+    /// Permitted ATP domains, e.g. `["proc", "fs", "signal"]`.
+    pub scope: Vec<String>,
+}
+
+impl ATPTokenClaims {
+    pub fn is_expired(&self) -> bool {
+        self.exp < Utc::now()
+    }
+
+    /// True when fewer than 5 minutes remain before expiry.
+    pub fn is_expiring_soon(&self) -> bool {
+        let remaining = self.exp.signed_duration_since(Utc::now());
+        remaining < chrono::Duration::minutes(5) && remaining > chrono::Duration::zero()
+    }
 }
 
 pub struct ATPToken;
@@ -21,8 +48,8 @@ impl ATPToken {
     pub fn issue(claims: ATPTokenClaims, secret: &str) -> Result<String, AvixError> {
         let json =
             serde_json::to_string(&claims).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        let sig = Self::sign(json.as_bytes(), secret.as_bytes());
         let payload = base64_encode(json.as_bytes());
+        let sig = Self::sign(payload.as_bytes(), secret.as_bytes());
         Ok(format!("{payload}.{sig}"))
     }
 
@@ -31,16 +58,16 @@ impl ATPToken {
         if parts.len() != 2 {
             return Err(AvixError::CapabilityDenied("invalid token format".into()));
         }
-        let payload_bytes = base64_decode(parts[0]).map_err(AvixError::CapabilityDenied)?;
-        let expected_sig = Self::sign(&payload_bytes, secret.as_bytes());
+        let expected_sig = Self::sign(parts[0].as_bytes(), secret.as_bytes());
         if parts[1] != expected_sig {
             return Err(AvixError::CapabilityDenied(
                 "invalid token signature".into(),
             ));
         }
+        let payload_bytes = base64_decode(parts[0]).map_err(AvixError::CapabilityDenied)?;
         let claims: ATPTokenClaims = serde_json::from_slice(&payload_bytes)
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        if claims.expires_at < Utc::now() {
+        if claims.is_expired() {
             return Err(AvixError::CapabilityDenied("token expired".into()));
         }
         Ok(claims)
@@ -57,22 +84,13 @@ impl ATPToken {
 }
 
 fn base64_encode(data: &[u8]) -> String {
-    use std::fmt::Write;
-    let encoded = data.iter().fold(String::new(), |mut acc, b| {
-        let _ = write!(acc, "{:02x}", b);
-        acc
-    });
-    encoded
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
 }
 
 fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
-    if !s.len().is_multiple_of(2) {
-        return Err("invalid hex length".into());
-    }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.to_string()))
-        .collect()
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Default)]
@@ -103,5 +121,11 @@ impl ATPTokenStore {
 
     pub async fn revoke(&self, session_id: &str) {
         self.revoked.write().await.insert(session_id.to_string());
+    }
+
+    /// Returns `true` when the token is valid and expires within 5 minutes.
+    pub async fn is_expiring_soon(&self, token: &str) -> Result<bool, AvixError> {
+        let claims = self.validate(token).await?;
+        Ok(claims.is_expiring_soon())
     }
 }

@@ -1,10 +1,12 @@
+use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use super::session::SessionEntry;
+use super::atp_token::{ATPTokenClaims, ATPTokenStore};
+use super::session::{SessionEntry, SessionState};
 use super::validate::validate_credential;
 use crate::config::AuthConfig;
 use crate::error::AvixError;
@@ -48,11 +50,27 @@ impl AuthService {
         }
 
         let session_id = Uuid::new_v4().to_string();
+        let now = Utc::now();
         let entry = SessionEntry {
             session_id: session_id.clone(),
             identity_name: identity.name.clone(),
+            uid: identity.uid,
             role: identity.role,
-            created_at: std::time::Instant::now(),
+            crews: vec![],
+            scope: vec![
+                "proc".into(),
+                "signal".into(),
+                "fs".into(),
+                "snap".into(),
+                "cron".into(),
+            ],
+            state: SessionState::Active,
+            connected_at: now,
+            last_activity_at: now,
+            idle_since: None,
+            closed_at: None,
+            closed_reason: None,
+            agents: vec![],
             ttl: self.ttl,
         };
 
@@ -85,5 +103,25 @@ impl AuthService {
 
     pub async fn active_session_count(&self) -> usize {
         self.sessions.read().await.len()
+    }
+
+    /// Validate the current token and issue a fresh one with a new expiry.
+    /// Returns `(new_token_string, new_claims)`.
+    pub async fn refresh_token(
+        &self,
+        old_token: &str,
+        token_store: &ATPTokenStore,
+    ) -> Result<(String, ATPTokenClaims), AvixError> {
+        let claims = token_store.validate(old_token).await?;
+        // Session must still exist and not be expired
+        self.validate_session(&claims.session_id).await?;
+        let now = Utc::now();
+        let new_claims = ATPTokenClaims {
+            iat: now,
+            exp: now + chrono::Duration::hours(8),
+            ..claims
+        };
+        let new_token = token_store.issue(new_claims.clone()).await?;
+        Ok((new_token, new_claims))
     }
 }

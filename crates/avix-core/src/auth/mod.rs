@@ -5,4 +5,4 @@ pub mod validate;
 
 pub use atp_token::{ATPToken, ATPTokenClaims, ATPTokenStore};
 pub use service::AuthService;
-pub use session::SessionEntry;
+pub use session::{SessionEntry, SessionState};

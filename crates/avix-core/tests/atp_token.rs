@@ -4,10 +4,14 @@ use chrono::{Duration, Utc};
 
 fn make_claims(session_id: &str, ttl_secs: i64) -> ATPTokenClaims {
     ATPTokenClaims {
-        session_id: session_id.to_string(),
-        identity_name: "alice".to_string(),
+        sub: "alice".to_string(),
+        uid: 1001,
         role: Role::Admin,
-        expires_at: Utc::now() + Duration::seconds(ttl_secs),
+        crews: vec![],
+        session_id: session_id.to_string(),
+        iat: Utc::now(),
+        exp: Utc::now() + Duration::seconds(ttl_secs),
+        scope: vec!["proc".into(), "fs".into()],
     }
 }
 
@@ -17,8 +21,10 @@ fn issue_and_validate_roundtrip() {
     let token = ATPToken::issue(claims.clone(), "my-secret").unwrap();
     let validated = ATPToken::validate(&token, "my-secret").unwrap();
     assert_eq!(validated.session_id, "sess-1");
-    assert_eq!(validated.identity_name, "alice");
+    assert_eq!(validated.sub, "alice");
+    assert_eq!(validated.uid, 1001);
     assert_eq!(validated.role, Role::Admin);
+    assert_eq!(validated.scope, vec!["proc", "fs"]);
 }
 
 #[test]
@@ -86,15 +92,80 @@ async fn token_store_different_sessions_independent() {
 fn role_preserved_in_token() {
     for role in [Role::Admin, Role::Operator, Role::User, Role::Guest] {
         let claims = ATPTokenClaims {
-            session_id: "sess-role".into(),
-            identity_name: "user".into(),
+            sub: "user".into(),
+            uid: 42,
             role,
-            expires_at: Utc::now() + Duration::seconds(3600),
+            crews: vec![],
+            session_id: "sess-role".into(),
+            iat: Utc::now(),
+            exp: Utc::now() + Duration::seconds(3600),
+            scope: vec![],
         };
         let token = ATPToken::issue(claims, "secret").unwrap();
         let validated = ATPToken::validate(&token, "secret").unwrap();
         assert_eq!(validated.role, role);
     }
+}
+
+#[test]
+fn token_uses_base64url_encoding() {
+    let claims = make_claims("sess-b64", 3600);
+    let token = ATPToken::issue(claims, "secret").unwrap();
+    let payload_part = token.split('.').next().unwrap();
+    // base64url alphabet: A-Z a-z 0-9 - _  (no + / = padding)
+    assert!(
+        payload_part
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_'),
+        "payload contains non-base64url chars: {payload_part}"
+    );
+}
+
+#[test]
+fn is_expiring_soon_within_4_minutes() {
+    let claims = ATPTokenClaims {
+        sub: "alice".into(),
+        uid: 1,
+        role: Role::User,
+        crews: vec![],
+        session_id: "s".into(),
+        iat: Utc::now(),
+        exp: Utc::now() + Duration::minutes(4),
+        scope: vec![],
+    };
+    assert!(claims.is_expiring_soon());
+}
+
+#[test]
+fn is_expiring_soon_false_beyond_5_minutes() {
+    let claims = ATPTokenClaims {
+        sub: "alice".into(),
+        uid: 1,
+        role: Role::User,
+        crews: vec![],
+        session_id: "s".into(),
+        iat: Utc::now(),
+        exp: Utc::now() + Duration::minutes(10),
+        scope: vec![],
+    };
+    assert!(!claims.is_expiring_soon());
+}
+
+#[tokio::test]
+async fn token_store_is_expiring_soon() {
+    let store = ATPTokenStore::new("secret".into());
+    let claims = ATPTokenClaims {
+        sub: "alice".into(),
+        uid: 1,
+        role: Role::User,
+        crews: vec![],
+        session_id: "sess-expiring".into(),
+        iat: Utc::now(),
+        exp: Utc::now() + Duration::minutes(3),
+        scope: vec![],
+    };
+    let token = store.issue(claims).await.unwrap();
+    assert!(store.is_expiring_soon(&token).await.unwrap());
 }
 
 #[test]
