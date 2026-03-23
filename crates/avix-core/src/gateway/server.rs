@@ -13,7 +13,7 @@ use futures::stream::{SplitSink, StreamExt};
 use futures::SinkExt;
 use serde::Deserialize;
 use serde_json::json;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, warn};
 
 use crate::auth::atp_token::{ATPTokenClaims, ATPTokenStore};
@@ -21,18 +21,17 @@ use crate::auth::service::AuthService;
 use crate::gateway::atp::frame::{AtpEvent, AtpFrame, AtpReply};
 use crate::gateway::atp::types::AtpEventKind;
 use crate::gateway::config::GatewayConfig;
-use crate::gateway::event_bus::AtpEventBus;
+use crate::gateway::event_bus::{AtpEventBus, EventFilter};
 use crate::gateway::handlers::{dispatch, HandlerCtx, LiveIpcRouter, NullIpcRouter};
 use crate::gateway::replay::ReplayGuard;
 use crate::gateway::validator::validate_cmd;
 use crate::ipc::IpcClient;
+use crate::types::Role;
 
 #[derive(Clone)]
 struct AppState {
     auth_svc: Arc<AuthService>,
     token_store: Arc<ATPTokenStore>,
-    // Will be used in Gap F for event broadcasting
-    #[allow(dead_code)]
     event_bus: Arc<AtpEventBus>,
     is_admin_port: bool,
     handler_ctx: Arc<HandlerCtx>,
@@ -202,13 +201,20 @@ async fn handle_ws_upgrade(
     };
 
     let session_id = claims.session_id.clone();
+    let role = claims.role;
 
-    ws.on_upgrade(move |socket| run_connection(socket, state, session_id, token_str))
+    ws.on_upgrade(move |socket| run_connection(socket, state, session_id, role, token_str))
 }
 
 // ── Connection loop ────────────────────────────────────────────────────────────
 
-async fn run_connection(ws: WebSocket, state: AppState, session_id: String, _token_str: String) {
+async fn run_connection(
+    ws: WebSocket,
+    state: AppState,
+    session_id: String,
+    role: Role,
+    _token_str: String,
+) {
     let (ws_sender, mut ws_receiver) = ws.split();
     let (tx, rx) = mpsc::channel::<WsOutMsg>(64);
 
@@ -223,6 +229,33 @@ async fn run_connection(ws: WebSocket, state: AppState, session_id: String, _tok
     }
 
     let replay_guard = ReplayGuard::new();
+
+    // Shared per-connection event filter — updated by subscribe frames
+    let filter = Arc::new(RwLock::new(EventFilter::new(session_id.clone(), role)));
+
+    // Event pump: forward bus events that pass the filter to the WS writer
+    let mut bus_rx = state.event_bus.subscribe();
+    let pump_filter = Arc::clone(&filter);
+    let pump_tx = tx.clone();
+    let pump_session = session_id.clone();
+    tokio::spawn(async move {
+        loop {
+            match bus_rx.recv().await {
+                Ok(bus_event) => {
+                    let f = pump_filter.read().await;
+                    if f.should_receive(&bus_event) {
+                        if let Ok(s) = serde_json::to_string(&bus_event.event) {
+                            let _ = pump_tx.send(WsOutMsg::Text(s)).await;
+                        }
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!(session_id = %pump_session, "event bus lagged {} events", n);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
 
     // Writer task
     let writer = tokio::spawn(writer_task(ws_sender, rx));
@@ -240,7 +273,7 @@ async fn run_connection(ws: WebSocket, state: AppState, session_id: String, _tok
             msg = ws_receiver.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        handle_text_frame(&text, &state, &replay_guard, &session_id, &tx).await;
+                        handle_text_frame(&text, &state, &replay_guard, &session_id, &tx, &filter).await;
                     }
                     Some(Ok(Message::Pong(_))) => {
                         last_pong = tokio::time::Instant::now();
@@ -274,6 +307,7 @@ async fn handle_text_frame(
     replay_guard: &ReplayGuard,
     session_id: &str,
     tx: &mpsc::Sender<WsOutMsg>,
+    filter: &Arc<RwLock<EventFilter>>,
 ) {
     match AtpFrame::parse(text) {
         Ok(AtpFrame::Cmd(cmd)) => {
@@ -309,8 +343,8 @@ async fn handle_text_frame(
                 let _ = tx.send(WsOutMsg::Text(s)).await;
             }
         }
-        Ok(AtpFrame::Subscribe(_)) => {
-            // Handled in Gap F — ignore for now
+        Ok(AtpFrame::Subscribe(sub)) => {
+            filter.write().await.set_subscriptions(sub.events);
         }
         Err(_) => {
             // Ignore malformed frames silently
