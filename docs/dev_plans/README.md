@@ -8,6 +8,25 @@ Consider files in this folder temporary and can be deleted as per dev's needs.
 
 ---
 
+## Development Workflow
+
+After each gap plan is implemented and all tests pass:
+
+1. Run the full verification suite:
+   ```bash
+   cargo test --workspace          # all tests must pass
+   cargo clippy --workspace -- -D warnings  # zero warnings
+   cargo fmt --check               # zero formatting diff
+   ```
+2. Commit the completed gap with a descriptive message, e.g.:
+   ```bash
+   git commit -m "Implement memory-gap-C: service tools and BM25 search"
+   ```
+
+One commit per completed gap. Do not batch multiple gaps into a single commit.
+
+---
+
 ## Active Plans
 
 ### VFS Persistence (prerequisite for memory)
