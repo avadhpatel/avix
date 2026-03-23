@@ -96,6 +96,39 @@ session-manifest-gap-A  (standalone)
 
 ---
 
+### AgentStatus Gaps
+
+Align `/proc/<pid>/status.yaml` to `docs/spec/agent-status.md` with live kernel updates.
+
+| File | Description | Priority | Depends On |
+|------|-------------|----------|------------|
+| `agent-status-gap-A-schema-and-vfs.md` | Add `Pending` state + `WaitingOn` enum; extend `ProcessEntry` with denied tools, signals, metrics, context; add `AgentStatusFile` serialiser; write status.yaml on every lifecycle event | High | — |
+
+### Recommended Build Order
+
+```
+agent-status-gap-A  (standalone)
+```
+
+---
+
+### Crontab Gaps
+
+Implement the full cron subsystem per `docs/spec/crontab.md`.
+
+| File | Description | Priority | Depends On |
+|------|-------------|----------|------------|
+| `crontab-gap-A-schema-and-loader.md` | Full `CronJob` schema (user, agentTemplate, goal, args, timeout, onFailure, retryPolicy, timezone); `CrontabFile` document type; `CrontabLoader` from VFS; defaults file written by config init | High | — |
+| `crontab-gap-B-tick-loop-and-execution.md` | `CronRunner` background tick loop; agent spawn via `kernel/proc/spawn`; timeout enforcement (SIGSTOP); onFailure handling (ignore/alert/retry with backoff); wired into kernel boot | High | Crontab Gap A |
+
+### Recommended Build Order
+
+```
+crontab-gap-A  →  crontab-gap-B
+```
+
+---
+
 ### Snapshot Gaps
 
 | File | Description | Priority | Depends On |
