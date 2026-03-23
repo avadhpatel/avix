@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -7,10 +7,14 @@ use avix_core::bootstrap::Runtime;
 use avix_core::cli::config_init::{run_config_init, ConfigInitParams};
 use avix_core::cli::config_reload::{run_config_reload, ReloadParams};
 use avix_core::cli::resolve::{run_resolve, ResolveParams};
+use avix_core::config::{LlmConfig, ProviderAuth, ProviderConfig};
 use avix_core::executor::runtime_executor::{MockToolRegistry, RuntimeExecutor};
 use avix_core::executor::spawn::SpawnParams;
 use avix_core::llm_client::LlmClient;
+use avix_core::llm_svc::adapter::xai::XaiAdapter;
 use avix_core::llm_svc::autoagents_client::AutoAgentsChatClient;
+use avix_core::llm_svc::DirectHttpLlmClient;
+use avix_core::types::Modality;
 // TODO: in daemon mode use IpcLlmClient to call a running llm.svc
 use avix_core::types::token::CapabilityToken;
 use avix_core::types::Pid;
@@ -42,10 +46,7 @@ enum Cmd {
         /// Agent name
         #[arg(long, default_value = "hello-agent")]
         name: String,
-        /// LLM provider to use
-        #[arg(long, default_value = "anthropic")]
-        provider: LlmProviderArg,
-        /// Model name (uses provider default if omitted)
+        /// Override the model (uses defaultProviders.text from etc/llm.yaml if omitted)
         #[arg(long)]
         model: Option<String>,
     },
@@ -77,12 +78,6 @@ enum Cmd {
     },
 }
 
-#[derive(Clone, ValueEnum)]
-enum LlmProviderArg {
-    Anthropic,
-    Openai,
-    Ollama,
-}
 
 #[derive(Subcommand)]
 enum ConfigCmd {
@@ -132,7 +127,7 @@ async fn main() -> Result<()> {
             println!();
             println!("Next step:");
             println!(
-                "  AVIX_MASTER_KEY=<32-char-key> ANTHROPIC_API_KEY=<key> \\\n  avix run --root {} --goal \"say hello world\"",
+                "  AVIX_MASTER_KEY=<key> <PROVIDER>_API_KEY=<key> \\\n  avix run --root {} --provider <anthropic|openai|xai|ollama> --goal \"say hello world\"",
                 root.display()
             );
         }
@@ -198,13 +193,31 @@ async fn main() -> Result<()> {
             root,
             goal,
             name,
-            provider,
             model,
         } => {
             let root = expand_home(root);
 
+            // Load provider config from etc/llm.yaml in the runtime root
+            let llm_config = load_llm_config(&root)?;
+            let provider_cfg = llm_config
+                .default_provider_for(Modality::Text)
+                .ok_or_else(|| anyhow::anyhow!("no default text provider in etc/llm.yaml"))?;
+
+            // Resolve the model name before building the client so we can also
+            // pass it to SpawnParams (RuntimeExecutor sends empty model string).
+            let resolved_model = model
+                .clone()
+                .or_else(|| default_text_model(provider_cfg))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no text model found for provider '{}' in etc/llm.yaml",
+                        provider_cfg.name
+                    )
+                })?;
+
             // Build the LLM client via AutoAgents — type-erased as Box<dyn LlmClient>
-            let llm_client: Box<dyn LlmClient> = build_llm_client(provider, model)?;
+            let llm_client: Box<dyn LlmClient> =
+                build_llm_client(provider_cfg, &resolved_model)?;
 
             // Bootstrap: checks auth.conf, reads+zeroes AVIX_MASTER_KEY
             let runtime = Runtime::bootstrap_with_root(&root).await?;
@@ -228,7 +241,7 @@ async fn main() -> Result<()> {
                 session_id: uuid::Uuid::new_v4().to_string(),
                 token,
                 system_prompt: None,
-                selected_model: "claude-sonnet-4".into(),
+                selected_model: resolved_model.clone(),
             };
             let registry = Arc::new(MockToolRegistry::new());
             let mut executor = RuntimeExecutor::spawn_with_registry(params, registry).await?;
@@ -247,49 +260,99 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn build_llm_client(provider: LlmProviderArg, model: Option<String>) -> Result<Box<dyn LlmClient>> {
-    match provider {
-        LlmProviderArg::Anthropic => {
+/// Load and parse `{root}/etc/llm.yaml`.
+fn load_llm_config(root: &std::path::Path) -> Result<LlmConfig> {
+    let path = root.join("etc/llm.yaml");
+    let src = std::fs::read_to_string(&path)
+        .with_context(|| format!("cannot read {}", path.display()))?;
+    LlmConfig::from_str(&src).map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Pick the default text model from a provider config.
+/// Prefers the first `standard`-tier text model; falls back to the first text model.
+fn default_text_model(provider: &ProviderConfig) -> Option<String> {
+    let text_models: Vec<_> = provider
+        .models
+        .iter()
+        .filter(|m| m.modality == Modality::Text)
+        .collect();
+    text_models
+        .iter()
+        .find(|m| m.tier == "standard")
+        .or_else(|| text_models.first())
+        .map(|m| m.id.clone())
+}
+
+/// Build an LLM client from a `ProviderConfig` read out of `llm.yaml`.
+/// The API key is read from the env var named by `auth.secretName`.
+/// `model` is the already-resolved model name (from `--model` or `llm.yaml`).
+fn build_llm_client(provider: &ProviderConfig, model: &str) -> Result<Box<dyn LlmClient>> {
+    let api_key = match &provider.auth {
+        ProviderAuth::ApiKey { secret_name, .. } => {
+            Some(std::env::var(secret_name).with_context(|| {
+                format!(
+                    "{secret_name} not set — set this env var with your {} API key",
+                    provider.name
+                )
+            })?)
+        }
+        ProviderAuth::None => None,
+        ProviderAuth::Oauth2 { .. } => {
+            return Err(anyhow::anyhow!(
+                "OAuth2 providers are not yet supported in CLI mode"
+            ))
+        }
+    };
+
+    match provider.name.as_str() {
+        "anthropic" => {
             use autoagents::llm::backends::anthropic::Anthropic;
             use autoagents::llm::builder::LLMBuilder;
-
-            let api_key =
-                std::env::var("ANTHROPIC_API_KEY").context("ANTHROPIC_API_KEY not set")?;
-            let m = model.unwrap_or_else(|| "claude-haiku-4-5-20251001".to_string());
             let p = LLMBuilder::<Anthropic>::new()
-                .api_key(api_key)
-                .model(m)
+                .api_key(api_key.unwrap_or_default())
+                .model(model)
                 .max_tokens(4096)
                 .build()
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok(Box::new(AutoAgentsChatClient::new(p)))
         }
-        LlmProviderArg::Openai => {
+        "openai" => {
             use autoagents::llm::backends::openai::OpenAI;
             use autoagents::llm::builder::LLMBuilder;
-
-            let api_key = std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY not set")?;
-            let m = model.unwrap_or_else(|| "gpt-4.1-nano".to_string());
             let p = LLMBuilder::<OpenAI>::new()
-                .api_key(api_key)
-                .model(m)
+                .api_key(api_key.unwrap_or_default())
+                .model(model)
                 .max_tokens(4096)
                 .build()
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok(Box::new(AutoAgentsChatClient::new(p)))
         }
-        LlmProviderArg::Ollama => {
+        "xai" => {
+            // The autoagents XAI backend does not implement tool calling.
+            // Use DirectHttpLlmClient with XaiAdapter — xAI's API is
+            // OpenAI-compatible and supports function calling natively.
+            let auth = api_key.map(|k| ("Authorization".to_string(), format!("Bearer {k}")));
+            Ok(Box::new(DirectHttpLlmClient::new(
+                "https://api.x.ai",
+                model,
+                auth,
+                Arc::new(XaiAdapter::new()),
+            )))
+        }
+        "ollama" => {
             use autoagents::llm::backends::ollama::Ollama;
             use autoagents::llm::builder::LLMBuilder;
-
-            let m = model.unwrap_or_else(|| "llama3.2".to_string());
             let p = LLMBuilder::<Ollama>::new()
-                .model(m)
+                .model(model)
                 .max_tokens(4096)
                 .build()
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok(Box::new(AutoAgentsChatClient::new(p)))
         }
+        other => Err(anyhow::anyhow!(
+            "unsupported provider '{}' — supported: anthropic, openai, xai, ollama",
+            other
+        )),
     }
 }
 
