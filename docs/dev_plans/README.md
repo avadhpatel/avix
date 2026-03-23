@@ -21,23 +21,6 @@ records are lost on every avix restart.
 
 ---
 
-### Snapshot Gaps
-
-| File | Description | Priority | Depends On |
-|------|-------------|----------|------------|
-| `snapshot-gap-A-schema.md` | Align `SnapshotFile` envelope: apiVersion/kind, `SnapshotMetadata`, `SnapshotSpec` with all fields, `CapturedBy`/`Trigger` enums, async `SnapshotStore` | High | — |
-| `snapshot-gap-B-capture.md` | Snapshot capture: SIGSAVE handler writes to VFS, checksum computation, `snap/save` + `snap/list` + `snap/delete` syscalls, auto-snapshot task | High | Snapshot Gap A |
-| `snapshot-gap-C-restore.md` | Snapshot restore: checksum verify, fresh `CapabilityToken`, context rebuild, pending request re-issue, pipe SIGPIPE, `snap/restore` syscall | Medium | Snapshot Gap A, Gap B |
-
-> **Note:** `SnapshotMemory { episodic_events, semantic_keys }` in snapshot-gap-A are
-> count fields populated from memory.svc. No snapshot plan content has been removed.
-
-### Recommended Build Order
-
-```
-snapshot-gap-A  →  snapshot-gap-B  →  snapshot-gap-C
-```
-
 ---
 
 ## Development Workflow
