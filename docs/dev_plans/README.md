@@ -8,26 +8,34 @@ Consider files in this folder temporary and can be deleted as per dev's needs.
 
 ---
 
-## ATP / Gateway Gaps
+## Active Plans
 
-Implement `gateway.svc` — the WebSocket server and full Avix Terminal Protocol per
-`docs/spec/avix-terminal-protocol.md`.
+### VFS Persistence
 
 | File | Description | Priority | Depends On |
 |------|-------------|----------|------------|
-| `atp-gap-A-message-framing.md` | Wire types: `AtpFrame`, `AtpCmd`, `AtpReply`, `AtpEvent`, `AtpSubscribe`, `AtpErrorCode` (11 codes), `AtpDomain` (11), `AtpEventKind` (16) | **Critical** | — |
-| `atp-gap-B-token-and-session.md` | Align `ATPTokenClaims` (uid, crews, scope, iat); base64url encoding; `SessionState`; `SessionEntry` full fields; token refresh; `is_expiring_soon` | **Critical** | Gap A |
-| `atp-gap-C-access-control.md` | Full domain × role matrix; ownership check; `/secrets/` & `/proc/` hard vetoes; admin-port gate; replay protection (`ReplayGuard`); `AtpValidator` pipeline | **Critical** | Gap A, Gap B |
-| `atp-gap-D-websocket-transport.md` | `GatewayServer` (axum); `POST /atp/auth/login`; `GET /atp` WS upgrade; dual-port 7700/7701; keep-alive ping/pong; `session.ready` push; 60 s grace window | **Critical** | Gap A–C |
-| `atp-gap-E-command-domains.md` | All 11 domain handlers (~60 ops): auth, proc (full), signal, fs (full), snap, cron, users, crews, cap, sys (full), pipe | High | Gap A–D |
-| `atp-gap-F-event-bus.md` | `AtpEventBus` (broadcast); `EventFilter` (role + ownership + subscription); 16 event kinds; VFS-change → `fs.changed`; publish helpers | High | Gap A, Gap D |
-| `atp-gap-G-hil-integration.md` | `HilRequest` VFS schema; `HilManager`; `hil.request` / `hil.resolved` events; timeout auto-deny; `SIGRESUME + approvalToken` → atomic consume → `EUSED` | High | Gap A–F |
+| `fs-gap-E-local-provider.md` | `StorageProvider` trait + `LocalProvider` (disk-backed) + `VfsRouter` replacing `Arc<MemFs>`; Phase 2 bootstrap mounts `/users/`, `/crews/`, `/services/` to disk | **Critical** | — |
+
+Must be completed before any memory persistence is meaningful. Without it, all memory
+records are lost on every avix restart.
+
+---
+
+### Snapshot Gaps
+
+| File | Description | Priority | Depends On |
+|------|-------------|----------|------------|
+| `snapshot-gap-A-schema.md` | Align `SnapshotFile` envelope: apiVersion/kind, `SnapshotMetadata`, `SnapshotSpec` with all fields, `CapturedBy`/`Trigger` enums, async `SnapshotStore` | High | — |
+| `snapshot-gap-B-capture.md` | Snapshot capture: SIGSAVE handler writes to VFS, checksum computation, `snap/save` + `snap/list` + `snap/delete` syscalls, auto-snapshot task | High | Snapshot Gap A |
+| `snapshot-gap-C-restore.md` | Snapshot restore: checksum verify, fresh `CapabilityToken`, context rebuild, pending request re-issue, pipe SIGPIPE, `snap/restore` syscall | Medium | Snapshot Gap A, Gap B |
+
+> **Note:** `SnapshotMemory { episodic_events, semantic_keys }` in snapshot-gap-A are
+> count fields populated from memory.svc. No snapshot plan content has been removed.
 
 ### Recommended Build Order
 
 ```
-atp-gap-A  →  atp-gap-B  →  atp-gap-C  →  atp-gap-D  →  atp-gap-E
-                                                      ↘  atp-gap-F  →  atp-gap-G
+snapshot-gap-A  →  snapshot-gap-B  →  snapshot-gap-C
 ```
 
 ---
@@ -44,133 +52,12 @@ After each gap plan is implemented and all tests pass:
    ```
 2. Commit the completed gap with a descriptive message, e.g.:
    ```bash
-   git commit -m "Implement memory-gap-C: service tools and BM25 search"
+   git commit -m "Implement snapshot-gap-A: SnapshotFile schema and SnapshotStore"
    ```
 
 One commit per completed gap. Do not batch multiple gaps into a single commit.
 
----
-
-## Active Plans
-
-### VFS Persistence (prerequisite for memory)
-
-| File | Description | Priority | Depends On |
-|------|-------------|----------|------------|
-| `fs-gap-E-local-provider.md` | `StorageProvider` trait + `LocalProvider` (disk-backed) + `VfsRouter` replacing `Arc<MemFs>`; Phase 2 bootstrap mounts `/users/`, `/crews/`, `/services/` to disk | **Critical** | — |
-
-Must be completed before any memory gap. Without it, all memory records are lost on every avix restart.
-
----
-
-### Memory Service Gaps
-
-Implement `memory.svc` — the full agent memory subsystem per `docs/spec/memory-service.md`.
-
-| File | Description | Priority | Depends On |
-|------|-------------|----------|------------|
-| `memory-gap-A-schema.md` | Core schema types: MemoryRecord, UserPreferenceModel, MemoryGrant; align KernelConfig.memory and AgentManifest memory block to spec | High | — |
-| `memory-gap-B-vfs-layout.md` | VFS tree structure: init memory dirs at spawn, block agent direct writes to memory trees, /proc/services/memory/ bootstrap | High | Gap A |
-| `memory-gap-C-service-tools.md` | memory.svc service module and all 7 tool handlers; BM25 search; ACL enforcement | High | Gap A, Gap B |
-| `memory-gap-D-capability-spawn.md` | Add memory:read/write/share to CapabilityToolMap; spawn injection of memory context into system prompt; SIGSTOP auto-log | High | Gap A, Gap B, Gap C |
-| `memory-gap-E-retrieval-model.md` | Full retrieval: vector index (llm/embed), RRF merge, LLM re-rank; graceful degradation; caller token pass-through | Medium | Gap C, Gap D |
-| `memory-gap-F-hil-sharing.md` | memory/share-request HIL flow; MemoryGrant creation; grants scope in retrieve; session grant cleanup | Low | Gap A, Gap C, Gap D |
-| `memory-gap-G-gc-cron.md` | memory-gc-daily and memory-reindex-weekly cron tasks; wire CronScheduler into kernel boot | Low | Gap C, Gap E |
-
-### Recommended Build Order
-
-```
-fs-gap-E  →  memory-gap-A  →  memory-gap-B  →  memory-gap-C  →  memory-gap-D  →  memory-gap-E
-                                                                   ↘  memory-gap-F
-                                                                   ↘  memory-gap-G
-```
-
----
-
-### AgentManifest Gaps
-
-Implement the `AgentManifest` static descriptor per `docs/spec/agent-manifest.md`.
-
-| File | Description | Priority | Depends On |
-|------|-------------|----------|------------|
-| `manifest-gap-A-schema.md` | Core schema types: `AgentManifest`, `ManifestEntrypoint`, `ManifestTools`, `ManifestMemory`, `ManifestSnapshot`, `ManifestDefaults`; YAML round-trip; VFS path helpers | High | — |
-| `manifest-gap-B-spawn-resolution.md` | `ManifestLoader` (VFS load + signature verify), `ToolGrantResolver` (required/optional × user ACL), `ModelValidator`, `GoalRenderer`, `SpawnResolver`; extend `SpawnParams` | High | Gap A |
-
-### Recommended Build Order
-
-```
-manifest-gap-A  →  manifest-gap-B
-```
-
----
-
-### SessionManifest Gaps
-
-Align `SessionEntry` and the VFS manifest it writes to `docs/spec/session-manifest.md`.
-
-| File | Description | Priority | Depends On |
-|------|-------------|----------|------------|
-| `session-manifest-gap-A-schema.md` | Add missing fields to `SessionEntry`: `uid`, `shell`, `tty`, `workingDirectory`, `agents: Vec<AgentRef>`, `quotaSnapshot`, `lastActivityAt`, `closedAt`, `closedReason`; replace `SessionStatus` with spec-aligned `SessionState`; update VFS manifest output | Medium | — |
-
-### Recommended Build Order
-
-```
-session-manifest-gap-A  (standalone)
-```
-
----
-
-### AgentStatus Gaps
-
-Align `/proc/<pid>/status.yaml` to `docs/spec/agent-status.md` with live kernel updates.
-
-| File | Description | Priority | Depends On |
-|------|-------------|----------|------------|
-| `agent-status-gap-A-schema-and-vfs.md` | Add `Pending` state + `WaitingOn` enum; extend `ProcessEntry` with denied tools, signals, metrics, context; add `AgentStatusFile` serialiser; write status.yaml on every lifecycle event | High | — |
-
-### Recommended Build Order
-
-```
-agent-status-gap-A  (standalone)
-```
-
----
-
-### Crontab Gaps
-
-Implement the full cron subsystem per `docs/spec/crontab.md`.
-
-| File | Description | Priority | Depends On |
-|------|-------------|----------|------------|
-| `crontab-gap-A-schema-and-loader.md` | Full `CronJob` schema (user, agentTemplate, goal, args, timeout, onFailure, retryPolicy, timezone); `CrontabFile` document type; `CrontabLoader` from VFS; defaults file written by config init | High | — |
-| `crontab-gap-B-tick-loop-and-execution.md` | `CronRunner` background tick loop; agent spawn via `kernel/proc/spawn`; timeout enforcement (SIGSTOP); onFailure handling (ignore/alert/retry with backoff); wired into kernel boot | High | Crontab Gap A |
-
-### Recommended Build Order
-
-```
-crontab-gap-A  →  crontab-gap-B
-```
-
----
-
-### Snapshot Gaps
-
-| File | Description | Priority | Depends On |
-|------|-------------|----------|------------|
-| `snapshot-gap-A-schema.md` | Align SnapshotFile envelope: apiVersion/kind, SnapshotMetadata, SnapshotSpec with all fields, CapturedBy/Trigger enums, async SnapshotStore | High | — |
-| `snapshot-gap-B-capture.md` | Snapshot capture: SIGSAVE handler writes to VFS, checksum computation, snap/save + snap/list + snap/delete syscalls, auto-snapshot task | High | Snapshot Gap A |
-| `snapshot-gap-C-restore.md` | Snapshot restore: checksum verify, fresh CapabilityToken, context rebuild, pending request re-issue, pipe SIGPIPE, snap/restore syscall | Medium | Snapshot Gap A, Gap B |
-
-> **Note:** `SnapshotMemory { episodic_events, semantic_keys }` in snapshot-gap-A are
-> count fields populated from memory.svc after memory-gap-C lands (see snapshot-gap-B
-> `CaptureParams`). No snapshot plan content has been removed — the plans remain valid.
-> The `spec.memory.*` counts complement memory.svc; they do not replace it.
-
-### Recommended Build Order
-
-```
-snapshot-gap-A  →  snapshot-gap-B  →  snapshot-gap-C
-```
+Delete the plan file and update this README once the work is committed.
 
 ---
 
