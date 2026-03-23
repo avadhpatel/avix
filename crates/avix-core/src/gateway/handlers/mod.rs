@@ -9,6 +9,7 @@ use crate::gateway::atp::frame::AtpReply;
 use crate::gateway::atp::types::AtpDomain;
 use crate::gateway::validator::ValidatedCmd;
 use crate::ipc::{message::JsonRpcRequest, IpcClient};
+use crate::kernel::HilManager;
 
 pub mod auth;
 pub mod cap;
@@ -99,6 +100,7 @@ pub struct HandlerCtx {
     pub ipc: Arc<dyn IpcRouter>,
     pub token_store: Arc<ATPTokenStore>,
     pub auth_svc: Arc<AuthService>,
+    pub hil_manager: Option<Arc<HilManager>>,
 }
 
 /// Route a validated command to the correct domain handler.
@@ -202,6 +204,7 @@ pub(crate) mod test_helpers {
         HandlerCtx {
             ipc: mock,
             token_store: Arc::new(ATPTokenStore::new("test-secret".into())),
+            hil_manager: None,
             auth_svc: Arc::new(AuthService::new(AuthConfig {
                 api_version: "v1".into(),
                 kind: "AuthConfig".into(),

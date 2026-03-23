@@ -94,6 +94,7 @@ mod tests {
             ipc,
             token_store: Arc::clone(&store),
             auth_svc,
+            hil_manager: None,
         };
         (ctx, store)
     }

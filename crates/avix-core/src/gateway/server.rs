@@ -91,6 +91,7 @@ impl GatewayServer {
             ipc,
             token_store: Arc::clone(&self.token_store),
             auth_svc: Arc::clone(&self.auth_svc),
+            hil_manager: None,
         });
 
         let state = AppState {
