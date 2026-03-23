@@ -30,8 +30,8 @@ impl MemoryService {
             active_session_grants: 0,
             updated_at: Utc::now(),
         };
-        let yaml = serde_yaml::to_string(&status)
-            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let yaml =
+            serde_yaml::to_string(&status).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         use crate::memfs::VfsPath;
         let path = VfsPath::parse(memory_svc_status_path())
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -53,9 +53,7 @@ impl MemoryService {
             "memory/update-preference" => {
                 tools::update_preference::handle(self, params, caller).await
             }
-            "memory/get-preferences" => {
-                tools::get_preferences::handle(self, params, caller).await
-            }
+            "memory/get-preferences" => tools::get_preferences::handle(self, params, caller).await,
             "memory/forget" => tools::forget::handle(self, params, caller).await,
             "memory/share-request" => tools::share_request::handle(self, params, caller).await,
             _ => Err(AvixError::NotFound(format!(
@@ -80,9 +78,7 @@ impl CallerContext {
     pub fn has_capability(&self, cap: &str) -> bool {
         match cap {
             "memory:read" => self.granted_tools.iter().any(|t| {
-                t == "memory/retrieve"
-                    || t == "memory/get-fact"
-                    || t == "memory/get-preferences"
+                t == "memory/retrieve" || t == "memory/get-fact" || t == "memory/get-preferences"
             }),
             "memory:write" => self.granted_tools.iter().any(|t| {
                 t == "memory/log-event"
@@ -141,9 +137,7 @@ pub(super) async fn find_record_by_id(
                         crate::memory_svc::MemoryRecordType::Semantic => {
                             if let Some(ref key) = record.spec.key {
                                 crate::memory_svc::MemoryRecord::vfs_path_semantic(
-                                    owner,
-                                    agent_name,
-                                    key,
+                                    owner, agent_name, key,
                                 )
                             } else {
                                 continue;

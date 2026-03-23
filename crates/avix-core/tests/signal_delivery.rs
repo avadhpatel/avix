@@ -169,6 +169,8 @@ async fn agent_pause_resume_via_signal() {
         spawned_by: "alice".into(),
         session_id: "sess-1".into(),
         token: CapabilityToken::test_token(&[]),
+        system_prompt: None,
+        selected_model: "claude-sonnet-4".into(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -234,6 +236,8 @@ async fn agent_kill_sets_killed_flag() {
         spawned_by: "alice".into(),
         session_id: "sess-2".into(),
         token: CapabilityToken::test_token(&[]),
+        system_prompt: None,
+        selected_model: "claude-sonnet-4".into(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await

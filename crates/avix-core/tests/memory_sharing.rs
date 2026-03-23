@@ -1,10 +1,10 @@
 use avix_core::config::MemoryConfig;
+use avix_core::memfs::{VfsPath, VfsRouter};
+use avix_core::memory_svc::service::{CallerContext, MemoryService};
 use avix_core::memory_svc::{
     sharing::{cleanup_session_grants, on_memory_share_approved},
     MemoryGrant, MemoryGrantScope,
 };
-use avix_core::memory_svc::service::{CallerContext, MemoryService};
-use avix_core::memfs::{VfsPath, VfsRouter};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -46,7 +46,10 @@ async fn share_request_requires_memory_share_cap() {
             &caller,
         )
         .await;
-    assert!(result.is_err(), "expected error when memory:share not granted");
+    assert!(
+        result.is_err(),
+        "expected error when memory:share not granted"
+    );
     let err = result.unwrap_err().to_string();
     assert!(
         err.contains("memory:share") || err.contains("permission") || err.contains("denied"),
@@ -139,7 +142,9 @@ async fn session_cleanup_removes_session_grants() {
     assert!(!yaml_before.is_empty(), "grant should exist before cleanup");
 
     // Cleanup session grants for "writer" in session "sess-xyz"
-    cleanup_session_grants(&svc, "writer", "sess-xyz").await.unwrap();
+    cleanup_session_grants(&svc, "writer", "sess-xyz")
+        .await
+        .unwrap();
 
     let after = vfs.list(&grant_dir).await.unwrap_or_default();
     let yaml_after: Vec<_> = after.iter().filter(|e| e.ends_with(".yaml")).collect();
@@ -187,11 +192,16 @@ async fn session_cleanup_preserves_permanent_grants() {
     .unwrap();
 
     // Cleanup session grants — permanent should survive
-    cleanup_session_grants(&svc, "writer", "sess-xyz").await.unwrap();
+    cleanup_session_grants(&svc, "writer", "sess-xyz")
+        .await
+        .unwrap();
 
     let session_dir = VfsPath::parse("/proc/services/memory/agents/writer/grants").unwrap();
     let session_entries = vfs.list(&session_dir).await.unwrap_or_default();
-    let session_yaml: Vec<_> = session_entries.iter().filter(|e| e.ends_with(".yaml")).collect();
+    let session_yaml: Vec<_> = session_entries
+        .iter()
+        .filter(|e| e.ends_with(".yaml"))
+        .collect();
     assert!(
         session_yaml.is_empty(),
         "session grants dir should be empty after cleanup"
@@ -200,7 +210,10 @@ async fn session_cleanup_preserves_permanent_grants() {
     // Permanent grant lives in user tree — should still be there
     let perm_dir = VfsPath::parse("/users/alice/memory/researcher/grants").unwrap();
     let perm_entries = vfs.list(&perm_dir).await.unwrap();
-    let perm_yaml: Vec<_> = perm_entries.iter().filter(|e| e.ends_with(".yaml")).collect();
+    let perm_yaml: Vec<_> = perm_entries
+        .iter()
+        .filter(|e| e.ends_with(".yaml"))
+        .collect();
     assert!(
         !perm_yaml.is_empty(),
         "permanent grants should survive session cleanup"
@@ -229,10 +242,7 @@ async fn grant_record_has_correct_fields() {
     let grant_dir = VfsPath::parse("/proc/services/memory/agents/writer/grants").unwrap();
     let entries = vfs.list(&grant_dir).await.unwrap();
     let grant_file = entries.iter().find(|e| e.ends_with(".yaml")).unwrap();
-    let full_path = format!(
-        "/proc/services/memory/agents/writer/grants/{}",
-        grant_file
-    );
+    let full_path = format!("/proc/services/memory/agents/writer/grants/{}", grant_file);
     let bytes = vfs
         .read(&VfsPath::parse(&full_path).unwrap())
         .await

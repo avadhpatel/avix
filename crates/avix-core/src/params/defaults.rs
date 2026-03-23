@@ -137,7 +137,9 @@ fn merge_memory(base: &MemoryDefaults, over: &MemoryDefaults) -> MemoryDefaults 
         semantic_enabled: over.semantic_enabled.or(base.semantic_enabled),
         preferences_enabled: over.preferences_enabled.or(base.preferences_enabled),
         auto_inject_at_spawn: over.auto_inject_at_spawn.or(base.auto_inject_at_spawn),
-        auto_log_on_session_end: over.auto_log_on_session_end.or(base.auto_log_on_session_end),
+        auto_log_on_session_end: over
+            .auto_log_on_session_end
+            .or(base.auto_log_on_session_end),
     }
 }
 

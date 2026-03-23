@@ -40,4 +40,19 @@ pub enum AvixError {
 
     #[error("not found: {0}")]
     NotFound(String),
+
+    #[error("manifest not found at path: {path}")]
+    ManifestNotFound { path: String },
+
+    #[error("manifest signature mismatch at path: {path}")]
+    ManifestSignatureMismatch { path: String },
+
+    #[error("manifest kind mismatch: expected '{expected}', found '{found}'")]
+    ManifestKindMismatch { expected: String, found: String },
+
+    #[error("required tool '{tool}' denied for agent '{agent}'")]
+    RequiredToolDenied { tool: String, agent: String },
+
+    #[error("model requirements not met: {reason}")]
+    ModelRequirementsNotMet { reason: String },
 }

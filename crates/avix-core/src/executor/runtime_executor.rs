@@ -229,13 +229,15 @@ impl RuntimeExecutor {
             None => return,
         };
         // Only init if the agent has any memory tools
-        let has_memory = self.token.granted_tools.iter().any(|t| t.starts_with("memory/"));
+        let has_memory = self
+            .token
+            .granted_tools
+            .iter()
+            .any(|t| t.starts_with("memory/"));
         if !has_memory {
             return;
         }
-        if let Err(e) =
-            init_user_memory_tree(&vfs, &self.spawned_by, &self.agent_name).await
-        {
+        if let Err(e) = init_user_memory_tree(&vfs, &self.spawned_by, &self.agent_name).await {
             tracing::warn!(
                 pid = self.pid.as_u32(),
                 err = ?e,
@@ -263,8 +265,7 @@ impl RuntimeExecutor {
         if let Ok(bytes) = vfs.read(&VfsPath::parse(&pref_path).ok()?).await {
             if let Ok(model) = UserPreferenceModel::from_yaml(&String::from_utf8_lossy(&bytes)) {
                 if !model.spec.summary.is_empty() {
-                    let mut pref_text =
-                        format!("User preferences:\n  {}", model.spec.summary);
+                    let mut pref_text = format!("User preferences:\n  {}", model.spec.summary);
                     if !model.spec.corrections.is_empty() {
                         pref_text.push_str("\n\n  Corrections to avoid repeating:");
                         for c in &model.spec.corrections {
@@ -340,7 +341,8 @@ impl RuntimeExecutor {
 
     /// Record a conversation message in the history (for session auto-log).
     pub fn push_conversation_message(&mut self, role: &str, content: &str) {
-        self.conversation_history.push((role.to_string(), content.to_string()));
+        self.conversation_history
+            .push((role.to_string(), content.to_string()));
     }
 
     /// Deliver a signal to the executor (used in tests; in production, signals arrive via socket).
@@ -1227,6 +1229,8 @@ mod tests {
             spawned_by: "kernel".into(),
             session_id: "sess-test".into(),
             token: CapabilityToken::test_token(caps),
+            system_prompt: None,
+            selected_model: "claude-sonnet-4".into(),
         }
     }
 
@@ -1301,6 +1305,8 @@ mod tests {
             spawned_by: "kernel".into(),
             session_id: "sess".into(),
             token: CapabilityToken::test_token(&["cap/list"]), // has cap/list, not fs/read
+            system_prompt: None,
+            selected_model: "claude-sonnet-4".into(),
         };
         let mut executor = RuntimeExecutor::spawn_with_registry(params, registry)
             .await

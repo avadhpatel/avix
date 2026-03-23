@@ -32,9 +32,7 @@ impl LocalProvider {
         let rel = rel.trim_start_matches('/');
 
         if rel.contains("..") {
-            return Err(AvixError::Io(format!(
-                "path traversal rejected: '{rel}'"
-            )));
+            return Err(AvixError::Io(format!("path traversal rejected: '{rel}'")));
         }
 
         let candidate = self.root.join(rel);
@@ -84,13 +82,15 @@ impl LocalProvider {
     /// Returns `ENOENT`-style error if the directory does not exist.
     pub async fn list(&self, rel_dir: &str) -> Result<Vec<String>, AvixError> {
         let path = self.resolve_path(rel_dir)?;
-        let mut rd = tokio::fs::read_dir(&path).await.map_err(|e| {
-            AvixError::NotFound(format!("list {rel_dir}: {e}"))
-        })?;
+        let mut rd = tokio::fs::read_dir(&path)
+            .await
+            .map_err(|e| AvixError::NotFound(format!("list {rel_dir}: {e}")))?;
         let mut entries = Vec::new();
-        while let Some(entry) = rd.next_entry().await.map_err(|e| {
-            AvixError::Io(format!("read dir entry in {rel_dir}: {e}"))
-        })? {
+        while let Some(entry) = rd
+            .next_entry()
+            .await
+            .map_err(|e| AvixError::Io(format!("read dir entry in {rel_dir}: {e}")))?
+        {
             if let Some(name) = entry.file_name().to_str() {
                 entries.push(name.to_string());
             }

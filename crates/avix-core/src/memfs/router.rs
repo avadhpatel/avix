@@ -125,8 +125,8 @@ impl VfsRouter {
     /// listable and discoverable. Idempotent — safe to call multiple times.
     pub async fn ensure_dir(&self, path: &VfsPath) -> Result<(), AvixError> {
         let keep_str = format!("{}/.keep", path.as_str().trim_end_matches('/'));
-        let keep_path = VfsPath::parse(&keep_str)
-            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let keep_path =
+            VfsPath::parse(&keep_str).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         if !self.exists(&keep_path).await {
             self.write(&keep_path, b".keep".to_vec()).await?;
         }

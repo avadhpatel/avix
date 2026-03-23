@@ -4,8 +4,8 @@ use crate::error::AvixError;
 use crate::memfs::VfsPath;
 
 use super::schema::{
-    MemoryGrant, MemoryGrantGrantee, MemoryGrantGrantor, MemoryGrantMetadata, MemoryGrantScope,
-    MemoryGrantSpec, new_memory_id,
+    new_memory_id, MemoryGrant, MemoryGrantGrantee, MemoryGrantGrantor, MemoryGrantMetadata,
+    MemoryGrantScope, MemoryGrantSpec,
 };
 use super::service::MemoryService;
 use super::vfs_layout::memory_agent_grants_path;
@@ -64,8 +64,7 @@ pub async fn on_memory_share_approved(
         MemoryGrantScope::Permanent => MemoryGrant::vfs_path(owner, grantor_agent, &grant_id),
     };
 
-    let vfs_path =
-        VfsPath::parse(&path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+    let vfs_path = VfsPath::parse(&path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
     svc.vfs.write(&vfs_path, yaml.into_bytes()).await
 }
 
@@ -80,12 +79,8 @@ pub async fn cleanup_session_grants(
     agent_name: &str,
     session_id: &str,
 ) -> Result<(), AvixError> {
-    let grant_dir = format!(
-        "/proc/services/memory/agents/{}/grants",
-        agent_name
-    );
-    let vfs_dir = VfsPath::parse(&grant_dir)
-        .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+    let grant_dir = format!("/proc/services/memory/agents/{}/grants", agent_name);
+    let vfs_dir = VfsPath::parse(&grant_dir).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
     let entries = svc.vfs.list(&vfs_dir).await.unwrap_or_default();
 
@@ -106,8 +101,7 @@ pub async fn cleanup_session_grants(
         };
 
         if let Ok(grant) = MemoryGrant::from_yaml(&yaml) {
-            if grant.spec.scope == MemoryGrantScope::Session
-                && grant.spec.session_id == session_id
+            if grant.spec.scope == MemoryGrantScope::Session && grant.spec.session_id == session_id
             {
                 svc.vfs.delete(&vfs_path).await.ok();
             }
@@ -121,8 +115,7 @@ pub async fn cleanup_session_grants(
 
 /// Read and parse a `MemoryGrant` from a VFS path.
 pub async fn load_grant(svc: &MemoryService, path: &str) -> Result<MemoryGrant, AvixError> {
-    let vfs_path =
-        VfsPath::parse(path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+    let vfs_path = VfsPath::parse(path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
     let bytes = svc
         .vfs
         .read(&vfs_path)

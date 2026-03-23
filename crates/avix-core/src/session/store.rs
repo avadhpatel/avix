@@ -2,8 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use redb::{Database, TableDefinition};
+use serde::Serialize;
 
-use super::entry::{SessionEntry, SessionStatus};
+use super::entry::{AgentRef, QuotaSnapshot, SessionEntry, SessionState};
 use crate::error::AvixError;
 use crate::memfs::{VfsPath, VfsRouter};
 
@@ -18,7 +19,6 @@ impl SessionStore {
     pub async fn open(path: impl Into<PathBuf>) -> Result<Self, AvixError> {
         let path = path.into();
         let db = Database::create(&path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        // Ensure table exists
         let write_txn = db
             .begin_write()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -82,13 +82,11 @@ impl SessionStore {
     }
 
     pub async fn delete(&self, session_id: &str) -> Result<(), AvixError> {
-        // Load username before deleting so we can clean up the VFS entry
         let username = self
             .load(session_id)
             .await?
             .map(|e| e.username)
             .unwrap_or_default();
-
         let write_txn = self
             .db
             .begin_write()
@@ -118,10 +116,10 @@ impl SessionStore {
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         use redb::ReadableTable;
         let mut entries = Vec::new();
-        let iter = table
+        for item in table
             .iter()
-            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        for item in iter {
+            .map_err(|e| AvixError::ConfigParse(e.to_string()))?
+        {
             let (_, v) = item.map_err(|e| AvixError::ConfigParse(e.to_string()))?;
             let entry: SessionEntry = serde_json::from_str(v.value())
                 .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -140,28 +138,17 @@ impl SessionStore {
         if entry.username.is_empty() {
             return;
         }
-        let message_count = entry.messages.len();
-        let status_str = match entry.status {
-            SessionStatus::Active => "active",
-            SessionStatus::Completed => "completed",
-            SessionStatus::Error => "error",
+        let view = SessionManifestView::from(entry);
+        let yaml = match serde_yaml::to_string(&view) {
+            Ok(y) => y,
+            Err(_) => return,
         };
-        let manifest = format!(
-            "apiVersion: avix/v1\nkind: SessionManifest\nmetadata:\n  sessionId: {id}\n  username: {username}\n  createdAt: {created}\n  updatedAt: {updated}\nspec:\n  agentName: {agent}\n  goal: {goal:?}\n  status: {status}\n  messageCount: {message_count}\n",
-            id = entry.session_id,
-            username = entry.username,
-            created = entry.created_at.to_rfc3339(),
-            updated = entry.updated_at.to_rfc3339(),
-            agent = entry.agent_name,
-            goal = entry.goal,
-            status = status_str,
-        );
         let path_str = format!(
             "/proc/users/{}/sessions/{}.yaml",
             entry.username, entry.session_id
         );
         if let Ok(path) = VfsPath::parse(&path_str) {
-            let _ = vfs.write(&path, manifest.into_bytes()).await;
+            let _ = vfs.write(&path, yaml.into_bytes()).await;
         }
     }
 
@@ -176,6 +163,74 @@ impl SessionStore {
         let path_str = format!("/proc/users/{username}/sessions/{session_id}.yaml");
         if let Ok(path) = VfsPath::parse(&path_str) {
             let _ = vfs.delete(&path).await;
+        }
+    }
+}
+
+// ── VFS manifest view (spec-compliant schema, excludes redb-internal fields) ─
+
+#[derive(Serialize)]
+struct SessionManifestView<'a> {
+    #[serde(rename = "apiVersion")]
+    api_version: &'static str,
+    kind: &'static str,
+    metadata: ManifestMeta<'a>,
+    spec: ManifestSpec<'a>,
+    status: ManifestStatus<'a>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestMeta<'a> {
+    session_id: &'a str,
+    created_at: &'a chrono::DateTime<chrono::Utc>,
+    user: &'a str,
+    uid: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestSpec<'a> {
+    shell: &'a str,
+    tty: bool,
+    working_directory: &'a str,
+    agents: &'a [AgentRef],
+    quota_snapshot: &'a QuotaSnapshot,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestStatus<'a> {
+    state: &'a SessionState,
+    last_activity_at: &'a chrono::DateTime<chrono::Utc>,
+    closed_at: Option<&'a chrono::DateTime<chrono::Utc>>,
+    closed_reason: Option<&'a str>,
+}
+
+impl<'a> From<&'a SessionEntry> for SessionManifestView<'a> {
+    fn from(e: &'a SessionEntry) -> Self {
+        Self {
+            api_version: "avix/v1",
+            kind: "SessionManifest",
+            metadata: ManifestMeta {
+                session_id: &e.session_id,
+                created_at: &e.created_at,
+                user: &e.username,
+                uid: e.uid,
+            },
+            spec: ManifestSpec {
+                shell: &e.shell,
+                tty: e.tty,
+                working_directory: &e.working_directory,
+                agents: &e.agents,
+                quota_snapshot: &e.quota_snapshot,
+            },
+            status: ManifestStatus {
+                state: &e.state,
+                last_activity_at: &e.last_activity_at,
+                closed_at: e.closed_at.as_ref(),
+                closed_reason: e.closed_reason.as_deref(),
+            },
         }
     }
 }

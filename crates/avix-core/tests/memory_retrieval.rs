@@ -1,9 +1,9 @@
 use avix_core::config::MemoryConfig;
+use avix_core::memfs::VfsRouter;
 use avix_core::memory_svc::{
     index::{is_vector_index_stale, rrf_merge, VectorEntry, VectorIndex},
     service::{CallerContext, MemoryService},
 };
-use avix_core::memfs::VfsRouter;
 use chrono::Utc;
 use serde_json::json;
 use std::sync::Arc;
@@ -34,18 +34,18 @@ fn make_caller(owner: &str, agent: &str) -> CallerContext {
 // T-ME-01: rrf_merge deduplicates and ranks by score
 #[test]
 fn rrf_merge_deduplicates() {
-    let bm25 = vec![
-        ("a".to_string(), 0.9f32),
-        ("b".to_string(), 0.7),
-    ];
-    let vector = vec![
-        ("b".to_string(), 0.95f32),
-        ("c".to_string(), 0.8),
-    ];
+    let bm25 = vec![("a".to_string(), 0.9f32), ("b".to_string(), 0.7)];
+    let vector = vec![("b".to_string(), 0.95f32), ("c".to_string(), 0.8)];
     let merged = rrf_merge(bm25, vector, 60);
     // b appears in both lists → should rank first due to RRF boost
-    assert!(merged.contains(&"b".to_string()), "b should be in merged (appears in both lists)");
-    assert_eq!(merged[0], "b", "b should rank first (appears in both lists)");
+    assert!(
+        merged.contains(&"b".to_string()),
+        "b should be in merged (appears in both lists)"
+    );
+    assert_eq!(
+        merged[0], "b",
+        "b should rank first (appears in both lists)"
+    );
     // a and c should appear too
     assert!(merged.contains(&"a".to_string()));
     assert!(merged.contains(&"c".to_string()));

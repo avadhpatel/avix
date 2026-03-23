@@ -70,8 +70,7 @@ pub async fn handle(
         index: MemoryRecordIndex::default(),
     };
     let record = MemoryRecord::new(meta, spec);
-    let path =
-        MemoryRecord::vfs_path_episodic(&caller.owner, &caller.agent_name, &now, &id);
+    let path = MemoryRecord::vfs_path_episodic(&caller.owner, &caller.agent_name, &now, &id);
     store::write_record(svc.vfs(), &path, &record).await?;
 
     Ok(json!({ "id": id, "stored": true, "indexed": false }))

@@ -154,7 +154,10 @@ impl MemoryRecord {
     /// VFS path for semantic records.
     /// `/users/<owner>/memory/<agent-name>/semantic/<key>.yaml`
     pub fn vfs_path_semantic(owner: &str, agent_name: &str, key: &str) -> String {
-        format!("/users/{}/memory/{}/semantic/{}.yaml", owner, agent_name, key)
+        format!(
+            "/users/{}/memory/{}/semantic/{}.yaml",
+            owner, agent_name, key
+        )
     }
 }
 
@@ -398,10 +401,7 @@ mod tests {
         let yaml = record.to_yaml().unwrap();
         let parsed = MemoryRecord::from_yaml(&yaml).unwrap();
         assert_eq!(parsed.metadata.record_type, MemoryRecordType::Semantic);
-        assert_eq!(
-            parsed.spec.key.as_deref(),
-            Some("project-alpha-deadline")
-        );
+        assert_eq!(parsed.spec.key.as_deref(), Some("project-alpha-deadline"));
         assert_eq!(parsed.spec.confidence, Some(MemoryConfidence::High));
     }
 
@@ -477,8 +477,7 @@ mod tests {
     // T-MA-06: vfs_path_semantic generates correct path
     #[test]
     fn semantic_vfs_path_correct() {
-        let path =
-            MemoryRecord::vfs_path_semantic("alice", "researcher", "project-alpha-deadline");
+        let path = MemoryRecord::vfs_path_semantic("alice", "researcher", "project-alpha-deadline");
         assert_eq!(
             path,
             "/users/alice/memory/researcher/semantic/project-alpha-deadline.yaml"

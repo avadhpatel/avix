@@ -61,11 +61,7 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 /// Find the top-k records in the vector index by cosine similarity to the query vector.
 ///
 /// Returns `(id, similarity)` pairs sorted by similarity descending.
-pub fn cosine_search(
-    idx: &VectorIndex,
-    query_vector: &[f32],
-    k: usize,
-) -> Vec<(String, f32)> {
+pub fn cosine_search(idx: &VectorIndex, query_vector: &[f32], k: usize) -> Vec<(String, f32)> {
     let mut scored: Vec<(String, f32)> = idx
         .entries
         .iter()
@@ -84,11 +80,7 @@ pub fn cosine_search(
 /// `k` is the RRF smoothing parameter — typically 60.
 ///
 /// RRF score = Σ 1 / (k + rank_i) for each list where the item appears.
-pub fn rrf_merge(
-    bm25: Vec<(String, f32)>,
-    vector: Vec<(String, f32)>,
-    k: u32,
-) -> Vec<String> {
+pub fn rrf_merge(bm25: Vec<(String, f32)>, vector: Vec<(String, f32)>, k: u32) -> Vec<String> {
     let mut rrf_scores: HashMap<String, f64> = HashMap::new();
     for (rank, (id, _)) in bm25.iter().enumerate() {
         *rrf_scores.entry(id.clone()).or_insert(0.0) += 1.0 / (k as f64 + rank as f64 + 1.0);

@@ -39,7 +39,10 @@ pub async fn gc_episodic_records(
 
         let entries = vfs.list(&episodic_path).await.unwrap_or_default();
 
-        for filename in entries.iter().filter(|e| e.ends_with(".yaml") && *e != ".keep") {
+        for filename in entries
+            .iter()
+            .filter(|e| e.ends_with(".yaml") && *e != ".keep")
+        {
             let full = format!("{}/{}", episodic_dir, filename);
             let record = match store::read_record(vfs, &full).await {
                 Ok(r) => r,
@@ -74,10 +77,7 @@ pub async fn gc_episodic_records(
 ///
 /// `agent_names` — the caller (kernel cron job) supplies known active agent names.
 /// Returns the number of grants pruned.
-pub async fn prune_expired_grants(
-    vfs: &VfsRouter,
-    agent_names: &[&str],
-) -> Result<u32, AvixError> {
+pub async fn prune_expired_grants(vfs: &VfsRouter, agent_names: &[&str]) -> Result<u32, AvixError> {
     let grant_root = "/proc/services/memory/agents";
     let mut pruned = 0u32;
     let now = Utc::now();
@@ -108,11 +108,7 @@ pub async fn prune_expired_grants(
             };
 
             if let Ok(grant) = MemoryGrant::from_yaml(&yaml) {
-                let expired = grant
-                    .spec
-                    .expires_at
-                    .map(|exp| exp < now)
-                    .unwrap_or(false);
+                let expired = grant.spec.expires_at.map(|exp| exp < now).unwrap_or(false);
 
                 if expired {
                     vfs.delete(&vfs_path).await.ok();

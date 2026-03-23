@@ -6,10 +6,10 @@ const B: f64 = 0.75;
 
 /// Common English stop words filtered before scoring.
 const STOP_WORDS: &[&str] = &[
-    "a", "an", "the", "is", "in", "on", "at", "of", "to", "and", "or", "but", "it", "its",
-    "be", "was", "were", "are", "this", "that", "with", "for", "as", "by", "from", "have",
-    "has", "had", "not", "do", "did", "so", "if", "up", "out", "no", "we", "he", "she",
-    "they", "i", "my", "me", "you", "your", "our", "their",
+    "a", "an", "the", "is", "in", "on", "at", "of", "to", "and", "or", "but", "it", "its", "be",
+    "was", "were", "are", "this", "that", "with", "for", "as", "by", "from", "have", "has", "had",
+    "not", "do", "did", "so", "if", "up", "out", "no", "we", "he", "she", "they", "i", "my", "me",
+    "you", "your", "our", "their",
 ];
 
 fn tokenize(text: &str) -> Vec<String> {
@@ -42,15 +42,14 @@ pub fn bm25_rank<'a>(
 
     // Average document length
     let total_len: usize = docs.iter().map(|d| d.len()).sum();
-    let avgdl = if n > 0.0 {
-        total_len as f64 / n
-    } else {
-        1.0
-    };
+    let avgdl = if n > 0.0 { total_len as f64 / n } else { 1.0 };
 
     // Compute IDF for each query term
     let idf = |term: &str| -> f64 {
-        let df = docs.iter().filter(|d| d.contains(&term.to_string())).count() as f64;
+        let df = docs
+            .iter()
+            .filter(|d| d.contains(&term.to_string()))
+            .count() as f64;
         ((n - df + 0.5) / (df + 0.5) + 1.0).ln()
     };
 
@@ -65,8 +64,7 @@ pub fn bm25_rank<'a>(
                 .map(|term| {
                     let tf = doc.iter().filter(|t| *t == term).count() as f64;
                     let idf_val = idf(term);
-                    idf_val * (tf * (K1 + 1.0))
-                        / (tf + K1 * (1.0 - B + B * dl / avgdl.max(1.0)))
+                    idf_val * (tf * (K1 + 1.0)) / (tf + K1 * (1.0 - B + B * dl / avgdl.max(1.0)))
                 })
                 .sum();
             (score, idx)

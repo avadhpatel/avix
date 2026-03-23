@@ -234,8 +234,11 @@ impl ParamResolver {
                     semantic_enabled.apply(mem.semantic_enabled, $source.clone(), $path);
                     preferences_enabled.apply(mem.preferences_enabled, $source.clone(), $path);
                     auto_inject_at_spawn.apply(mem.auto_inject_at_spawn, $source.clone(), $path);
-                    auto_log_on_session_end
-                        .apply(mem.auto_log_on_session_end, $source.clone(), $path);
+                    auto_log_on_session_end.apply(
+                        mem.auto_log_on_session_end,
+                        $source.clone(),
+                        $path,
+                    );
                 }
                 if let Some(snap) = &$d.snapshot {
                     snap_enabled.apply(snap.enabled, $source.clone(), $path);

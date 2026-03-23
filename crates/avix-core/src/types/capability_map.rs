@@ -47,7 +47,11 @@ impl Default for CapabilityToolMap {
         // memory:write is a superset of memory:read — includes all read tools plus write tools.
         map.insert(
             "memory:read",
-            vec!["memory/retrieve", "memory/get-fact", "memory/get-preferences"],
+            vec![
+                "memory/retrieve",
+                "memory/get-fact",
+                "memory/get-preferences",
+            ],
         );
         map.insert(
             "memory:write",

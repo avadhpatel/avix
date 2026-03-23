@@ -1,12 +1,12 @@
+use avix_core::memfs::{VfsPath, VfsRouter};
 use avix_core::memory_svc::gc::{gc_episodic_records, prune_expired_grants};
 use avix_core::memory_svc::schema::{
-    MemoryGrant, MemoryGrantGrantee, MemoryGrantGrantor, MemoryGrantMetadata, MemoryGrantScope,
-    MemoryGrantSpec, MemoryRecord, MemoryRecordIndex, MemoryRecordMetadata, MemoryRecordType,
-    new_memory_id,
+    new_memory_id, MemoryGrant, MemoryGrantGrantee, MemoryGrantGrantor, MemoryGrantMetadata,
+    MemoryGrantScope, MemoryGrantSpec, MemoryRecord, MemoryRecordIndex, MemoryRecordMetadata,
+    MemoryRecordType,
 };
 use avix_core::memory_svc::store;
 use avix_core::memory_svc::vfs_layout::{init_user_memory_tree, memory_agent_grants_path};
-use avix_core::memfs::{VfsPath, VfsRouter};
 use chrono::{Duration, Utc};
 use std::sync::Arc;
 
@@ -62,7 +62,12 @@ async fn write_episodic(vfs: &VfsRouter, record: &MemoryRecord) -> String {
     path
 }
 
-async fn write_session_grant(vfs: &VfsRouter, agent: &str, session_id: &str, expired: bool) -> String {
+async fn write_session_grant(
+    vfs: &VfsRouter,
+    agent: &str,
+    session_id: &str,
+    expired: bool,
+) -> String {
     let grant_id = format!("grant-{}", new_memory_id());
     let expires_at = if expired {
         Some(Utc::now() - Duration::hours(1)) // 1 hour in the past
@@ -102,7 +107,9 @@ async fn write_session_grant(vfs: &VfsRouter, agent: &str, session_id: &str, exp
 #[tokio::test]
 async fn gc_deletes_old_records() {
     let vfs = make_vfs();
-    init_user_memory_tree(&vfs, "alice", "researcher").await.unwrap();
+    init_user_memory_tree(&vfs, "alice", "researcher")
+        .await
+        .unwrap();
 
     // Old record (31 days ago) — should be deleted
     let old = make_episodic_record("alice", "researcher", 31);
@@ -131,7 +138,9 @@ async fn gc_deletes_old_records() {
 #[tokio::test]
 async fn gc_spares_pinned_records() {
     let vfs = make_vfs();
-    init_user_memory_tree(&vfs, "alice", "researcher").await.unwrap();
+    init_user_memory_tree(&vfs, "alice", "researcher")
+        .await
+        .unwrap();
 
     let pinned = make_pinned_old_record("alice", "researcher");
     let pinned_path = write_episodic(&vfs, &pinned).await;
@@ -140,7 +149,10 @@ async fn gc_spares_pinned_records() {
         .await
         .unwrap();
 
-    assert_eq!(report.records_deleted, 0, "pinned records must never be GC'd");
+    assert_eq!(
+        report.records_deleted, 0,
+        "pinned records must never be GC'd"
+    );
     assert!(
         vfs.exists(&VfsPath::parse(&pinned_path).unwrap()).await,
         "pinned record must survive"
@@ -151,7 +163,9 @@ async fn gc_spares_pinned_records() {
 #[tokio::test]
 async fn gc_report_empty_when_no_old_records() {
     let vfs = make_vfs();
-    init_user_memory_tree(&vfs, "alice", "researcher").await.unwrap();
+    init_user_memory_tree(&vfs, "alice", "researcher")
+        .await
+        .unwrap();
 
     let fresh = make_episodic_record("alice", "researcher", 0);
     write_episodic(&vfs, &fresh).await;
@@ -198,8 +212,12 @@ async fn prune_no_op_when_no_grants() {
 #[tokio::test]
 async fn gc_runs_across_multiple_agents() {
     let vfs = make_vfs();
-    init_user_memory_tree(&vfs, "alice", "agent1").await.unwrap();
-    init_user_memory_tree(&vfs, "alice", "agent2").await.unwrap();
+    init_user_memory_tree(&vfs, "alice", "agent1")
+        .await
+        .unwrap();
+    init_user_memory_tree(&vfs, "alice", "agent2")
+        .await
+        .unwrap();
 
     // Write old record for agent1
     let old1 = make_episodic_record("alice", "agent1", 35);
@@ -213,16 +231,11 @@ async fn gc_runs_across_multiple_agents() {
     let fresh = make_episodic_record("alice", "agent1", 2);
     write_episodic(&vfs, &fresh).await;
 
-    let report = gc_episodic_records(
-        &vfs,
-        &[("alice", "agent1"), ("alice", "agent2")],
-        30,
-    )
-    .await
-    .unwrap();
+    let report = gc_episodic_records(&vfs, &[("alice", "agent1"), ("alice", "agent2")], 30)
+        .await
+        .unwrap();
     assert_eq!(
         report.records_deleted, 2,
         "both old records across agents should be deleted"
     );
 }
-

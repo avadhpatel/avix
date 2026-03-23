@@ -3,7 +3,11 @@ use crate::memfs::{VfsPath, VfsRouter};
 
 use super::schema::{MemoryRecord, UserPreferenceModel};
 
-pub async fn write_record(vfs: &VfsRouter, path: &str, record: &MemoryRecord) -> Result<(), AvixError> {
+pub async fn write_record(
+    vfs: &VfsRouter,
+    path: &str,
+    record: &MemoryRecord,
+) -> Result<(), AvixError> {
     let yaml = record.to_yaml()?;
     let vfs_path = VfsPath::parse(path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
     vfs.write(&vfs_path, yaml.into_bytes()).await

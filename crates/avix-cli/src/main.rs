@@ -227,6 +227,8 @@ async fn main() -> Result<()> {
                 spawned_by: "cli".into(),
                 session_id: uuid::Uuid::new_v4().to_string(),
                 token,
+                system_prompt: None,
+                selected_model: "claude-sonnet-4".into(),
             };
             let registry = Arc::new(MockToolRegistry::new());
             let mut executor = RuntimeExecutor::spawn_with_registry(params, registry).await?;

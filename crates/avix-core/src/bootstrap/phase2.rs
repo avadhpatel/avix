@@ -22,8 +22,12 @@ pub async fn mount_persistent_trees(vfs: &VfsRouter, root: &Path) -> Result<(), 
 
     for (prefix, dir) in &mounts {
         // Ensure the target directory exists before mounting
-        std::fs::create_dir_all(dir)
-            .map_err(|e| AvixError::Io(format!("create dir {} for mount {prefix}: {e}", dir.display())))?;
+        std::fs::create_dir_all(dir).map_err(|e| {
+            AvixError::Io(format!(
+                "create dir {} for mount {prefix}: {e}",
+                dir.display()
+            ))
+        })?;
 
         let provider = LocalProvider::new(dir)?;
         vfs.mount(prefix.to_string(), provider).await;

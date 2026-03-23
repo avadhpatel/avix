@@ -26,6 +26,8 @@ async fn spawn_with_caps(pid_val: u32, caps: &[&str]) -> (RuntimeExecutor, Arc<M
         spawned_by: "kernel".into(),
         session_id: "test-session".into(),
         token: token_with_caps(caps),
+        system_prompt: None,
+        selected_model: "claude-sonnet-4".into(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -110,6 +112,8 @@ async fn shutdown_deregisters_all_category2_tools() {
             "pipe/read",
             "pipe/close",
         ]),
+        system_prompt: None,
+        selected_model: "claude-sonnet-4".into(),
     };
     let mut executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -139,6 +143,8 @@ async fn category2_tools_registered_with_user_visibility() {
             "agent/wait",
             "agent/send-message",
         ]),
+        system_prompt: None,
+        selected_model: "claude-sonnet-4".into(),
     };
     RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -362,6 +368,8 @@ async fn agent_spawn_translates_to_kernel_proc_spawn() {
             "agent/wait",
             "agent/send-message",
         ]),
+        system_prompt: None,
+        selected_model: "claude-sonnet-4".into(),
     };
     let mut executor =
         RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
@@ -396,6 +404,8 @@ async fn agent_kill_records_in_kernel() {
             "agent/wait",
             "agent/send-message",
         ]),
+        system_prompt: None,
+        selected_model: "claude-sonnet-4".into(),
     };
     let mut executor =
         RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
@@ -427,6 +437,8 @@ async fn cap_request_tool_triggers_resource_request() {
         spawned_by: "kernel".into(),
         session_id: "test-session".into(),
         token: token_with_caps(&[]),
+        system_prompt: None,
+        selected_model: "claude-sonnet-4".into(),
     };
     let mut executor =
         RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
@@ -463,6 +475,8 @@ async fn build_test_executor_with_mocks() -> RuntimeExecutor {
             "pipe/read",
             "pipe/close",
         ]),
+        system_prompt: None,
+        selected_model: "claude-sonnet-4".into(),
     };
     RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -478,6 +492,8 @@ async fn build_test_executor_with_max_chain(max: usize) -> RuntimeExecutor {
         spawned_by: "kernel".into(),
         session_id: "test-session".into(),
         token: token_with_caps(&[]),
+        system_prompt: None,
+        selected_model: "claude-sonnet-4".into(),
     };
     let mut executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -805,6 +821,8 @@ async fn spawn_with_signed_token(
         spawned_by: "kernel".into(),
         session_id: "session".into(),
         token,
+        system_prompt: None,
+        selected_model: "claude-sonnet-4".into(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -968,6 +986,8 @@ async fn spawn_status_yaml_contains_pid_and_name() {
         spawned_by: "alice".into(),
         session_id: "sess-601".into(),
         token: CapabilityToken::test_token(&["fs/read"]),
+        system_prompt: None,
+        selected_model: "claude-sonnet-4".into(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -1003,6 +1023,8 @@ async fn spawn_writes_resolved_yaml_to_vfs() {
         spawned_by: "kernel".into(),
         session_id: "sess-602".into(),
         token: CapabilityToken::test_token(&["fs/read", "fs/write"]),
+        system_prompt: None,
+        selected_model: "claude-sonnet-4".into(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await

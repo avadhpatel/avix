@@ -1,10 +1,12 @@
-use avix_core::memory_svc::{
-    service::{CallerContext, MemoryService},
-    search::bm25_rank,
-    schema::{MemoryRecord, MemoryRecordIndex, MemoryRecordMetadata, MemoryRecordSpec, MemoryRecordType},
-};
-use avix_core::memfs::{VfsPath, VfsRouter};
 use avix_core::config::MemoryConfig;
+use avix_core::memfs::{VfsPath, VfsRouter};
+use avix_core::memory_svc::{
+    schema::{
+        MemoryRecord, MemoryRecordIndex, MemoryRecordMetadata, MemoryRecordSpec, MemoryRecordType,
+    },
+    search::bm25_rank,
+    service::{CallerContext, MemoryService},
+};
 use chrono::Utc;
 use serde_json::json;
 use std::sync::Arc;
@@ -243,7 +245,11 @@ async fn forget_deletes_by_id() {
         .dispatch("memory/forget", json!({ "ids": [id.clone()] }), &caller)
         .await
         .unwrap();
-    assert!(result["deleted"].as_array().unwrap().iter().any(|v| v.as_str() == Some(&id)));
+    assert!(result["deleted"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.as_str() == Some(&id)));
     assert!(result["notFound"].as_array().unwrap().is_empty());
 }
 
@@ -282,10 +288,7 @@ async fn retrieve_returns_ranked_results() {
         .unwrap();
     let records = result["records"].as_array().unwrap();
     assert!(!records.is_empty());
-    assert!(records[0]["summary"]
-        .as_str()
-        .unwrap()
-        .contains("Quantum"));
+    assert!(records[0]["summary"].as_str().unwrap().contains("Quantum"));
 }
 
 // T-MC-08: unknown tool returns NotFound error

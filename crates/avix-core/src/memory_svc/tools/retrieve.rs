@@ -67,10 +67,7 @@ pub async fn handle(
     // ── Granted records ───────────────────────────────────────────────────────
 
     if scopes.contains(&"grants".to_string()) {
-        let grant_dir = format!(
-            "/proc/services/memory/agents/{}/grants",
-            caller.agent_name
-        );
+        let grant_dir = format!("/proc/services/memory/agents/{}/grants", caller.agent_name);
         let grant_entries = svc
             .vfs()
             .list(

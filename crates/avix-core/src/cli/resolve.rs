@@ -64,9 +64,7 @@ pub async fn run_resolve(params: ResolveParams) -> Result<ResolveResult, AvixErr
     }
 
     // 4. Mount per-user directory
-    let user_dir = params
-        .root
-        .join(format!("data/users/{}", params.username));
+    let user_dir = params.root.join(format!("data/users/{}", params.username));
     if user_dir.exists() {
         if let Ok(provider) = LocalProvider::new(&user_dir) {
             vfs.mount(format!("/users/{}", params.username), provider)

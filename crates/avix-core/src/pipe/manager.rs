@@ -40,7 +40,11 @@ impl PipeManager {
 
     /// Open a new pipe. The caller becomes the `source_pid`.
     /// Returns the new pipe ID.
-    pub async fn open(&self, config: PipeConfig, vfs: Option<&VfsRouter>) -> Result<String, AvixError> {
+    pub async fn open(
+        &self,
+        config: PipeConfig,
+        vfs: Option<&VfsRouter>,
+    ) -> Result<String, AvixError> {
         let pipe_id = format!("pipe-{}", Uuid::new_v4());
         let buffer = config.buffer_tokens;
         let pipe = Arc::new(Pipe::new(config.source_pid.as_u32(), buffer));

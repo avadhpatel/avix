@@ -41,10 +41,7 @@ pub async fn handle(
     let path = MemoryRecord::vfs_path_semantic(&caller.owner, &caller.agent_name, &key);
     let replaced = svc
         .vfs()
-        .exists(
-            &VfsPath::parse(&path)
-                .map_err(|e| AvixError::ConfigParse(e.to_string()))?,
-        )
+        .exists(&VfsPath::parse(&path).map_err(|e| AvixError::ConfigParse(e.to_string()))?)
         .await;
 
     let now = Utc::now();

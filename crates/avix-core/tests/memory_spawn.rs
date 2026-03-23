@@ -3,16 +3,14 @@ use avix_core::executor::runtime_executor::MockToolRegistry;
 use avix_core::executor::{RuntimeExecutor, SpawnParams};
 use avix_core::memfs::{VfsPath, VfsRouter};
 use avix_core::memory_svc::{
+    schema::{UserPreferenceModel, UserPreferenceModelMetadata, UserPreferenceModelSpec},
     service::MemoryService,
-    schema::{
-        UserPreferenceModel, UserPreferenceModelMetadata, UserPreferenceModelSpec,
-    },
     store,
 };
 use avix_core::types::{capability_map::CapabilityToolMap, token::CapabilityToken, Pid};
 use chrono::Utc;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -35,6 +33,8 @@ async fn make_executor_with_vfs(
         spawned_by: owner.to_string(),
         session_id: "sess-test".to_string(),
         token: token_with_caps(caps),
+        system_prompt: None,
+        selected_model: "claude-sonnet-4".into(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -82,8 +82,14 @@ fn memory_read_capability_maps_correctly() {
     assert!(tools.contains(&"memory/retrieve"));
     assert!(tools.contains(&"memory/get-fact"));
     assert!(tools.contains(&"memory/get-preferences"));
-    assert!(!tools.contains(&"memory/log-event"), "log-event requires write");
-    assert!(!tools.contains(&"memory/store-fact"), "store-fact requires write");
+    assert!(
+        !tools.contains(&"memory/log-event"),
+        "log-event requires write"
+    );
+    assert!(
+        !tools.contains(&"memory/store-fact"),
+        "store-fact requires write"
+    );
 }
 
 // ── T-MD-02: memory:write is a superset of memory:read ───────────────────────
@@ -119,6 +125,8 @@ async fn memory_write_tools_registered_at_spawn() {
             spawned_by: "alice".to_string(),
             session_id: "s1".to_string(),
             token: token_with_caps(&write_tools),
+            system_prompt: None,
+            selected_model: "claude-sonnet-4".into(),
         };
         let executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&reg))
             .await
@@ -160,17 +168,13 @@ async fn spawn_creates_memory_tree() {
     let (executor, vfs) = make_executor_with_vfs("alice", "researcher", 301, &write_tools).await;
     executor.init_memory_tree().await;
     assert!(
-        vfs.exists(
-            &VfsPath::parse("/users/alice/memory/researcher/episodic/.keep").unwrap()
-        )
-        .await,
+        vfs.exists(&VfsPath::parse("/users/alice/memory/researcher/episodic/.keep").unwrap())
+            .await,
         "expected episodic dir at spawn"
     );
     assert!(
-        vfs.exists(
-            &VfsPath::parse("/users/alice/memory/researcher/semantic/.keep").unwrap()
-        )
-        .await
+        vfs.exists(&VfsPath::parse("/users/alice/memory/researcher/semantic/.keep").unwrap())
+            .await
     );
 }
 
@@ -182,10 +186,8 @@ async fn no_memory_tree_without_memory_tools() {
     executor.init_memory_tree().await;
     // No memory tools → no init
     assert!(
-        !vfs.exists(
-            &VfsPath::parse("/users/alice/memory/researcher/episodic/.keep").unwrap()
-        )
-        .await,
+        !vfs.exists(&VfsPath::parse("/users/alice/memory/researcher/episodic/.keep").unwrap())
+            .await,
         "expected NO episodic dir when no memory tools"
     );
 }
