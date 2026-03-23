@@ -42,51 +42,99 @@ An agent is spawned via the `kernel/proc/spawn` syscall. The kernel:
 
 ### `/proc/<pid>/status.yaml`
 
-Serialized `AgentStatus`. Written at spawn and updated on every status change.
+Serialized `AgentStatus`. Written at spawn and updated on every lifecycle event.
+All keys are `camelCase` in the YAML output.
 
 ```yaml
 apiVersion: avix/v1
 kind: AgentStatus
 metadata:
-  pid: 57
   name: researcher
-spec:
-  status: running            # running | paused | stopped | completed
-  goal: "Research Q3 data"
+  pid: 57
+  spawnedAt: "2026-03-22T10:00:00Z"
   spawnedBy: alice
-  sessionId: sess-abc
-  grantedTools:
-    - fs/read
-    - llm/complete
-  tokenExpiresAt: 2026-03-22T12:00:00Z
-  toolChainDepth: 0
-  contextTokensUsed: 0
+status:
+  state: running              # pending | running | paused | waiting | stopped | crashed
+  goal: "Research Q3 data"
+  contextUsed: 5000
+  contextLimit: 200000
+  toolCallsThisTurn: 2
+  lastActivityAt: "2026-03-22T10:05:30Z"
+  waitingOn: null             # null | human-approval | pipe-read | pipe-write | signal
+  tools:
+    granted: [fs/read, llm/complete]
+    denied:  [send_email]
+  pipes:
+    - id: pipe-001
+      targetPid: 58
+      direction: out          # in | out | bidirectional
+      state: open             # open | closed | draining
+  signals:
+    lastReceived: SIGSTART
+    pendingCount: 0
+  metrics:
+    tokensConsumed: 14200
+    toolCallsTotal: 11
+    wallTimeSec: 330
 ```
+
+**Process states:** `pending` (allocated, not yet started) | `running` | `paused` (SIGPAUSE received)
+| `waiting` (blocked on pipe or signal) | `stopped` (SIGKILL received) | `crashed` (runtime error)
 
 ### `/proc/<pid>/resolved.yaml`
 
-The merged final configuration this agent runs under. Echoes back token grants and
-compiled-in defaults. Full defaults/limits merging (reading from `/kernel/defaults/agent.yaml`
-and per-user `defaults.yaml`) is included when available.
+The merged final configuration this agent runs under. Written at spawn. All keys `camelCase`.
 
 ```yaml
 apiVersion: avix/v1
 kind: Resolved
 metadata:
-  pid: 57
-  name: researcher
+  target: researcher
+  resolvedAt: "2026-03-22T10:00:00Z"
+  resolvedFor:
+    username: alice
+    pid: 57
+    crews: [researchers]
 spec:
-  contextWindowTokens: 64000    # from /kernel/defaults/agent.yaml
-  maxToolChainLength: 50        # from /kernel/defaults/agent.yaml
+  contextWindowTokens: 64000
+  maxToolChainLength: 50
   tokenTtlSecs: 3600
   grantedTools:
     - fs/read
     - llm/complete
+  annotations: {}
 ```
 
 **Implementation rule:** These files are written by `RuntimeExecutor::write_proc_files()`
-which is called via `init_proc_files()` after spawn. If no VFS handle is attached, the
-write is silently skipped — spawn succeeds regardless.
+called via `init_proc_files()` after spawn. If no VFS handle is attached, the write is
+silently skipped — spawn succeeds regardless.
+
+### `/proc/<pid>/hil-queue/<hil-id>.yaml`
+
+Written by `HilManager::open()` when a HIL event is created. Updated by
+`HilManager::resolve()` or timeout. All keys `snake_case` in YAML.
+
+```yaml
+api_version: avix/v1
+kind: HilRequest
+hil_id: hil-abc-001
+pid: 57
+agent_name: researcher
+hil_type: tool_call_approval   # tool_call_approval | capability_upgrade | escalation
+tool: send_email
+args:
+  to: team@org.com
+  subject: Summary ready
+reason: "Wants to notify user when analysis is complete"
+urgency: normal                # low | normal | high
+approval_token: "<opaque token — present this in SIGRESUME payload>"
+created_at: "2026-03-22T10:05:00Z"
+expires_at: "2026-03-22T10:15:00Z"
+state: pending                 # pending | approved | denied | timeout
+```
+
+Human clients read `approval_token` from this file and include it in the `SIGRESUME`
+payload when responding (see `04-atp.md` HIL flow).
 
 ---
 

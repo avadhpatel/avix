@@ -148,8 +148,8 @@ Agent calls `send_email` (in token, but `hilRequiredTools` list in `kernel.yaml`
 
 1. RuntimeExecutor intercepts before dispatching
 2. Sends `ResourceRequest { resource: tool_call_approval, tool: send_email, args: {...} }`
-3. Kernel: `SIGPAUSE` → agent, `hil.request` ATP event → client
-4. Human: approves or denies via `hil/respond`
+3. Kernel: `SIGPAUSE` → agent, writes `/proc/<pid>/hil-queue/<hil-id>.yaml`, `hil.request` ATP event → client
+4. Human: sends `signal.send SIGRESUME` with `approvalToken` from the HIL file (see below)
 5. Kernel: `SIGRESUME { decision: "approved" }` → agent proceeds
 
 ### Scenario 2 — Capability Upgrade
@@ -157,8 +157,8 @@ Agent calls `send_email` (in token, but `hilRequiredTools` list in `kernel.yaml`
 Agent calls `bash` (not in token):
 
 1. RuntimeExecutor sends `ResourceRequest { resource: tool, name: bash }`
-2. Kernel: `SIGPAUSE` → agent, `hil.request` ATP event → client
-3. Human: approves with scope `session` or `once`
+2. Kernel: `SIGPAUSE` → agent, writes HIL file, `hil.request` ATP event → client
+3. Human: sends `signal.send SIGRESUME` with `approvalToken` and `decision: "approved"`
 4. Kernel: issues new token, `SIGRESUME { new_capability_token: "..." }` → agent
 5. RuntimeExecutor replaces its held token
 
@@ -179,8 +179,36 @@ Agent encounters ambiguity and proactively requests human guidance:
 }
 ```
 
-Kernel: mints `ApprovalToken`, writes HIL record, pushes `hil.request { type: escalation }`.
+Kernel: mints `ApprovalToken`, writes HIL record, pushes `hil.request { hil_type: escalation }`.
 Agent is already suspended (it sent the signal).
+
+### Responding to a HIL Event
+
+The human client receives a `hil.request` event whose `body` contains the full
+`HilRequest` YAML (also at `/proc/<pid>/hil-queue/<hil-id>.yaml`). The client
+responds by sending a **`signal.send SIGRESUME`** ATP command carrying the
+`approvalToken` from that file:
+
+```json
+{
+  "type": "cmd", "domain": "signal", "op": "send", "id": "req-005",
+  "token": "eyJ...",
+  "body": {
+    "signal": "SIGRESUME",
+    "target": 57,
+    "payload": {
+      "approvalToken": "<approval_token from hil-queue file>",
+      "hilId": "hil-abc-001",
+      "decision": "approved",
+      "note": "Looks good, send it"
+    }
+  }
+}
+```
+
+`gateway.svc` routes this through `HilManager::resolve()` which atomically consumes
+the token. If the token was already consumed, `EUSED` is returned — no double-approval
+is possible.
 
 ---
 

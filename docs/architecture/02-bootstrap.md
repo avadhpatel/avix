@@ -162,10 +162,11 @@ never configures itself.
 | Path | Kind | Notes |
 |------|------|-------|
 | `<root>/etc/auth.conf` | `AuthConfig` | Credential hashes; API key printed once to stdout |
-| `<root>/etc/kernel.yaml` | `KernelConfig` | Master key source, log level, IPC config |
+| `<root>/etc/kernel.yaml` | `KernelConfig` | Scheduler, memory, safety, models, IPC, secrets config |
+| `<root>/etc/llm.yaml` | `LlmConfig` | Provider list with API key paths; see `08-llm-service.md` |
 | `<root>/etc/users.yaml` | `UsersConfig` | Initialising user as first identity |
 | `<root>/etc/crews.yaml` | `CrewsConfig` | Empty crew list |
-| `<root>/etc/crontab.yaml` | `Crontab` | Empty scheduled jobs list |
+| `<root>/etc/crontab.yaml` | `CrontabFile` | Empty scheduled jobs list |
 | `<root>/etc/fstab.yaml` | `Fstab` | Local mounts for `etc`, `users/<identity>`, `secrets` |
 | `<root>/data/users/<identity>/` | directory | User workspace backing directory |
 | `<root>/secrets/` | directory | Secrets backing directory |
@@ -198,7 +199,109 @@ avix config init \
   --non-interactive
 ```
 
-### auth.conf Schema
+---
+
+## kernel.yaml Schema
+
+`kernel.yaml` is the master runtime configuration file. All fields have defaults —
+an empty `kernel.yaml` is valid. Fields use `camelCase`.
+
+### scheduler
+
+```yaml
+scheduler:
+  algorithm: priority_deadline   # priority_deadline | round_robin | fifo
+  tickMs: 100
+  preemption: true
+  maxConcurrentAgents: 50
+```
+
+### memory
+
+```yaml
+memory:
+  defaultContextLimit: 200000
+  episodic:
+    maxRetentionDays: 30
+    maxRecordsPerAgent: 10000
+  semantic:
+    maxFactsPerAgent: 5000
+  retrieval:
+    defaultLimit: 5
+    maxLimit: 20
+    candidateFetchK: 20
+    rrfK: 60
+  spawn:
+    episodicContextRecords: 5
+    preferencesEnabled: true
+    pinnedFactsEnabled: true
+  sharing:
+    enabled: true
+    hilTimeoutSec: 600
+    crossUserEnabled: false    # always false in v0.1
+```
+
+### safety
+
+```yaml
+safety:
+  policyEngine: enabled          # enabled | disabled
+  hilOnEscalation: true
+  maxToolChainLength: 10
+  blockedToolChains: []          # list of { pattern, reason }
+```
+
+`hilOnEscalation: true` means `SIGESCALATE` from an agent always triggers a HIL event
+rather than auto-approving.
+
+### models
+
+Default LLM models used for built-in agents:
+
+```yaml
+models:
+  default:  claude-sonnet-4      # used by planner, executor, memory agents
+  kernel:   claude-opus-4        # used by kernel.agent
+  fallback: claude-haiku-4       # used when default is unavailable
+  temperature: 0.7
+```
+
+### ipc
+
+```yaml
+ipc:
+  transport: local-ipc           # local-ipc | unix-socket
+  socketName: avix-kernel        # logical name; platform resolves to actual path
+  maxMessageBytes: 65536
+  timeoutMs: 5000
+```
+
+### secrets (master key)
+
+```yaml
+masterKey:
+  source: env                    # env | passphrase | key-file | kms-aws | kms-gcp | kms-azure | kms-vault
+  envVar: AVIX_MASTER_KEY        # for source: env
+  keyFile: /run/secrets/avix-mk  # for source: key-file
+```
+
+For passphrase-derived keys, additional KDF fields are accepted:
+`kdfAlgorithm`, `kdfMemoryMb`, `kdfIterations`.
+
+### observability
+
+```yaml
+observability:
+  logLevel: info                 # debug | info | warn | error
+  logPath: /var/log/avix/kernel.log
+  metricsEnabled: true
+  metricsPath: /var/log/avix/metrics/
+  traceEnabled: false
+```
+
+---
+
+## auth.conf Schema
 
 ```yaml
 apiVersion: avix/v1
@@ -236,6 +339,42 @@ identities:
 The desktop app reads the API key from the OS keychain, derives the master key from
 machine identity, and spawns `avix start` with `AVIX_MASTER_KEY` in env. The user never
 sees a password prompt — "passwordless feel" achieved via OS keychain, not an unsecured mode.
+
+---
+
+---
+
+## avix config reload
+
+Reloads `kernel.yaml` and `auth.conf` from disk into a running avix instance without
+restarting. The live config is hot-swapped; services are not restarted.
+
+```bash
+avix config reload --root ~/avix-data
+```
+
+Fields that cannot be hot-reloaded (e.g. IPC transport, master key source) require a
+full `avix start` restart. The command reports which fields were reloaded successfully
+and which were skipped.
+
+---
+
+## avix resolve
+
+Runs the parameter resolution pipeline offline and prints the merged `ResolvedFile`
+that would be written to `/proc/<pid>/resolved.yaml` for a given user. Useful for
+debugging config precedence without spawning an agent.
+
+```bash
+# Resolve for a specific user
+avix resolve --root ~/avix-data --user alice
+
+# Resolve for a user + crew intersection
+avix resolve --root ~/avix-data --user alice --crew researchers
+```
+
+Output is the YAML `ResolvedFile` that would be written to the VFS, showing the
+winning value for every parameter and the source that provided it.
 
 ---
 

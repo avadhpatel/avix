@@ -41,7 +41,8 @@ See `03-ipc.md` for the full wire protocol.
 | `memfs.svc` | VFS abstraction. Driver-swappable. | `fs:read`, `fs:write` |
 | `logger.svc` | Structured log sink. | `fs:write` |
 | `watcher.svc` | File event bus. | `fs:read`, `fs:watch` |
-| `scheduler.svc` | Crontab + timers. | `fs:read` |
+| `scheduler.svc` | Crontab runner. Loads `/etc/avix/crontab.yaml`, fires agents on schedule. | `fs:read`, `proc:spawn` |
+| `memory.svc` | Agent memory: episodic store + semantic store + retrieval. | `fs:read`, `fs:write` |
 | `tool-registry.svc` | Scans `/tools/**/*.tool.yaml`. | `fs:read` |
 | `jobs.svc` | Long-running job broker. | `fs:read`, `fs:write` |
 | `exec.svc` | Code execution + runtime discovery. | `exec:python`, `exec:js`, `exec:shell` |
@@ -160,6 +161,40 @@ The kernel pushes a `tool.changed` ATP event to all subscribed clients when tool
 **Category 2 tools** (`agent/`, `pipe/`, `cap/`, `job/`) are registered by `RuntimeExecutor`
 at agent spawn via `ipc.tool-add` and deregistered at exit via `ipc.tool-remove`. They are
 **never hard-coded** in any service's tool list.
+
+---
+
+---
+
+## scheduler.svc — Crontab Runner
+
+`scheduler.svc` loads `/etc/avix/crontab.yaml` at startup and monitors it for changes.
+When a job fires it spawns the configured agent and pushes a `cron.fired` ATP event.
+
+### `/etc/avix/crontab.yaml` Schema
+
+```yaml
+apiVersion: avix/v1
+kind: CrontabFile
+spec:
+  timezone: UTC                # default timezone for all jobs
+  jobs:
+    - id: daily-report
+      schedule: "0 8 * * *"   # standard 5-field cron expression
+      user: alice
+      agentTemplate: reporter  # agent name in /bin/ or /users/<user>/bin/
+      goal: "Generate daily analytics report"
+      args: {}                 # passed to agent at spawn
+      timeout: 3600            # seconds; 0 = no timeout
+      timezone: America/New_York  # per-job override
+      onFailure: alert         # ignore | alert | retry
+      retryPolicy:
+        maxAttempts: 3
+        backoffSec: 60
+```
+
+The `cron.fired` ATP event (owner-scoped, min role `user`) is pushed to the owning
+user's sessions when a job triggers.
 
 ---
 
