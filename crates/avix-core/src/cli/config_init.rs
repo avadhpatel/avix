@@ -105,6 +105,8 @@ identities:
             .replace("{identity}", identity),
     )?;
 
+    write_if_absent(&root.join("etc/llm.yaml"), LLM_YAML_TEMPLATE)?;
+
     // Data directories referenced by fstab mounts
     std::fs::create_dir_all(root.join(format!("data/users/{identity}")))
         .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -240,7 +242,7 @@ spec:
       provider: local
       config:
         root: \"{root}/data/users/{identity}\"
-      options: {{}}
+      options: {}
 
     - path: /secrets
       provider: local
@@ -248,6 +250,136 @@ spec:
         root: \"{root}/secrets\"
       options:
         encrypted: true
+";
+
+/// Default LLM provider configuration.
+///
+/// Users must update `secretName` values to match the secret names they have
+/// stored under `/secrets/`. The `xai` provider block is disabled by default —
+/// remove the `# ` prefix from its lines and add the secret to enable it.
+const LLM_YAML_TEMPLATE: &str = "apiVersion: avix/v1
+kind: LlmConfig
+spec:
+  defaultProviders:
+    text: anthropic
+    image: openai
+    speech: openai
+    transcription: openai
+    embedding: openai
+
+  providers:
+    # ── Anthropic (default text provider) ───────────────────────────────────
+    - name: anthropic
+      baseUrl: https://api.anthropic.com
+      modalities: [text]
+      auth:
+        type: api_key
+        # Set secretName to the name of your Anthropic API key in /secrets/
+        secretName: ANTHROPIC_API_KEY
+        header: x-api-key
+      models:
+        - id: claude-opus-4-6
+          modality: text
+          contextWindow: 200000
+          tier: premium
+        - id: claude-sonnet-4-6
+          modality: text
+          contextWindow: 200000
+          tier: standard
+        - id: claude-haiku-4-5-20251001
+          modality: text
+          contextWindow: 200000
+          tier: economy
+      limits:
+        requestsPerMinute: 60
+        tokensPerMinute: 100000
+      retryPolicy:
+        maxAttempts: 3
+        backoffMs: 500
+        retryOn: [429, 529]
+      healthCheck:
+        enabled: true
+        intervalSec: 60
+        endpoint: /v1/messages
+
+    # ── OpenAI (image, speech, transcription, embedding) ────────────────────
+    - name: openai
+      baseUrl: https://api.openai.com
+      modalities: [image, speech, transcription, embedding]
+      auth:
+        type: api_key
+        # Set secretName to the name of your OpenAI API key in /secrets/
+        secretName: OPENAI_API_KEY
+        header: Authorization
+        prefix: Bearer
+      models:
+        - id: gpt-image-1
+          modality: image
+          tier: standard
+        - id: tts-1
+          modality: speech
+          tier: standard
+        - id: tts-1-hd
+          modality: speech
+          tier: premium
+        - id: whisper-1
+          modality: transcription
+          tier: standard
+        - id: text-embedding-3-small
+          modality: embedding
+          tier: economy
+          dimensions: 1536
+        - id: text-embedding-3-large
+          modality: embedding
+          tier: standard
+          dimensions: 3072
+      limits:
+        requestsPerMinute: 60
+        tokensPerMinute: 150000
+      retryPolicy:
+        maxAttempts: 3
+        backoffMs: 500
+        retryOn: [429, 503]
+
+    # ── xAI / Grok (optional additional text provider) ──────────────────────
+    # To enable: update secretName below and add xai to defaultProviders.text
+    # - name: xai
+    #   baseUrl: https://api.x.ai/v1
+    #   modalities: [text]
+    #   auth:
+    #     type: api_key
+    #     # Set secretName to the name of your xAI API key in /secrets/
+    #     secretName: XAI_API_KEY
+    #     header: Authorization
+    #     prefix: Bearer
+    #   models:
+    #     - id: grok-3
+    #       modality: text
+    #       contextWindow: 131072
+    #       tier: premium
+    #     - id: grok-3-mini
+    #       modality: text
+    #       contextWindow: 131072
+    #       tier: economy
+    #     - id: grok-3-fast
+    #       modality: text
+    #       contextWindow: 131072
+    #       tier: standard
+    #     - id: grok-3-mini-fast
+    #       modality: text
+    #       contextWindow: 131072
+    #       tier: economy
+    #   limits:
+    #     requestsPerMinute: 60
+    #     tokensPerMinute: 100000
+    #   retryPolicy:
+    #     maxAttempts: 3
+    #     backoffMs: 500
+    #     retryOn: [429, 503]
+    #   healthCheck:
+    #     enabled: true
+    #     intervalSec: 60
+    #     endpoint: /v1/chat/completions
 ";
 
 #[cfg(test)]
@@ -338,5 +470,27 @@ mod tests {
         // UUID portion should be 36 chars
         let uuid_part = &result.api_key["sk-avix-".len()..];
         assert_eq!(uuid_part.len(), 36);
+    }
+
+    #[test]
+    fn test_config_init_creates_llm_yaml() {
+        let dir = tempdir().unwrap();
+        let params = ConfigInitParams {
+            root: dir.path().to_path_buf(),
+            identity_name: "alice".into(),
+            credential_type: "api_key".into(),
+            role: "admin".into(),
+            master_key_source: "env".into(),
+            mode: "cli".into(),
+        };
+        run_config_init(params).unwrap();
+        let llm_yaml_path = dir.path().join("etc/llm.yaml");
+        assert!(llm_yaml_path.exists(), "etc/llm.yaml should be created");
+        let content = std::fs::read_to_string(llm_yaml_path).unwrap();
+        assert!(content.contains("LlmConfig"));
+        assert!(content.contains("anthropic"));
+        assert!(content.contains("xai"));
+        assert!(content.contains("ANTHROPIC_API_KEY"));
+        assert!(content.contains("XAI_API_KEY"));
     }
 }

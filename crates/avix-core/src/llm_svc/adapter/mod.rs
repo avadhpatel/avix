@@ -3,12 +3,14 @@ pub mod elevenlabs;
 pub mod ollama;
 pub mod openai;
 pub mod stability;
+pub mod xai;
 
 pub use anthropic::AnthropicAdapter;
 pub use elevenlabs::ElevenLabsAdapter;
 pub use ollama::OllamaAdapter;
 pub use openai::OpenAiAdapter;
 pub use stability::StabilityAdapter;
+pub use xai::XaiAdapter;
 
 use crate::types::Modality;
 use serde::{Deserialize, Serialize};
