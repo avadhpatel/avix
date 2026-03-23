@@ -18,13 +18,14 @@ use tracing::{debug, info, warn};
 
 use crate::auth::atp_token::{ATPTokenClaims, ATPTokenStore};
 use crate::auth::service::AuthService;
-use crate::gateway::atp::error::{AtpError, AtpErrorCode};
 use crate::gateway::atp::frame::{AtpEvent, AtpFrame, AtpReply};
 use crate::gateway::atp::types::AtpEventKind;
 use crate::gateway::config::GatewayConfig;
 use crate::gateway::event_bus::AtpEventBus;
+use crate::gateway::handlers::{dispatch, HandlerCtx, LiveIpcRouter, NullIpcRouter};
 use crate::gateway::replay::ReplayGuard;
 use crate::gateway::validator::validate_cmd;
+use crate::ipc::IpcClient;
 
 #[derive(Clone)]
 struct AppState {
@@ -34,6 +35,7 @@ struct AppState {
     #[allow(dead_code)]
     event_bus: Arc<AtpEventBus>,
     is_admin_port: bool,
+    handler_ctx: Arc<HandlerCtx>,
 }
 
 pub struct GatewayServer {
@@ -75,11 +77,29 @@ impl GatewayServer {
         addr: SocketAddr,
         is_admin_port: bool,
     ) -> anyhow::Result<SocketAddr> {
+        // Build IPC router: use configured socket, fall back to env var, then null.
+        let ipc: Arc<dyn crate::gateway::handlers::IpcRouter> = self
+            .config
+            .kernel_sock
+            .clone()
+            .or_else(|| std::env::var("AVIX_KERNEL_SOCK").ok().map(Into::into))
+            .map(|path| -> Arc<dyn crate::gateway::handlers::IpcRouter> {
+                Arc::new(LiveIpcRouter::new(IpcClient::new(path)))
+            })
+            .unwrap_or_else(|| Arc::new(NullIpcRouter));
+
+        let handler_ctx = Arc::new(HandlerCtx {
+            ipc,
+            token_store: Arc::clone(&self.token_store),
+            auth_svc: Arc::clone(&self.auth_svc),
+        });
+
         let state = AppState {
             auth_svc: Arc::clone(&self.auth_svc),
             token_store: Arc::clone(&self.token_store),
             event_bus: Arc::clone(&self.event_bus),
             is_admin_port,
+            handler_ctx,
         };
 
         let app = Router::new()
@@ -280,11 +300,7 @@ async fn handle_text_frame(
                             let _ = tx.send(WsOutMsg::Text(s)).await;
                         }
                     }
-                    // Stub: all domains return EUNAVAIL until Gap E
-                    AtpReply::err(
-                        cmd_id,
-                        AtpError::new(AtpErrorCode::Eunavail, "domain handler not yet implemented"),
-                    )
+                    dispatch(validated, &state.handler_ctx).await
                 }
                 Err(e) => AtpReply::err(cmd_id, e),
             };

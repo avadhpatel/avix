@@ -2,6 +2,7 @@ pub mod acl;
 pub mod atp;
 pub mod config;
 pub mod event_bus;
+pub mod handlers;
 pub mod replay;
 pub mod server;
 pub mod translator;
@@ -14,6 +15,7 @@ pub use atp::{
 };
 pub use config::GatewayConfig;
 pub use event_bus::AtpEventBus;
+pub use handlers::{HandlerCtx, IpcRouter, LiveIpcRouter, NullIpcRouter};
 pub use replay::ReplayGuard;
 pub use server::GatewayServer;
 pub use translator::ATPTranslator;

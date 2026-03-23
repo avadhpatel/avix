@@ -1,0 +1,79 @@
+use crate::gateway::atp::frame::AtpReply;
+use crate::gateway::validator::ValidatedCmd;
+
+use super::{ipc_forward, unknown_op, HandlerCtx};
+
+pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
+    let id = cmd.cmd.id.clone();
+    let op = cmd.cmd.op.as_str();
+
+    match op {
+        "status" | "reload" | "shutdown" | "restart" | "logs" | "install" | "uninstall"
+        | "update" => {
+            ipc_forward(
+                &id,
+                &format!("kernel/sys/{op}"),
+                cmd.cmd.body,
+                ctx.ipc.as_ref(),
+            )
+            .await
+        }
+        op => unknown_op(id, op),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::atp::error::AtpErrorCode;
+    use crate::gateway::atp::types::AtpDomain;
+    use crate::gateway::handlers::test_helpers::make_test_ctx;
+    use crate::types::Role;
+    use serde_json::json;
+
+    fn make_cmd(op: &str) -> ValidatedCmd {
+        ValidatedCmd {
+            cmd: crate::gateway::atp::frame::AtpCmd {
+                msg_type: "cmd".into(),
+                id: "sys-1".into(),
+                token: "tok".into(),
+                domain: AtpDomain::Sys,
+                op: op.into(),
+                body: json!({}),
+            },
+            caller_identity: "alice".into(),
+            caller_role: Role::Operator,
+            caller_session_id: "sess-sys".into(),
+        }
+    }
+
+    async fn make_ctx(method: &str, response: serde_json::Value) -> HandlerCtx {
+        make_test_ctx(method, response).await
+    }
+
+    #[tokio::test]
+    async fn sys_status_returns_service_health() {
+        let ctx = make_ctx(
+            "kernel/sys/status",
+            json!({"uptime": 12345, "services": []}),
+        )
+        .await;
+        let reply = handle(make_cmd("status"), &ctx).await;
+        assert!(reply.ok);
+    }
+
+    #[tokio::test]
+    async fn sys_reload_translates_correctly() {
+        let ctx = make_ctx("kernel/sys/reload", json!({})).await;
+        let reply = handle(make_cmd("reload"), &ctx).await;
+        assert!(reply.ok);
+    }
+
+    #[tokio::test]
+    async fn unknown_op_returns_eparse() {
+        let ctx = make_ctx("", json!({})).await;
+        let reply = handle(make_cmd("ping"), &ctx).await;
+        assert!(!reply.ok);
+        assert_eq!(reply.error.unwrap().code, AtpErrorCode::Eparse);
+    }
+}

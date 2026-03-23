@@ -11,6 +11,7 @@ pub struct ValidatedCmd {
     pub cmd: AtpCmd,
     pub caller_identity: String,
     pub caller_role: Role,
+    pub caller_session_id: String,
 }
 
 pub async fn validate_cmd(
@@ -53,6 +54,7 @@ pub async fn validate_cmd(
     Ok(ValidatedCmd {
         caller_identity: claims.sub.clone(),
         caller_role: claims.role,
+        caller_session_id: claims.session_id.clone(),
         cmd,
     })
 }

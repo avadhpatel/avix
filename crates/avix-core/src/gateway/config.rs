@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct GatewayConfig {
@@ -7,6 +8,8 @@ pub struct GatewayConfig {
     /// In dev/test mode, TLS is disabled.
     pub tls_enabled: bool,
     pub hil_timeout_secs: u64,
+    /// Path to the kernel IPC socket. Falls back to `AVIX_KERNEL_SOCK` env var if None.
+    pub kernel_sock: Option<PathBuf>,
 }
 
 impl Default for GatewayConfig {
@@ -16,6 +19,7 @@ impl Default for GatewayConfig {
             admin_addr: "127.0.0.1:7701".parse().unwrap(),
             tls_enabled: false,
             hil_timeout_secs: 600,
+            kernel_sock: None,
         }
     }
 }
