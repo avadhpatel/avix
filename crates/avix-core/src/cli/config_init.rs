@@ -76,8 +76,6 @@ identities:
     let root = &params.root;
     let now = chrono::Utc::now().to_rfc3339();
     let identity = &params.identity_name;
-    let role = &params.role;
-    let cred_type = &params.credential_type;
     let root_str = root.display();
 
     write_if_absent(
@@ -89,12 +87,13 @@ identities:
         &root.join("etc/users.yaml"),
         &USERS_YAML_TEMPLATE
             .replace("{identity}", identity)
-            .replace("{role}", role)
-            .replace("{cred_type}", cred_type)
-            .replace("{key_hash}", &key_hash),
+            .replace("{now}", &now),
     )?;
 
-    write_if_absent(&root.join("etc/crews.yaml"), CREWS_YAML_TEMPLATE)?;
+    write_if_absent(
+        &root.join("etc/crews.yaml"),
+        &CREWS_YAML_TEMPLATE.replace("{now}", &now),
+    )?;
 
     write_if_absent(&root.join("etc/crontab.yaml"), CRONTAB_YAML_TEMPLATE)?;
 
@@ -176,18 +175,27 @@ spec:
 
 const USERS_YAML_TEMPLATE: &str = "apiVersion: avix/v1
 kind: Users
+metadata:
+  lastUpdated: \"{now}\"
 spec:
   users:
-    - name: \"{identity}\"
+    - username: \"{identity}\"
       uid: 1001
-      role: \"{role}\"
-      credential:
-        type: \"{cred_type}\"
-        keyHash: \"{key_hash}\"
+      workspace: /users/{identity}/workspace
+      shell: /bin/sh
+      crews: []
+      additionalTools: []
+      deniedTools: []
+      quota:
+        tokens: 500000
+        agents: 5
+        sessions: 4
 ";
 
 const CREWS_YAML_TEMPLATE: &str = "apiVersion: avix/v1
 kind: Crews
+metadata:
+  lastUpdated: \"{now}\"
 spec:
   crews: []
 ";

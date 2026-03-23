@@ -1,10 +1,10 @@
 use crate::bootstrap::phase1;
+use crate::config::users::UsersConfig;
 use crate::error::AvixError;
 use crate::memfs::{MemFs, VfsPath};
 use crate::params::limits::{AgentLimits, LimitsFile, LimitsLayer};
-use crate::params::resolver::{ParamResolver, ResolverInput, ResolverInputLoader};
 use crate::params::resolved_file::ResolvedFile;
-use serde::Deserialize;
+use crate::params::resolver::{ParamResolver, ResolverInput, ResolverInputLoader};
 use std::path::PathBuf;
 
 pub struct ResolveParams {
@@ -22,25 +22,6 @@ pub struct ResolveResult {
     pub output: String,
 }
 
-// ── Internal: parse users.yaml ─────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct UsersFile {
-    spec: UsersSpec,
-}
-
-#[derive(Deserialize)]
-struct UsersSpec {
-    users: Vec<UserEntry>,
-}
-
-#[derive(Deserialize)]
-struct UserEntry {
-    name: String,
-    #[serde(default)]
-    crews: Vec<String>,
-}
-
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 /// Resolve agent parameters for the given user and print a `kind: Resolved` YAML document.
@@ -52,17 +33,14 @@ pub async fn run_resolve(params: ResolveParams) -> Result<ResolveResult, AvixErr
     let users_path = params.root.join("etc/users.yaml");
     let users_yaml = std::fs::read_to_string(&users_path)
         .map_err(|e| AvixError::ConfigParse(format!("cannot read users.yaml: {e}")))?;
-    let users_file: UsersFile = serde_yaml::from_str(&users_yaml)
-        .map_err(|e| AvixError::ConfigParse(format!("invalid users.yaml: {e}")))?;
+    let users_config = UsersConfig::from_str(&users_yaml)?;
 
-    let user = users_file
-        .spec
-        .users
-        .iter()
-        .find(|u| u.name == params.username)
-        .ok_or_else(|| {
-            AvixError::ConfigParse(format!("user '{}' not found in users.yaml", params.username))
-        })?;
+    let user = users_config.find_user(&params.username).ok_or_else(|| {
+        AvixError::ConfigParse(format!(
+            "user '{}' not found in users.yaml",
+            params.username
+        ))
+    })?;
 
     let mut crews = user.crews.clone();
     if let Some(extra) = &params.extra_crew {
@@ -119,10 +97,14 @@ pub async fn run_resolve(params: ResolveParams) -> Result<ResolveResult, AvixErr
     }
 
     // 6. Run full resolution
-    let (resolved, annotations) = ParamResolver::resolve(&input)
-        .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+    let (resolved, annotations) =
+        ParamResolver::resolve(&input).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
-    let annotations = if params.explain { Some(annotations) } else { None };
+    let annotations = if params.explain {
+        Some(annotations)
+    } else {
+        None
+    };
 
     let file = ResolvedFile::new(&params.username, None, crews, resolved, vec![], annotations);
     let output = file.to_yaml()?;

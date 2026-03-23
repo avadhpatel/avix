@@ -45,3 +45,31 @@ param-gap-A  (independent — expand KernelConfig struct)
 param-gap-B  (independent — typed Defaults/Limits structs)
 param-gap-B  →  param-gap-C  →  param-gap-D  →  param-gap-E
 ```
+
+### Users / Crews Schema Gaps
+
+| File | Description | Priority | Depends On |
+|------|-------------|----------|------------|
+| `users-gap-A-schema.md` | Full Users schema: spec wrapper, username field, workspace/home/shell, crews, full quota with "unlimited" support | High | — |
+| `crews-gap-A-schema.md` | Full Crews schema: spec wrapper, name + integer cid, typed CrewMember, agentInheritance, sharedPaths, pipePolicy | High | — |
+
+### Recommended Build Order
+
+```
+users-gap-A  (independent)
+crews-gap-A  (independent; users-gap-A advisable first for cross-ref tests)
+```
+
+### Snapshot Gaps
+
+| File | Description | Priority | Depends On |
+|------|-------------|----------|------------|
+| `snapshot-gap-A-schema.md` | Align SnapshotFile envelope: apiVersion/kind, SnapshotMetadata, SnapshotSpec with all fields, CapturedBy/Trigger enums, async SnapshotStore | High | — |
+| `snapshot-gap-B-capture.md` | Snapshot capture: SIGSAVE handler writes to VFS, checksum computation, snap/save + snap/list + snap/delete syscalls, auto-snapshot task | High | Gap A |
+| `snapshot-gap-C-restore.md` | Snapshot restore: checksum verify, fresh CapabilityToken, context rebuild, pending request re-issue, pipe SIGPIPE, snap/restore syscall | Medium | Gap A, Gap B |
+
+### Recommended Build Order
+
+```
+snapshot-gap-A  →  snapshot-gap-B  →  snapshot-gap-C
+```

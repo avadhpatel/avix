@@ -277,58 +277,80 @@ fn kernel_config_no_restart_for_safety_change() {
 fn users_yaml() -> &'static str {
     r#"
 apiVersion: avix/v1
-kind: UsersConfig
-users:
-  - name: alice
-    uid: 1001
-    role: admin
-    additionalTools:
-      - "exec/python"
-    deniedTools: []
-    quota:
-      tokens: 1000000
-      requestsPerDay: 500
-  - name: bob
-    uid: 1002
-    role: user
+kind: Users
+metadata:
+  lastUpdated: "2026-03-20T00:00:00Z"
+spec:
+  users:
+    - username: alice
+      uid: 1001
+      workspace: /users/alice/workspace
+      shell: /bin/sh
+      crews: [researchers]
+      additionalTools:
+        - "exec/python"
+      deniedTools: []
+      quota:
+        tokens: 1000000
+        agents: 5
+        sessions: 4
+    - username: bob
+      uid: 2001
+      workspace: /users/bob/workspace
+      shell: /bin/sh
+      crews: []
 "#
 }
 
 #[test]
 fn users_config_parses_successfully() {
     let cfg = UsersConfig::from_str(users_yaml()).unwrap();
-    assert_eq!(cfg.users.len(), 2);
+    assert_eq!(cfg.users().len(), 2);
+}
+
+#[test]
+fn users_config_find_user() {
+    let cfg = UsersConfig::from_str(users_yaml()).unwrap();
+    assert!(cfg.find_user("alice").is_some());
+    assert!(cfg.find_user("nobody").is_none());
 }
 
 #[test]
 fn users_config_additional_tools() {
     let cfg = UsersConfig::from_str(users_yaml()).unwrap();
-    let alice = cfg.users.iter().find(|u| u.name == "alice").unwrap();
+    let alice = cfg.find_user("alice").unwrap();
     assert!(alice.additional_tools.contains(&"exec/python".to_string()));
 }
 
 #[test]
 fn users_config_quota() {
+    use avix_core::config::QuotaValue;
     let cfg = UsersConfig::from_str(users_yaml()).unwrap();
-    let alice = cfg.users.iter().find(|u| u.name == "alice").unwrap();
+    let alice = cfg.find_user("alice").unwrap();
     let quota = alice.quota.as_ref().unwrap();
-    assert_eq!(quota.tokens, Some(1_000_000));
-    assert_eq!(quota.requests_per_day, Some(500));
+    assert_eq!(quota.tokens, Some(QuotaValue::Count(1_000_000)));
+    assert_eq!(quota.agents, Some(QuotaValue::Count(5)));
 }
 
 #[test]
 fn users_config_rejects_duplicate_uids() {
     let yaml = r#"
 apiVersion: avix/v1
-kind: UsersConfig
-users:
-  - name: alice
-    uid: 1001
-    role: admin
-  - name: bob
-    uid: 1001
-    role: user
+kind: Users
+spec:
+  users:
+    - username: alice
+      uid: 1001
+    - username: bob
+      uid: 1001
 "#;
+    assert!(UsersConfig::from_str(yaml).is_err());
+}
+
+#[test]
+fn users_config_rejects_reserved_uid_range() {
+    let yaml =
+        "apiVersion: avix/v1\nkind: Users\nspec:\n  users:\n  - username: svc\n    uid: 500\n";
     assert!(UsersConfig::from_str(yaml).is_err());
 }
 
@@ -337,41 +359,61 @@ users:
 fn crews_yaml() -> &'static str {
     r#"
 apiVersion: avix/v1
-kind: CrewsConfig
-crews:
-  - cid: research-crew
-    members:
-      - alice
-      - bob
-    allowedTools:
-      - "fs/read"
-      - "llm/complete"
-    deniedTools:
-      - "exec/shell"
+kind: Crews
+metadata:
+  lastUpdated: "2026-03-20T00:00:00Z"
+spec:
+  crews:
+    - name: researchers
+      cid: 1001
+      members:
+        - user:alice
+        - user:bob
+      allowedTools:
+        - "fs/read"
+        - "llm/complete"
+      deniedTools:
+        - "exec/shell"
+      sharedPaths:
+        - /crews/researchers/shared/docs/
 "#
 }
 
 #[test]
 fn crews_config_parses_successfully() {
     let cfg = CrewsConfig::from_str(crews_yaml()).unwrap();
-    assert_eq!(cfg.crews.len(), 1);
+    assert_eq!(cfg.crews().len(), 1);
+}
+
+#[test]
+fn crews_config_find_crew() {
+    let cfg = CrewsConfig::from_str(crews_yaml()).unwrap();
+    assert!(cfg.find_crew("researchers").is_some());
+    assert!(cfg.find_crew("nobody").is_none());
 }
 
 #[test]
 fn crews_config_members() {
     let cfg = CrewsConfig::from_str(crews_yaml()).unwrap();
-    let crew = &cfg.crews[0];
-    assert_eq!(crew.cid, "research-crew");
-    assert!(crew.members.contains(&"alice".to_string()));
-    assert!(crew.members.contains(&"bob".to_string()));
+    let crew = cfg.find_crew("researchers").unwrap();
+    assert_eq!(crew.cid, 1001);
+    assert!(crew.contains_user("alice"));
+    assert!(crew.contains_user("bob"));
 }
 
 #[test]
 fn crews_config_allowed_denied_tools() {
     let cfg = CrewsConfig::from_str(crews_yaml()).unwrap();
-    let crew = &cfg.crews[0];
+    let crew = cfg.find_crew("researchers").unwrap();
     assert!(crew.allowed_tools.contains(&"fs/read".to_string()));
     assert!(crew.denied_tools.contains(&"exec/shell".to_string()));
+}
+
+#[test]
+fn crews_config_rejects_duplicate_cids() {
+    let yaml = "apiVersion: avix/v1\nkind: Crews\nspec:\n  crews:\n\
+            - name: a\n    cid: 1001\n  - name: b\n    cid: 1001\n";
+    assert!(CrewsConfig::from_str(yaml).is_err());
 }
 
 // ─── LlmConfig tests ─────────────────────────────────────────────────────────

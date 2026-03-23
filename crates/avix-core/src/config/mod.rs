@@ -5,7 +5,7 @@ pub mod llm;
 pub mod users;
 
 pub use auth::{AuthConfig, AuthIdentity, CredentialType};
-pub use crews::{Crew, CrewsConfig};
+pub use crews::{AgentInheritance, Crew, CrewMember, CrewsConfig, PipePolicy};
 pub use kernel::{
     EvictionPolicy, IpcConfig, IpcTransportKind, KernelConfig, LogLevel, MasterKeyConfig,
     MasterKeySource, MemoryConfig, ModelsConfig, ObservabilityConfig, PolicyEngineMode,
@@ -13,4 +13,4 @@ pub use kernel::{
     SecretStoreConfig, SecretsConfig,
 };
 pub use llm::{LlmConfig, ProviderAuth, ProviderConfig};
-pub use users::{User, UsersConfig};
+pub use users::{QuotaValue, User, UserQuota, UsersConfig};
