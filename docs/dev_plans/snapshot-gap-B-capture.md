@@ -135,7 +135,7 @@ async fn capture_and_write_snapshot(&self, trigger: SnapshotTrigger, captured_by
         granted_tools: &self.token.granted_tools,
         trigger,
         captured_by,
-        memory: SnapshotMemory::default(), // Gap C: fill from episodic store
+        memory: SnapshotMemory::default(), // fill from memory.svc after memory-gap-C lands
         pending_requests: vec![],          // Gap C: fill from in-flight requests
         open_pipes: vec![],               // Gap C: fill from pipe registry
     };
