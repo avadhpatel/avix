@@ -147,7 +147,10 @@ async fn main() -> Result<()> {
             })
             .await?;
             if result.restart_required.is_empty() {
-                println!("Config valid — hot-reloadable sections: {}", result.reloaded_sections.join(", "));
+                println!(
+                    "Config valid — hot-reloadable sections: {}",
+                    result.reloaded_sections.join(", ")
+                );
                 if check {
                     println!("(--check mode: no reload-pending marker written)");
                 }
@@ -157,7 +160,10 @@ async fn main() -> Result<()> {
                     result.restart_required.join(", ")
                 );
                 if !result.reloaded_sections.is_empty() {
-                    println!("Hot-reloadable sections: {}", result.reloaded_sections.join(", "));
+                    println!(
+                        "Hot-reloadable sections: {}",
+                        result.reloaded_sections.join(", ")
+                    );
                 }
                 std::process::exit(1);
             }

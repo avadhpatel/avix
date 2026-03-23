@@ -31,7 +31,9 @@ async fn config_reload_check_reports_sections() {
         "scheduler should be in reloaded_sections"
     );
     assert!(
-        result.reloaded_sections.contains(&"observability".to_string()),
+        result
+            .reloaded_sections
+            .contains(&"observability".to_string()),
         "observability should be in reloaded_sections"
     );
     assert!(

@@ -205,7 +205,8 @@ impl RuntimeExecutor {
     /// No-op when no VFS is attached.
     /// Uses `spawned_by` as the username and no crew memberships.
     pub async fn init_proc_files(&self) {
-        self.init_proc_files_for(&self.spawned_by.clone(), &[]).await;
+        self.init_proc_files_for(&self.spawned_by.clone(), &[])
+            .await;
     }
 
     /// Like `init_proc_files`, but with explicit username and crew memberships for
@@ -244,9 +245,7 @@ impl RuntimeExecutor {
         use crate::params::defaults::system_agent_defaults;
         use crate::params::limits::system_agent_limits;
         use crate::params::resolved_file::ResolvedFile;
-        use crate::params::resolver::{
-            ParamResolver, ResolverInput, ResolverInputLoader,
-        };
+        use crate::params::resolver::{ParamResolver, ResolverInput, ResolverInputLoader};
 
         let pid = self.pid.as_u32();
 

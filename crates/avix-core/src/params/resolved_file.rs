@@ -138,7 +138,13 @@ mod tests {
         let tools = vec!["fs/read".into(), "fs/write".into()];
         let file = ResolvedFile::new("alice", Some(10), vec![], cfg, tools, None);
         let yaml = file.to_yaml().unwrap();
-        assert!(yaml.contains("fs/read"), "resolved yaml must contain fs/read");
-        assert!(yaml.contains("fs/write"), "resolved yaml must contain fs/write");
+        assert!(
+            yaml.contains("fs/read"),
+            "resolved yaml must contain fs/read"
+        );
+        assert!(
+            yaml.contains("fs/write"),
+            "resolved yaml must contain fs/write"
+        );
     }
 }
