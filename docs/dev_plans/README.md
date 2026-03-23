@@ -8,6 +8,30 @@ Consider files in this folder temporary and can be deleted as per dev's needs.
 
 ---
 
+## ATP / Gateway Gaps
+
+Implement `gateway.svc` — the WebSocket server and full Avix Terminal Protocol per
+`docs/spec/avix-terminal-protocol.md`.
+
+| File | Description | Priority | Depends On |
+|------|-------------|----------|------------|
+| `atp-gap-A-message-framing.md` | Wire types: `AtpFrame`, `AtpCmd`, `AtpReply`, `AtpEvent`, `AtpSubscribe`, `AtpErrorCode` (11 codes), `AtpDomain` (11), `AtpEventKind` (16) | **Critical** | — |
+| `atp-gap-B-token-and-session.md` | Align `ATPTokenClaims` (uid, crews, scope, iat); base64url encoding; `SessionState`; `SessionEntry` full fields; token refresh; `is_expiring_soon` | **Critical** | Gap A |
+| `atp-gap-C-access-control.md` | Full domain × role matrix; ownership check; `/secrets/` & `/proc/` hard vetoes; admin-port gate; replay protection (`ReplayGuard`); `AtpValidator` pipeline | **Critical** | Gap A, Gap B |
+| `atp-gap-D-websocket-transport.md` | `GatewayServer` (axum); `POST /atp/auth/login`; `GET /atp` WS upgrade; dual-port 7700/7701; keep-alive ping/pong; `session.ready` push; 60 s grace window | **Critical** | Gap A–C |
+| `atp-gap-E-command-domains.md` | All 11 domain handlers (~60 ops): auth, proc (full), signal, fs (full), snap, cron, users, crews, cap, sys (full), pipe | High | Gap A–D |
+| `atp-gap-F-event-bus.md` | `AtpEventBus` (broadcast); `EventFilter` (role + ownership + subscription); 16 event kinds; VFS-change → `fs.changed`; publish helpers | High | Gap A, Gap D |
+| `atp-gap-G-hil-integration.md` | `HilRequest` VFS schema; `HilManager`; `hil.request` / `hil.resolved` events; timeout auto-deny; `SIGRESUME + approvalToken` → atomic consume → `EUSED` | High | Gap A–F |
+
+### Recommended Build Order
+
+```
+atp-gap-A  →  atp-gap-B  →  atp-gap-C  →  atp-gap-D  →  atp-gap-E
+                                                      ↘  atp-gap-F  →  atp-gap-G
+```
+
+---
+
 ## Development Workflow
 
 After each gap plan is implemented and all tests pass:
