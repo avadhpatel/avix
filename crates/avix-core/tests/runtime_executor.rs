@@ -5,7 +5,7 @@ use avix_core::executor::{RuntimeExecutor, SpawnParams};
 use avix_core::kernel::KernelResourceHandler;
 use avix_core::llm_client::{LlmCompleteResponse, StopReason};
 use avix_core::llm_svc::adapter::AvixToolCall;
-use avix_core::memfs::{MemFs, VfsPath};
+use avix_core::memfs::{VfsPath, VfsRouter};
 use avix_core::types::token::CapabilityToken;
 use avix_core::types::{tool::ToolVisibility, Pid};
 use serde_json::json;
@@ -869,7 +869,7 @@ async fn token_renewal_via_resource_handler_updates_token() {
 #[tokio::test]
 async fn pipe_open_via_resource_handler_writes_proc_entry() {
     let handler = Arc::new(KernelResourceHandler::new(TEST_KEY.to_vec()));
-    let vfs = Arc::new(MemFs::new());
+    let vfs = Arc::new(VfsRouter::new());
     let (executor, _reg) = spawn_with_signed_token(500, &["pipe/open"]).await;
     let mut executor = executor
         .with_resource_handler(handler)
@@ -898,7 +898,7 @@ async fn pipe_open_via_resource_handler_writes_proc_entry() {
 #[tokio::test]
 async fn pipe_open_proc_entry_contains_pipe_metadata() {
     let handler = Arc::new(KernelResourceHandler::new(TEST_KEY.to_vec()));
-    let vfs = Arc::new(MemFs::new());
+    let vfs = Arc::new(VfsRouter::new());
     let (executor, _reg) = spawn_with_signed_token(501, &["pipe/open"]).await;
     let mut executor = executor
         .with_resource_handler(handler)
@@ -943,7 +943,7 @@ async fn pipe_open_without_handler_returns_stub() {
 #[tokio::test]
 async fn spawn_writes_status_yaml_to_vfs() {
     let handler = Arc::new(KernelResourceHandler::new(TEST_KEY.to_vec()));
-    let vfs = Arc::new(MemFs::new());
+    let vfs = Arc::new(VfsRouter::new());
     let (executor, _reg) = spawn_with_signed_token(600, &["fs/read", "llm/complete"]).await;
     let executor = executor
         .with_resource_handler(handler)
@@ -959,7 +959,7 @@ async fn spawn_writes_status_yaml_to_vfs() {
 
 #[tokio::test]
 async fn spawn_status_yaml_contains_pid_and_name() {
-    let vfs = Arc::new(MemFs::new());
+    let vfs = Arc::new(VfsRouter::new());
     let registry = Arc::new(MockToolRegistry::new());
     let params = SpawnParams {
         pid: Pid::new(601),
@@ -994,7 +994,7 @@ async fn spawn_status_yaml_contains_pid_and_name() {
 
 #[tokio::test]
 async fn spawn_writes_resolved_yaml_to_vfs() {
-    let vfs = Arc::new(MemFs::new());
+    let vfs = Arc::new(VfsRouter::new());
     let registry = Arc::new(MockToolRegistry::new());
     let params = SpawnParams {
         pid: Pid::new(602),

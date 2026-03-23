@@ -18,11 +18,15 @@ pub struct EntrypointDefaults {
 #[serde(rename_all = "camelCase", default)]
 pub struct MemoryDefaults {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub working_context: Option<String>,
+    pub episodic_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub episodic_persistence: Option<bool>,
+    pub semantic_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub semantic_store_access: Option<String>,
+    pub preferences_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_inject_at_spawn: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_log_on_session_end: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -129,15 +133,11 @@ fn merge_entrypoint(base: &EntrypointDefaults, over: &EntrypointDefaults) -> Ent
 
 fn merge_memory(base: &MemoryDefaults, over: &MemoryDefaults) -> MemoryDefaults {
     MemoryDefaults {
-        working_context: over
-            .working_context
-            .clone()
-            .or(base.working_context.clone()),
-        episodic_persistence: over.episodic_persistence.or(base.episodic_persistence),
-        semantic_store_access: over
-            .semantic_store_access
-            .clone()
-            .or(base.semantic_store_access.clone()),
+        episodic_enabled: over.episodic_enabled.or(base.episodic_enabled),
+        semantic_enabled: over.semantic_enabled.or(base.semantic_enabled),
+        preferences_enabled: over.preferences_enabled.or(base.preferences_enabled),
+        auto_inject_at_spawn: over.auto_inject_at_spawn.or(base.auto_inject_at_spawn),
+        auto_log_on_session_end: over.auto_log_on_session_end.or(base.auto_log_on_session_end),
     }
 }
 
@@ -250,9 +250,11 @@ pub fn system_agent_defaults() -> AgentDefaults {
             max_tool_chain: Some(5),
         }),
         memory: Some(MemoryDefaults {
-            working_context: Some("dynamic".into()),
-            episodic_persistence: Some(false),
-            semantic_store_access: Some("none".into()),
+            episodic_enabled: Some(true),
+            semantic_enabled: Some(true),
+            preferences_enabled: Some(true),
+            auto_inject_at_spawn: Some(true),
+            auto_log_on_session_end: Some(false),
         }),
         snapshot: Some(SnapshotDefaults {
             enabled: Some(false),

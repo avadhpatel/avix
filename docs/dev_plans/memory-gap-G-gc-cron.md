@@ -1,6 +1,6 @@
 # Memory Gap G — GC and Cron Tasks
 
-> **Status:** Not started
+> **Status:** Partial — GC functions implemented; reindex and CronScheduler wiring deferred (requires llm/embed)
 > **Priority:** Low — system runs without GC; episodic records accumulate until this is implemented
 > **Depends on:** memory-gap-C (service tools), memory-gap-E (vector index, for reindex job)
 > **Affects:** `avix-core/src/cron_svc/`, `avix-core/src/memory_svc/gc.rs` (new)
@@ -321,10 +321,15 @@ async fn cron_fires_gc_daily() {
 
 ## Success Criteria
 
-- [ ] GC deletes episodic records older than `retention_days` (T-MG-01)
-- [ ] GC never deletes pinned records (T-MG-02)
-- [ ] Expired session grants pruned (T-MG-03)
-- [ ] Reindex skips up-to-date records (T-MG-04)
-- [ ] Reindex processes stale records and updates `vectorModel` (T-MG-05)
-- [ ] CronScheduler fires GC job handler (T-MG-06)
-- [ ] `cargo clippy --workspace -- -D warnings` passes
+- [x] GC deletes episodic records older than `retention_days` (T-MG-01)
+- [x] GC never deletes pinned records (T-MG-02)
+- [x] Expired session grants pruned (T-MG-03)
+- [ ] Reindex skips up-to-date records (T-MG-04) — deferred: requires llm/embed
+- [ ] Reindex processes stale records and updates `vectorModel` (T-MG-05) — deferred: requires llm/embed
+- [ ] CronScheduler fires GC job handler (T-MG-06) — deferred: wired at kernel boot
+- [x] `cargo clippy --workspace -- -D warnings` passes
+
+Note: `gc_episodic_records(vfs, agents: &[(&str, &str)], retention_days)` and
+`prune_expired_grants(vfs, agent_names: &[&str])` take explicit agent lists
+(rather than scanning /users/ dirs) because MemFs.list() returns only immediate
+children — agent dirs are not discoverable without explicit enumeration.

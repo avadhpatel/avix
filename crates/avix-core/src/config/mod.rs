@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod crews;
+pub mod fstab;
 pub mod kernel;
 pub mod llm;
 pub mod users;
@@ -7,8 +8,9 @@ pub mod users;
 pub use auth::{AuthConfig, AuthIdentity, CredentialType};
 pub use crews::{AgentInheritance, Crew, CrewMember, CrewsConfig, PipePolicy};
 pub use kernel::{
-    EvictionPolicy, IpcConfig, IpcTransportKind, KernelConfig, LogLevel, MasterKeyConfig,
-    MasterKeySource, MemoryConfig, ModelsConfig, ObservabilityConfig, PolicyEngineMode,
+    IpcConfig, IpcTransportKind, KernelConfig, LogLevel, MasterKeyConfig, MasterKeySource,
+    MemoryConfig, MemoryEpisodicConfig, MemoryRetrievalConfig, MemorySemanticConfig,
+    MemorySharingConfig, MemorySpawnConfig, ModelsConfig, ObservabilityConfig, PolicyEngineMode,
     SafetyConfig, SchedulerAlgorithm, SchedulerConfig, SecretAlgorithm, SecretAuditConfig,
     SecretStoreConfig, SecretsConfig,
 };

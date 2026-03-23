@@ -108,6 +108,10 @@ identities:
     // Data directories referenced by fstab mounts
     std::fs::create_dir_all(root.join(format!("data/users/{identity}")))
         .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+    std::fs::create_dir_all(root.join("data/crews"))
+        .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+    std::fs::create_dir_all(root.join("data/services"))
+        .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
     std::fs::create_dir_all(root.join("secrets"))
         .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
@@ -129,9 +133,24 @@ spec:
 
   memory:
     defaultContextLimit: 200000
-    evictionPolicy: lru_salience
-    maxEpisodicRetentionDays: 30
-    sharedMemoryPath: /shared/
+    episodic:
+      maxRetentionDays: 30
+      maxRecordsPerAgent: 10000
+    semantic:
+      maxFactsPerAgent: 5000
+    retrieval:
+      defaultLimit: 5
+      maxLimit: 20
+      candidateFetchK: 20
+      rrfK: 60
+    spawn:
+      episodicContextRecords: 5
+      preferencesEnabled: true
+      pinnedFactsEnabled: true
+    sharing:
+      enabled: true
+      hilTimeoutSec: 600
+      crossUserEnabled: false
 
   ipc:
     transport: local-ipc

@@ -103,9 +103,12 @@ spec:
     maxConcurrentAgents: 50
   memory:
     defaultContextLimit: 200000
-    evictionPolicy: lru_salience
-    maxEpisodicRetentionDays: 30
-    sharedMemoryPath: /shared/
+    episodic:
+      maxRetentionDays: 30
+      maxRecordsPerAgent: 10000
+    retrieval:
+      defaultLimit: 5
+      maxLimit: 20
   ipc:
     transport: local-ipc
     socketName: avix-kernel
@@ -164,7 +167,7 @@ fn kernel_config_socket_name() {
 
 #[test]
 fn kernel_config_full_parse() {
-    use avix_core::config::{EvictionPolicy, LogLevel, SchedulerAlgorithm};
+    use avix_core::config::{LogLevel, SchedulerAlgorithm};
     let cfg = KernelConfig::from_str(kernel_yaml_full()).unwrap();
     assert_eq!(
         cfg.spec.scheduler.algorithm,
@@ -172,7 +175,8 @@ fn kernel_config_full_parse() {
     );
     assert_eq!(cfg.spec.scheduler.tick_ms, 100);
     assert_eq!(cfg.spec.memory.default_context_limit, 200_000);
-    assert_eq!(cfg.spec.memory.eviction_policy, EvictionPolicy::LruSalience);
+    assert_eq!(cfg.spec.memory.episodic.max_retention_days, 30);
+    assert_eq!(cfg.spec.memory.retrieval.default_limit, 5);
     assert_eq!(cfg.spec.safety.max_tool_chain_length, 10);
     assert!(cfg.spec.safety.hil_on_escalation);
     assert!(!cfg.spec.observability.trace_enabled);
@@ -192,6 +196,23 @@ fn kernel_config_defaults_applied_for_missing_fields() {
     assert!(cfg.spec.safety.hil_on_escalation);
     assert_eq!(cfg.spec.ipc.max_message_bytes, 65_536);
     assert!(!cfg.spec.observability.trace_enabled);
+}
+
+// T-MA-08: MemoryConfig defaults match spec
+#[test]
+fn memory_config_defaults() {
+    use avix_core::config::MemoryConfig;
+    let cfg: MemoryConfig = serde_yaml::from_str("{}").unwrap();
+    assert_eq!(cfg.default_context_limit, 200_000);
+    assert_eq!(cfg.episodic.max_retention_days, 30);
+    assert_eq!(cfg.episodic.max_records_per_agent, 10_000);
+    assert_eq!(cfg.semantic.max_facts_per_agent, 5_000);
+    assert_eq!(cfg.retrieval.default_limit, 5);
+    assert_eq!(cfg.retrieval.max_limit, 20);
+    assert_eq!(cfg.retrieval.rrf_k, 60);
+    assert!(cfg.sharing.enabled);
+    assert!(!cfg.sharing.cross_user_enabled);
+    assert_eq!(cfg.sharing.hil_timeout_sec, 600);
 }
 
 #[test]

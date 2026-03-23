@@ -1,7 +1,7 @@
 /// Integration tests for Pipe IPC tool handlers (Gap E).
 use avix_core::{
     error::AvixError,
-    memfs::MemFs,
+    memfs::VfsRouter,
     pipe::{BackpressurePolicy, PipeConfig, PipeDirection, PipeEncoding, PipeManager, ReadResult},
     signal::delivery::SignalDelivery,
     types::Pid,
@@ -170,7 +170,7 @@ async fn pipe_close_delivers_sigpipe_to_partner() {
 async fn pipe_open_writes_vfs_manifest() {
     use avix_core::memfs::VfsPath;
 
-    let vfs = Arc::new(MemFs::new());
+    let vfs = Arc::new(VfsRouter::new());
     let mgr = PipeManager::new();
     let id = mgr.open(out_config(10, 20), Some(&vfs)).await.unwrap();
 

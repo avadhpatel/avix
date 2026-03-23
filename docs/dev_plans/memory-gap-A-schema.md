@@ -1,6 +1,6 @@
 # Memory Gap A — Core Schema Types
 
-> **Status:** Not started
+> **Status:** Complete
 > **Priority:** High — all other memory gaps depend on these types
 > **Depends on:** None
 > **Affects:** `avix-core/src/memory_svc/schema.rs` (new), `avix-core/src/config/kernel.rs`

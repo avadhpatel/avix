@@ -1,6 +1,6 @@
 # Memory Gap C — memory.svc Service & Tool Handlers
 
-> **Status:** Not started
+> **Status:** Complete
 > **Priority:** High — core service; all agent memory operations require this
 > **Depends on:** memory-gap-A (schema), memory-gap-B (VFS layout)
 > **Affects:** `avix-core/src/memory_svc/` (new module), `avix-core/src/service/`

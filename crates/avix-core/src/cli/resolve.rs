@@ -1,7 +1,7 @@
 use crate::bootstrap::phase1;
 use crate::config::users::UsersConfig;
 use crate::error::AvixError;
-use crate::memfs::{MemFs, VfsPath};
+use crate::memfs::{LocalProvider, VfsRouter};
 use crate::params::limits::{AgentLimits, LimitsFile, LimitsLayer};
 use crate::params::resolved_file::ResolvedFile;
 use crate::params::resolver::{ParamResolver, ResolverInput, ResolverInputLoader};
@@ -26,8 +26,8 @@ pub struct ResolveResult {
 
 /// Resolve agent parameters for the given user and print a `kind: Resolved` YAML document.
 ///
-/// This is a pure I/O function: it opens the VFS, loads defaults and limits from disk
-/// and compiled-in sources, runs the resolution engine, and returns the serialised output.
+/// Builds a `VfsRouter` with `LocalProvider` mounts for the relevant crew and user
+/// directories so that the resolver can read defaults/limits directly from disk.
 pub async fn run_resolve(params: ResolveParams) -> Result<ResolveResult, AvixError> {
     // 1. Load user record from {root}/etc/users.yaml to get crew memberships
     let users_path = params.root.join("etc/users.yaml");
@@ -49,54 +49,43 @@ pub async fn run_resolve(params: ResolveParams) -> Result<ResolveResult, AvixErr
         }
     }
 
-    // 2. Build in-memory VFS with compiled-in system defaults/limits (via phase1)
-    let vfs = MemFs::new();
+    // 2. Build VfsRouter with compiled-in system defaults/limits (via phase1)
+    let vfs = VfsRouter::new();
     phase1::run(&vfs).await;
 
-    // 3. Load per-crew and per-user defaults/limits from disk into VFS
+    // 3. Mount per-crew directories so the resolver can read defaults/limits from disk
     for crew in &crews {
-        populate_vfs_from_disk(
-            &vfs,
-            &params.root.join(format!("data/crews/{crew}/defaults.yaml")),
-            &format!("/crews/{crew}/defaults.yaml"),
-        )
-        .await;
-        populate_vfs_from_disk(
-            &vfs,
-            &params.root.join(format!("data/crews/{crew}/limits.yaml")),
-            &format!("/crews/{crew}/limits.yaml"),
-        )
-        .await;
+        let crew_dir = params.root.join(format!("data/crews/{crew}"));
+        if crew_dir.exists() {
+            if let Ok(provider) = LocalProvider::new(&crew_dir) {
+                vfs.mount(format!("/crews/{crew}"), provider).await;
+            }
+        }
     }
-    populate_vfs_from_disk(
-        &vfs,
-        &params
-            .root
-            .join(format!("data/users/{}/defaults.yaml", params.username)),
-        &format!("/users/{}/defaults.yaml", params.username),
-    )
-    .await;
-    populate_vfs_from_disk(
-        &vfs,
-        &params
-            .root
-            .join(format!("data/users/{}/limits.yaml", params.username)),
-        &format!("/users/{}/limits.yaml", params.username),
-    )
-    .await;
 
-    // 4. Build resolver input via the VFS loader
+    // 4. Mount per-user directory
+    let user_dir = params
+        .root
+        .join(format!("data/users/{}", params.username));
+    if user_dir.exists() {
+        if let Ok(provider) = LocalProvider::new(&user_dir) {
+            vfs.mount(format!("/users/{}", params.username), provider)
+                .await;
+        }
+    }
+
+    // 5. Build resolver input via the VFS loader
     let loader = ResolverInputLoader::new(&vfs);
     let input = loader.load(&params.username, &crews).await?;
 
-    // 5. --limits-only: compute and return effective limits without running full resolution
+    // 6. --limits-only: compute and return effective limits without running full resolution
     if params.limits_only {
         let effective = compute_effective_limits(&input);
         let yaml = LimitsFile::from_agent_limits(LimitsLayer::System, None, &effective)?;
         return Ok(ResolveResult { output: yaml });
     }
 
-    // 6. Run full resolution
+    // 7. Run full resolution
     let (resolved, annotations) =
         ParamResolver::resolve(&input).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
@@ -113,15 +102,6 @@ pub async fn run_resolve(params: ResolveParams) -> Result<ResolveResult, AvixErr
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
-
-/// Silently read a disk file and write it into the VFS. Missing files are ignored.
-async fn populate_vfs_from_disk(vfs: &MemFs, disk_path: &std::path::Path, vfs_path: &str) {
-    if let Ok(bytes) = std::fs::read(disk_path) {
-        if let Ok(path) = VfsPath::parse(vfs_path) {
-            let _ = vfs.write(&path, bytes).await;
-        }
-    }
-}
 
 /// Compute the effective (tightest) limits by intersecting system, crew, and user limits.
 fn compute_effective_limits(input: &ResolverInput) -> AgentLimits {

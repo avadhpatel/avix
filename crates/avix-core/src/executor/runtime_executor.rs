@@ -11,7 +11,11 @@ use crate::kernel::resource_request::{
 };
 use crate::llm_client::LlmCompleteResponse;
 use crate::llm_svc::adapter::AvixToolCall;
-use crate::memfs::{MemFs, VfsPath};
+use crate::memfs::{VfsPath, VfsRouter};
+use crate::memory_svc::{
+    service::{CallerContext, MemoryService},
+    vfs_layout::init_user_memory_tree,
+};
 use crate::types::{token::CapabilityToken, tool::ToolVisibility, Pid};
 
 use super::mock_kernel::MockKernelHandle;
@@ -117,7 +121,7 @@ pub struct RuntimeExecutor {
     /// When set, takes precedence over the `MockKernelHandle` auto-approve flag.
     resource_handler: Option<Arc<KernelResourceHandler>>,
     /// VFS handle — when set, pipe/open writes a /proc/<pid>/pipes/<pipeId>.yaml record.
-    vfs: Option<Arc<MemFs>>,
+    vfs: Option<Arc<VfsRouter>>,
     registry_ref: RegistryRef,
     /// Set to `true` by the signal listener when SIGPAUSE is received.
     /// The LLM loop should check this at each tool boundary and wait until cleared.
@@ -125,6 +129,12 @@ pub struct RuntimeExecutor {
     /// Set to `true` by the signal listener when SIGKILL or SIGSTOP is received.
     /// The LLM loop should check this and exit cleanly.
     pub killed: Arc<AtomicBool>,
+    /// Memory service — when set, enables memory/log-event dispatch at SIGSTOP.
+    memory_svc: Option<Arc<MemoryService>>,
+    /// Pre-built memory context block injected into the system prompt at spawn.
+    memory_context: Option<String>,
+    /// Conversation history: list of (role, content) pairs, stored for session auto-log.
+    pub conversation_history: Vec<(String, String)>,
 }
 
 enum RegistryRef {
@@ -169,6 +179,9 @@ impl RuntimeExecutor {
             registry_ref: RegistryRef::Mock(registry),
             paused: Arc::new(AtomicBool::new(false)),
             killed: Arc::new(AtomicBool::new(false)),
+            memory_svc: None,
+            memory_context: None,
+            conversation_history: Vec::new(),
         };
 
         // GAP 3: populate tool_list at spawn time
@@ -195,9 +208,202 @@ impl RuntimeExecutor {
     }
 
     /// Attach a `MemFs` handle so `pipe/open` writes `/proc/<pid>/pipes/<pipeId>.yaml`.
-    pub fn with_vfs(mut self, vfs: Arc<MemFs>) -> Self {
+    pub fn with_vfs(mut self, vfs: Arc<VfsRouter>) -> Self {
         self.vfs = Some(vfs);
         self
+    }
+
+    /// Attach a `MemoryService` so SIGSTOP auto-logs the session to episodic memory.
+    pub fn with_memory_svc(mut self, svc: Arc<MemoryService>) -> Self {
+        self.memory_svc = Some(svc);
+        self
+    }
+
+    /// Initialise the memory VFS tree for this agent.
+    ///
+    /// Creates `/users/<owner>/memory/<agent>/{episodic,semantic,preferences,grants}/` dirs.
+    /// No-op when no VFS is attached or when no memory tools are in the token.
+    pub async fn init_memory_tree(&self) {
+        let vfs = match &self.vfs {
+            Some(v) => Arc::clone(v),
+            None => return,
+        };
+        // Only init if the agent has any memory tools
+        let has_memory = self.token.granted_tools.iter().any(|t| t.starts_with("memory/"));
+        if !has_memory {
+            return;
+        }
+        if let Err(e) =
+            init_user_memory_tree(&vfs, &self.spawned_by, &self.agent_name).await
+        {
+            tracing::warn!(
+                pid = self.pid.as_u32(),
+                err = ?e,
+                "memory tree init failed"
+            );
+        }
+    }
+
+    /// Build and store the memory context block from existing VFS records.
+    ///
+    /// Reads preferences, recent episodic records, and pinned facts.
+    /// Stores the result in `self.memory_context` for inclusion in the system prompt.
+    /// No-op when no VFS is attached.
+    pub async fn init_memory_context(&mut self) {
+        self.memory_context = self.build_memory_context_block().await;
+    }
+
+    async fn build_memory_context_block(&self) -> Option<String> {
+        use crate::memory_svc::{store, UserPreferenceModel};
+        let vfs = self.vfs.as_ref()?;
+        let mut parts = vec![];
+
+        // 1. User preferences
+        let pref_path = UserPreferenceModel::vfs_path(&self.spawned_by, &self.agent_name);
+        if let Ok(bytes) = vfs.read(&VfsPath::parse(&pref_path).ok()?).await {
+            if let Ok(model) = UserPreferenceModel::from_yaml(&String::from_utf8_lossy(&bytes)) {
+                if !model.spec.summary.is_empty() {
+                    let mut pref_text =
+                        format!("User preferences:\n  {}", model.spec.summary);
+                    if !model.spec.corrections.is_empty() {
+                        pref_text.push_str("\n\n  Corrections to avoid repeating:");
+                        for c in &model.spec.corrections {
+                            pref_text.push_str(&format!(
+                                "\n    • \"{}\" ({})",
+                                c.correction,
+                                c.at.format("%Y-%m-%d")
+                            ));
+                        }
+                    }
+                    parts.push(pref_text);
+                }
+            }
+        }
+
+        // 2. Recent episodic context (last 5 records)
+        let episodic_dir = format!(
+            "/users/{}/memory/{}/episodic",
+            self.spawned_by, self.agent_name
+        );
+        if let Ok(mut records) = store::list_records(vfs, &episodic_dir).await {
+            records.sort_by(|a, b| b.metadata.created_at.cmp(&a.metadata.created_at));
+            let recent: Vec<_> = records.into_iter().take(5).collect();
+            if !recent.is_empty() {
+                let mut hist = format!("Recent session history (last {}):", recent.len());
+                for r in &recent {
+                    let summary_len = r.spec.content.len().min(120);
+                    hist.push_str(&format!(
+                        "\n  • {} {}",
+                        r.metadata.created_at.format("%Y-%m-%d"),
+                        &r.spec.content[..summary_len]
+                    ));
+                }
+                parts.push(hist);
+            }
+        }
+
+        // 3. Pinned facts
+        let semantic_dir = format!(
+            "/users/{}/memory/{}/semantic",
+            self.spawned_by, self.agent_name
+        );
+        if let Ok(all_semantic) = store::list_records(vfs, &semantic_dir).await {
+            let pinned: Vec<_> = all_semantic
+                .into_iter()
+                .filter(|r| r.metadata.pinned)
+                .collect();
+            if !pinned.is_empty() {
+                let mut pin_text = "Pinned facts:".to_string();
+                for r in &pinned {
+                    let key = r.spec.key.as_deref().unwrap_or(&r.metadata.id);
+                    let content_len = r.spec.content.len().min(120);
+                    pin_text.push_str(&format!(
+                        "\n  • {}: {}",
+                        key,
+                        &r.spec.content[..content_len]
+                    ));
+                }
+                parts.push(pin_text);
+            }
+        }
+
+        if parts.is_empty() {
+            return None;
+        }
+
+        Some(format!(
+            "[MEMORY CONTEXT — {} — injected by memory.svc]\n\n{}",
+            self.agent_name,
+            parts.join("\n\n")
+        ))
+    }
+
+    /// Record a conversation message in the history (for session auto-log).
+    pub fn push_conversation_message(&mut self, role: &str, content: &str) {
+        self.conversation_history.push((role.to_string(), content.to_string()));
+    }
+
+    /// Deliver a signal to the executor (used in tests; in production, signals arrive via socket).
+    ///
+    /// SIGSTOP: runs auto-log if memory service is attached, then sets killed flag.
+    /// SIGKILL: sets killed flag immediately.
+    pub async fn deliver_signal(&self, signal: &str) {
+        match signal {
+            "SIGSTOP" => {
+                self.auto_log_session_end().await;
+                self.killed.store(true, Ordering::Release);
+            }
+            "SIGKILL" => {
+                self.killed.store(true, Ordering::Release);
+            }
+            _ => {
+                tracing::debug!(pid = self.pid.as_u32(), signal, "ignored signal");
+            }
+        }
+    }
+
+    /// Write a session summary to episodic memory when SIGSTOP fires.
+    ///
+    /// Uses a simple concatenation of conversation history as the summary.
+    /// (memory-gap-D: LLM summarisation added in memory-gap-E)
+    async fn auto_log_session_end(&self) {
+        let svc = match &self.memory_svc {
+            Some(s) => Arc::clone(s),
+            None => return,
+        };
+        if self.conversation_history.is_empty() {
+            return;
+        }
+
+        let summary = self
+            .conversation_history
+            .iter()
+            .map(|(role, content)| {
+                let preview_len = content.len().min(200);
+                format!("{}: {}", role, &content[..preview_len])
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let caller = CallerContext {
+            pid: self.pid.as_u32(),
+            agent_name: self.agent_name.clone(),
+            owner: self.spawned_by.clone(),
+            session_id: self.session_id.clone(),
+            granted_tools: self.token.granted_tools.clone(),
+        };
+        let params = serde_json::json!({
+            "summary": summary,
+            "outcome": "success",
+            "scope": "own"
+        });
+        if let Err(e) = svc.dispatch("memory/log-event", params, &caller).await {
+            tracing::warn!(
+                pid = self.pid.as_u32(),
+                err = ?e,
+                "auto session log failed"
+            );
+        }
     }
 
     /// Write `/proc/<pid>/status.yaml` and `/proc/<pid>/resolved.yaml` to the VFS.
@@ -220,7 +426,7 @@ impl RuntimeExecutor {
         self.write_resolved_file(&vfs, username, crews).await;
     }
 
-    async fn write_status_file(&self, vfs: &MemFs) {
+    async fn write_status_file(&self, vfs: &VfsRouter) {
         let pid = self.pid.as_u32();
         let tools_yaml = self
             .token
@@ -241,7 +447,7 @@ impl RuntimeExecutor {
         }
     }
 
-    async fn write_resolved_file(&self, vfs: &MemFs, username: &str, crews: &[String]) {
+    async fn write_resolved_file(&self, vfs: &VfsRouter, username: &str, crews: &[String]) {
         use crate::params::defaults::system_agent_defaults;
         use crate::params::limits::system_agent_limits;
         use crate::params::resolved_file::ResolvedFile;
@@ -315,7 +521,7 @@ impl RuntimeExecutor {
 
     pub fn build_system_prompt_str(&self) -> String {
         let tool_list = self.current_tool_list();
-        build_system_prompt(
+        let base = build_system_prompt(
             self.pid.as_u32(),
             &self.agent_name,
             &self.goal,
@@ -330,7 +536,18 @@ impl RuntimeExecutor {
                 .collect::<HashMap<String, u32>>(),
             &self.pending_messages,
             &tool_list,
-        )
+        );
+        // Prepend memory context block when present (injected by init_memory_context())
+        if let Some(ref ctx) = self.memory_context {
+            format!("{ctx}\n\n{base}")
+        } else {
+            base
+        }
+    }
+
+    /// Accessor for the system prompt (for tests and context inspection).
+    pub fn system_prompt(&self) -> String {
+        self.build_system_prompt_str()
     }
 
     /// Public accessor kept for backward compat with existing tests.

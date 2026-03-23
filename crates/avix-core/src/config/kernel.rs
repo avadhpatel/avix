@@ -53,52 +53,155 @@ impl Default for SchedulerConfig {
 
 // ── Memory ───────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum EvictionPolicy {
-    Lru,
-    #[default]
-    LruSalience,
-    Manual,
+fn default_context_limit() -> u32 {
+    200_000
+}
+fn default_max_retention_days() -> u32 {
+    30
+}
+fn default_max_records_per_agent() -> u32 {
+    10_000
+}
+fn default_max_facts_per_agent() -> u32 {
+    5_000
+}
+fn default_retrieval_limit() -> u32 {
+    5
+}
+fn default_max_retrieval_limit() -> u32 {
+    20
+}
+fn default_candidate_fetch_k() -> u32 {
+    20
+}
+fn default_rrf_k() -> u32 {
+    60
+}
+fn default_episodic_context_records() -> u32 {
+    5
+}
+fn default_true() -> bool {
+    true
+}
+fn default_hil_timeout_sec() -> u64 {
+    600
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MemoryConfig {
-    #[serde(default = "MemoryConfig::default_context_limit")]
-    pub default_context_limit: u32,
-    #[serde(default = "MemoryConfig::default_eviction_policy")]
-    pub eviction_policy: EvictionPolicy,
-    #[serde(default = "MemoryConfig::default_max_episodic_retention_days")]
-    pub max_episodic_retention_days: u32,
-    #[serde(default = "MemoryConfig::default_shared_memory_path")]
-    pub shared_memory_path: String,
+pub struct MemoryEpisodicConfig {
+    #[serde(default = "default_max_retention_days")]
+    pub max_retention_days: u32,
+    #[serde(default = "default_max_records_per_agent")]
+    pub max_records_per_agent: u32,
 }
 
-impl MemoryConfig {
-    fn default_context_limit() -> u32 {
-        200_000
-    }
-    fn default_eviction_policy() -> EvictionPolicy {
-        EvictionPolicy::LruSalience
-    }
-    fn default_max_episodic_retention_days() -> u32 {
-        30
-    }
-    fn default_shared_memory_path() -> String {
-        "/shared/".into()
-    }
-}
-
-impl Default for MemoryConfig {
+impl Default for MemoryEpisodicConfig {
     fn default() -> Self {
         Self {
-            default_context_limit: 200_000,
-            eviction_policy: EvictionPolicy::LruSalience,
-            max_episodic_retention_days: 30,
-            shared_memory_path: "/shared/".into(),
+            max_retention_days: default_max_retention_days(),
+            max_records_per_agent: default_max_records_per_agent(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySemanticConfig {
+    #[serde(default = "default_max_facts_per_agent")]
+    pub max_facts_per_agent: u32,
+}
+
+impl Default for MemorySemanticConfig {
+    fn default() -> Self {
+        Self {
+            max_facts_per_agent: default_max_facts_per_agent(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryRetrievalConfig {
+    #[serde(default = "default_retrieval_limit")]
+    pub default_limit: u32,
+    #[serde(default = "default_max_retrieval_limit")]
+    pub max_limit: u32,
+    #[serde(default = "default_candidate_fetch_k")]
+    pub candidate_fetch_k: u32,
+    #[serde(default = "default_rrf_k")]
+    pub rrf_k: u32,
+}
+
+impl Default for MemoryRetrievalConfig {
+    fn default() -> Self {
+        Self {
+            default_limit: default_retrieval_limit(),
+            max_limit: default_max_retrieval_limit(),
+            candidate_fetch_k: default_candidate_fetch_k(),
+            rrf_k: default_rrf_k(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySpawnConfig {
+    #[serde(default = "default_episodic_context_records")]
+    pub episodic_context_records: u32,
+    #[serde(default = "default_true")]
+    pub preferences_enabled: bool,
+    #[serde(default = "default_true")]
+    pub pinned_facts_enabled: bool,
+}
+
+impl Default for MemorySpawnConfig {
+    fn default() -> Self {
+        Self {
+            episodic_context_records: default_episodic_context_records(),
+            preferences_enabled: true,
+            pinned_facts_enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySharingConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_hil_timeout_sec")]
+    pub hil_timeout_sec: u64,
+    /// Always `false` in v0.1 — cross-user memory sharing is not supported.
+    #[serde(default)]
+    pub cross_user_enabled: bool,
+}
+
+impl Default for MemorySharingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            hil_timeout_sec: default_hil_timeout_sec(),
+            cross_user_enabled: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryConfig {
+    #[serde(default = "default_context_limit")]
+    pub default_context_limit: u32,
+    #[serde(default)]
+    pub episodic: MemoryEpisodicConfig,
+    #[serde(default)]
+    pub semantic: MemorySemanticConfig,
+    #[serde(default)]
+    pub retrieval: MemoryRetrievalConfig,
+    #[serde(default)]
+    pub spawn: MemorySpawnConfig,
+    #[serde(default)]
+    pub sharing: MemorySharingConfig,
 }
 
 // ── IPC ──────────────────────────────────────────────────────────────────────

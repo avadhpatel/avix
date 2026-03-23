@@ -43,6 +43,26 @@ impl Default for CapabilityToolMap {
         map.insert("llm:transcription", vec!["llm/transcribe"]);
         map.insert("llm:embedding", vec!["llm/embed"]);
 
+        // Memory capability grants.
+        // memory:write is a superset of memory:read — includes all read tools plus write tools.
+        map.insert(
+            "memory:read",
+            vec!["memory/retrieve", "memory/get-fact", "memory/get-preferences"],
+        );
+        map.insert(
+            "memory:write",
+            vec![
+                "memory/retrieve",
+                "memory/get-fact",
+                "memory/get-preferences",
+                "memory/log-event",
+                "memory/store-fact",
+                "memory/update-preference",
+                "memory/forget",
+            ],
+        );
+        map.insert("memory:share", vec!["memory/share-request"]);
+
         Self {
             map,
             always: vec!["cap/request-tool", "cap/escalate", "cap/list", "job/watch"],

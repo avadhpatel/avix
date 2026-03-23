@@ -13,7 +13,7 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::error::AvixError;
-use crate::memfs::{MemFs, VfsPath};
+use crate::memfs::{VfsPath, VfsRouter};
 use crate::pipe::channel::{Pipe, PipeError};
 use crate::pipe::config::{BackpressurePolicy, PipeConfig, PipeEncoding};
 use crate::signal::delivery::SignalDelivery;
@@ -40,7 +40,7 @@ impl PipeManager {
 
     /// Open a new pipe. The caller becomes the `source_pid`.
     /// Returns the new pipe ID.
-    pub async fn open(&self, config: PipeConfig, vfs: Option<&MemFs>) -> Result<String, AvixError> {
+    pub async fn open(&self, config: PipeConfig, vfs: Option<&VfsRouter>) -> Result<String, AvixError> {
         let pipe_id = format!("pipe-{}", Uuid::new_v4());
         let buffer = config.buffer_tokens;
         let pipe = Arc::new(Pipe::new(config.source_pid.as_u32(), buffer));
@@ -146,7 +146,7 @@ impl PipeManager {
         pipe_id: &str,
         caller_pid: Pid,
         signal_delivery: Option<&SignalDelivery>,
-        vfs: Option<&MemFs>,
+        vfs: Option<&VfsRouter>,
         close_reason: &str,
     ) -> Result<(), AvixError> {
         let (pipe, partner) = {
@@ -188,7 +188,7 @@ impl PipeManager {
         &self,
         pid: Pid,
         signal_delivery: Option<&SignalDelivery>,
-        vfs: Option<&MemFs>,
+        vfs: Option<&VfsRouter>,
     ) -> Result<(), AvixError> {
         let pipe_ids: Vec<String> = {
             let guard = self.pipes.read().await;
@@ -239,7 +239,7 @@ pub enum ReadResult {
 // ── VFS manifest helpers ──────────────────────────────────────────────────────
 
 async fn write_pipe_manifest(
-    vfs: &MemFs,
+    vfs: &VfsRouter,
     config: &PipeConfig,
     pipe_id: &str,
     _state: &str,
@@ -283,7 +283,7 @@ async fn write_pipe_manifest(
 }
 
 async fn update_pipe_manifest_closed(
-    vfs: &MemFs,
+    vfs: &VfsRouter,
     pipe_id: &str,
     reason: &str,
 ) -> Result<(), AvixError> {

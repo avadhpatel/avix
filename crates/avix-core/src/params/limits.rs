@@ -29,9 +29,9 @@ pub struct ToolsLimits {
 #[serde(rename_all = "camelCase", default)]
 pub struct MemoryLimits {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub working_context: Option<EnumConstraint>,
+    pub episodic_enabled: Option<BoolConstraint>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub semantic_store_access: Option<EnumConstraint>,
+    pub semantic_enabled: Option<BoolConstraint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -209,15 +209,15 @@ fn intersect_tools(a: &ToolsLimits, b: &ToolsLimits) -> ToolsLimits {
 
 fn intersect_memory(a: &MemoryLimits, b: &MemoryLimits) -> MemoryLimits {
     MemoryLimits {
-        working_context: intersect_option(
-            a.working_context.as_ref(),
-            b.working_context.as_ref(),
-            EnumConstraint::intersect,
+        episodic_enabled: intersect_option(
+            a.episodic_enabled.as_ref(),
+            b.episodic_enabled.as_ref(),
+            BoolConstraint::intersect,
         ),
-        semantic_store_access: intersect_option(
-            a.semantic_store_access.as_ref(),
-            b.semantic_store_access.as_ref(),
-            EnumConstraint::intersect,
+        semantic_enabled: intersect_option(
+            a.semantic_enabled.as_ref(),
+            b.semantic_enabled.as_ref(),
+            BoolConstraint::intersect,
         ),
     }
 }
@@ -343,10 +343,8 @@ pub fn system_agent_limits() -> AgentLimits {
         }),
         tools: None,
         memory: Some(MemoryLimits {
-            working_context: Some(EnumConstraint {
-                values: vec!["fixed".into(), "dynamic".into()],
-            }),
-            semantic_store_access: None,
+            episodic_enabled: None, // not locked at system level
+            semantic_enabled: None,
         }),
         snapshot: Some(SnapshotLimits {
             enabled: Some(BoolConstraint { value: None }), // not locked

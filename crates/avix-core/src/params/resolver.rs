@@ -1,5 +1,5 @@
 use crate::error::AvixError;
-use crate::memfs::{MemFs, VfsPath};
+use crate::memfs::{VfsPath, VfsRouter};
 use crate::params::defaults::{AgentDefaults, DefaultsFile};
 use crate::params::limits::{AgentLimits, LimitsFile};
 use serde::{Deserialize, Serialize};
@@ -18,9 +18,11 @@ pub struct ResolvedEntrypoint {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedMemory {
-    pub working_context: String,
-    pub episodic_persistence: bool,
-    pub semantic_store_access: String,
+    pub episodic_enabled: bool,
+    pub semantic_enabled: bool,
+    pub preferences_enabled: bool,
+    pub auto_inject_at_spawn: bool,
+    pub auto_log_on_session_end: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -206,9 +208,11 @@ impl ParamResolver {
         let mut model_preference = Field::<String>::default();
         let mut min_context_tokens = Field::<u32>::default();
         let mut max_tool_chain = Field::<u32>::default();
-        let mut working_context = Field::<String>::default();
-        let mut episodic_persistence = Field::<bool>::default();
-        let mut semantic_store_access = Field::<String>::default();
+        let mut episodic_enabled = Field::<bool>::default();
+        let mut semantic_enabled = Field::<bool>::default();
+        let mut preferences_enabled = Field::<bool>::default();
+        let mut auto_inject_at_spawn = Field::<bool>::default();
+        let mut auto_log_on_session_end = Field::<bool>::default();
         let mut snap_enabled = Field::<bool>::default();
         let mut snap_interval = Field::<u32>::default();
         let mut restore_on_crash = Field::<bool>::default();
@@ -226,13 +230,12 @@ impl ParamResolver {
                     max_tool_chain.apply(ep.max_tool_chain, $source.clone(), $path);
                 }
                 if let Some(mem) = &$d.memory {
-                    working_context.apply(mem.working_context.clone(), $source.clone(), $path);
-                    episodic_persistence.apply(mem.episodic_persistence, $source.clone(), $path);
-                    semantic_store_access.apply(
-                        mem.semantic_store_access.clone(),
-                        $source.clone(),
-                        $path,
-                    );
+                    episodic_enabled.apply(mem.episodic_enabled, $source.clone(), $path);
+                    semantic_enabled.apply(mem.semantic_enabled, $source.clone(), $path);
+                    preferences_enabled.apply(mem.preferences_enabled, $source.clone(), $path);
+                    auto_inject_at_spawn.apply(mem.auto_inject_at_spawn, $source.clone(), $path);
+                    auto_log_on_session_end
+                        .apply(mem.auto_log_on_session_end, $source.clone(), $path);
                 }
                 if let Some(snap) = &$d.snapshot {
                     snap_enabled.apply(snap.enabled, $source.clone(), $path);
@@ -378,9 +381,11 @@ impl ParamResolver {
                 })?,
             },
             memory: ResolvedMemory {
-                working_context: working_context.value.unwrap_or_else(|| "dynamic".into()),
-                episodic_persistence: episodic_persistence.value.unwrap_or(false),
-                semantic_store_access: semantic_store_access.value.unwrap_or_else(|| "none".into()),
+                episodic_enabled: episodic_enabled.value.unwrap_or(true),
+                semantic_enabled: semantic_enabled.value.unwrap_or(true),
+                preferences_enabled: preferences_enabled.value.unwrap_or(true),
+                auto_inject_at_spawn: auto_inject_at_spawn.value.unwrap_or(true),
+                auto_log_on_session_end: auto_log_on_session_end.value.unwrap_or(false),
             },
             snapshot: ResolvedSnapshot {
                 enabled: snap_enabled.value.unwrap_or(false),
@@ -414,9 +419,11 @@ impl ParamResolver {
         emit_annotation!(model_preference, "entrypoint.modelPreference");
         emit_annotation!(min_context_tokens, "entrypoint.minContextTokens");
         emit_annotation!(max_tool_chain, "entrypoint.maxToolChain");
-        emit_annotation!(working_context, "memory.workingContext");
-        emit_annotation!(episodic_persistence, "memory.episodicPersistence");
-        emit_annotation!(semantic_store_access, "memory.semanticStoreAccess");
+        emit_annotation!(episodic_enabled, "memory.episodicEnabled");
+        emit_annotation!(semantic_enabled, "memory.semanticEnabled");
+        emit_annotation!(preferences_enabled, "memory.preferencesEnabled");
+        emit_annotation!(auto_inject_at_spawn, "memory.autoInjectAtSpawn");
+        emit_annotation!(auto_log_on_session_end, "memory.autoLogOnSessionEnd");
         emit_annotation!(snap_enabled, "snapshot.enabled");
         emit_annotation!(snap_interval, "snapshot.autoSnapshotIntervalSec");
         emit_annotation!(restore_on_crash, "snapshot.restoreOnCrash");
@@ -479,11 +486,11 @@ fn effective_enum_limits_path(input: &ResolverInput) -> String {
 
 /// Loads `ResolverInput` from the VFS for a given user and their crew memberships.
 pub struct ResolverInputLoader<'a> {
-    vfs: &'a MemFs,
+    vfs: &'a VfsRouter,
 }
 
 impl<'a> ResolverInputLoader<'a> {
-    pub fn new(vfs: &'a MemFs) -> Self {
+    pub fn new(vfs: &'a VfsRouter) -> Self {
         Self { vfs }
     }
 
@@ -837,8 +844,9 @@ mod tests {
     #[tokio::test]
     async fn resolver_input_loader_reads_system_from_vfs() {
         use crate::bootstrap::phase1;
+        use crate::memfs::VfsRouter;
 
-        let vfs = MemFs::new();
+        let vfs = VfsRouter::new();
         phase1::run(&vfs).await;
 
         let loader = ResolverInputLoader::new(&vfs);
@@ -859,10 +867,11 @@ mod tests {
     #[tokio::test]
     async fn resolver_input_loader_reads_user_defaults_from_vfs() {
         use crate::bootstrap::phase1;
+        use crate::memfs::VfsRouter;
         use crate::params::defaults::{DefaultsFile, DefaultsLayer};
         use crate::params::limits::{LimitsFile, LimitsLayer};
 
-        let vfs = MemFs::new();
+        let vfs = VfsRouter::new();
         phase1::run(&vfs).await;
 
         // Write user defaults

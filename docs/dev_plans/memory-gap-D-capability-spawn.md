@@ -1,6 +1,6 @@
 # Memory Gap D — Capability Grants, Spawn Injection & Session Auto-Log
 
-> **Status:** Not started
+> **Status:** Complete
 > **Priority:** High — agents cannot use memory tools without capability grants at spawn
 > **Depends on:** memory-gap-A (schema), memory-gap-B (VFS layout), memory-gap-C (service tools)
 > **Affects:** `avix-core/src/types/token.rs`, `avix-core/src/executor/runtime_executor.rs`, `avix-core/src/params/resolver.rs`

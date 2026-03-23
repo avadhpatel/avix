@@ -1,4 +1,4 @@
-use avix_core::memfs::{MemFs, VfsPath};
+use avix_core::memfs::{VfsPath, VfsRouter};
 use avix_core::session::{SessionEntry, SessionStatus, SessionStore};
 use chrono::Utc;
 use serde_json::json;
@@ -151,7 +151,7 @@ async fn session_large_message_list() {
 #[tokio::test]
 async fn save_session_writes_vfs_manifest() {
     let tmp = tempdir().unwrap();
-    let vfs = Arc::new(MemFs::new());
+    let vfs = Arc::new(VfsRouter::new());
     let store = SessionStore::open(tmp.path().join("sessions.db"))
         .await
         .unwrap()
@@ -170,7 +170,7 @@ async fn save_session_writes_vfs_manifest() {
 #[tokio::test]
 async fn session_vfs_manifest_contains_correct_fields() {
     let tmp = tempdir().unwrap();
-    let vfs = Arc::new(MemFs::new());
+    let vfs = Arc::new(VfsRouter::new());
     let store = SessionStore::open(tmp.path().join("sessions.db"))
         .await
         .unwrap()
@@ -205,7 +205,7 @@ async fn session_vfs_manifest_contains_correct_fields() {
 #[tokio::test]
 async fn delete_session_removes_vfs_manifest() {
     let tmp = tempdir().unwrap();
-    let vfs = Arc::new(MemFs::new());
+    let vfs = Arc::new(VfsRouter::new());
     let store = SessionStore::open(tmp.path().join("sessions.db"))
         .await
         .unwrap()
@@ -231,7 +231,7 @@ async fn delete_session_removes_vfs_manifest() {
 #[tokio::test]
 async fn update_session_updates_vfs_manifest() {
     let tmp = tempdir().unwrap();
-    let vfs = Arc::new(MemFs::new());
+    let vfs = Arc::new(VfsRouter::new());
     let store = SessionStore::open(tmp.path().join("sessions.db"))
         .await
         .unwrap()
@@ -271,7 +271,7 @@ async fn save_session_without_vfs_succeeds_silently() {
 #[tokio::test]
 async fn multiple_users_sessions_land_in_separate_proc_dirs() {
     let tmp = tempdir().unwrap();
-    let vfs = Arc::new(MemFs::new());
+    let vfs = Arc::new(VfsRouter::new());
     let store = SessionStore::open(tmp.path().join("sessions.db"))
         .await
         .unwrap()

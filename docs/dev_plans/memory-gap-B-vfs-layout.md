@@ -1,6 +1,6 @@
 # Memory Gap B — VFS Layout & Directory Bootstrap
 
-> **Status:** Not started
+> **Status:** Complete
 > **Priority:** High — memory.svc reads/writes from VFS paths that don't exist yet
 > **Depends on:** memory-gap-A (schema types, VFS paths), fs-gap-E (VfsRouter + LocalProvider for disk persistence)
 > **Affects:** `avix-core/src/memfs/path.rs`, `avix-core/src/bootstrap/phase1.rs`, `avix-core/src/executor/runtime_executor.rs`

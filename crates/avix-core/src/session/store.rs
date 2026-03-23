@@ -5,13 +5,13 @@ use redb::{Database, TableDefinition};
 
 use super::entry::{SessionEntry, SessionStatus};
 use crate::error::AvixError;
-use crate::memfs::{MemFs, VfsPath};
+use crate::memfs::{VfsPath, VfsRouter};
 
 const TABLE: TableDefinition<&str, &str> = TableDefinition::new("sessions");
 
 pub struct SessionStore {
     db: Database,
-    vfs: Option<Arc<MemFs>>,
+    vfs: Option<Arc<VfsRouter>>,
 }
 
 impl SessionStore {
@@ -33,7 +33,7 @@ impl SessionStore {
         Ok(Self { db, vfs: None })
     }
 
-    pub fn with_vfs(mut self, vfs: Arc<MemFs>) -> Self {
+    pub fn with_vfs(mut self, vfs: Arc<VfsRouter>) -> Self {
         self.vfs = Some(vfs);
         self
     }

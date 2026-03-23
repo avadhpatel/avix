@@ -1,6 +1,6 @@
 # Memory Gap E — Full Retrieval Model (Vector + BM25 + LLM Re-rank)
 
-> **Status:** Not started
+> **Status:** Partial — rrf_merge, VectorIndex, cosine_similarity, stale detection implemented; vector embedding (llm/embed IPC) and LLM re-rank deferred (require LlmClient integration)
 > **Priority:** Medium — BM25-only retrieval from memory-gap-C is sufficient for v1 alpha;
 >   this gap adds semantic search quality and LLM re-ranking
 > **Depends on:** memory-gap-C (service tools, BM25 base), memory-gap-D (caller token pass-through)
