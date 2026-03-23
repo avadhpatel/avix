@@ -1,4 +1,4 @@
-use crate::llm_client::{LlmCompleteRequest, LlmCompleteResponse, LlmClient, StopReason};
+use crate::llm_client::{LlmClient, LlmCompleteRequest, LlmCompleteResponse, StopReason};
 use crate::llm_svc::adapter::{
     AvixCompleteRequest, AvixToolDescriptor, CompleteMetadata, ProviderAdapter,
 };
