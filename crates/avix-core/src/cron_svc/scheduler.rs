@@ -87,6 +87,15 @@ impl CronScheduler {
         self.jobs.read().await.len()
     }
 
+    /// Mark a job as having last run at `when`.
+    /// Used by `CronRunner` after dispatching a due job.
+    pub async fn update_last_run(&self, id: &str, when: DateTime<Utc>) {
+        let mut jobs = self.jobs.write().await;
+        if let Some(job) = jobs.get_mut(id) {
+            job.last_run = Some(when);
+        }
+    }
+
     /// Get jobs that are due to fire since `since`
     pub async fn due_jobs(&self, since: DateTime<Utc>) -> Vec<String> {
         let jobs = self.jobs.read().await;
