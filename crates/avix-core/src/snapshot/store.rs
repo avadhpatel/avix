@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::sync::RwLock;
 
 use thiserror::Error;
+use tokio::sync::RwLock;
 
-use super::capture::Snapshot;
+use super::capture::SnapshotFile;
 
 #[derive(Debug, Error)]
 pub enum SnapshotError {
@@ -14,8 +14,8 @@ pub enum SnapshotError {
 }
 
 pub struct SnapshotStore {
-    // agent_name -> Vec<Snapshot>
-    store: RwLock<HashMap<String, Vec<Snapshot>>>,
+    // agent_name → Vec<SnapshotFile>
+    store: RwLock<HashMap<String, Vec<SnapshotFile>>>,
 }
 
 impl SnapshotStore {
@@ -25,44 +25,56 @@ impl SnapshotStore {
         }
     }
 
-    pub fn save(&self, snap: Snapshot) -> Result<String, SnapshotError> {
-        let id = snap.meta.id.clone();
-        let agent = snap.meta.agent_name.clone();
-        let mut store = self.store.write().unwrap();
-        store.entry(agent).or_default().push(snap);
-        Ok(id)
+    /// Save a snapshot; returns the snapshot name (the stable ID).
+    pub async fn save(&self, snap: SnapshotFile) -> Result<String, SnapshotError> {
+        let name = snap.metadata.name.clone();
+        let agent = snap.metadata.agent_name.clone();
+        self.store
+            .write()
+            .await
+            .entry(agent)
+            .or_default()
+            .push(snap);
+        Ok(name)
     }
 
-    pub fn load(&self, id: &str) -> Result<Snapshot, SnapshotError> {
-        let store = self.store.read().unwrap();
+    /// Load a snapshot by name.
+    pub async fn load(&self, name: &str) -> Result<SnapshotFile, SnapshotError> {
+        let store = self.store.read().await;
         for snaps in store.values() {
-            if let Some(snap) = snaps.iter().find(|s| s.meta.id == id) {
+            if let Some(snap) = snaps.iter().find(|s| s.metadata.name == name) {
                 return Ok(snap.clone());
             }
         }
-        Err(SnapshotError::NotFound(id.to_string()))
+        Err(SnapshotError::NotFound(name.to_string()))
     }
 
-    pub fn list(&self, agent_name: &str) -> Vec<Snapshot> {
-        let store = self.store.read().unwrap();
-        store.get(agent_name).cloned().unwrap_or_default()
+    /// List all snapshots for an agent.
+    pub async fn list(&self, agent_name: &str) -> Vec<SnapshotFile> {
+        self.store
+            .read()
+            .await
+            .get(agent_name)
+            .cloned()
+            .unwrap_or_default()
     }
 
-    pub fn delete(&self, id: &str) -> Result<(), SnapshotError> {
-        let mut store = self.store.write().unwrap();
+    /// Delete a snapshot by name.
+    pub async fn delete(&self, name: &str) -> Result<(), SnapshotError> {
+        let mut store = self.store.write().await;
         for snaps in store.values_mut() {
-            if let Some(pos) = snaps.iter().position(|s| s.meta.id == id) {
+            if let Some(pos) = snaps.iter().position(|s| s.metadata.name == name) {
                 snaps.remove(pos);
                 return Ok(());
             }
         }
-        Err(SnapshotError::NotFound(id.to_string()))
+        Err(SnapshotError::NotFound(name.to_string()))
     }
 
-    pub fn snapshot_count(&self, agent_name: &str) -> usize {
+    pub async fn snapshot_count(&self, agent_name: &str) -> usize {
         self.store
             .read()
-            .unwrap()
+            .await
             .get(agent_name)
             .map(|v| v.len())
             .unwrap_or(0)
@@ -78,141 +90,85 @@ impl Default for SnapshotStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::snapshot::capture::{Snapshot, SnapshotMessage};
+    use crate::snapshot::capture::{
+        CapturedBy, SnapshotEnvironment, SnapshotFile, SnapshotMemory, SnapshotMetadata,
+        SnapshotSpec, SnapshotTrigger,
+    };
 
-    fn make_snap(name: &str) -> Snapshot {
-        Snapshot::new(
-            name.into(),
-            42,
-            1,
-            "do stuff".into(),
-            vec!["fs/read".into()],
-            vec![SnapshotMessage {
-                role: "user".into(),
-                content: "hello".into(),
-            }],
+    fn make_snap(agent_name: &str, source_pid: u32) -> SnapshotFile {
+        let captured_at = chrono::Utc::now();
+        let name = SnapshotFile::make_name(agent_name, &captured_at);
+        SnapshotFile::new(
+            SnapshotMetadata {
+                name,
+                agent_name: agent_name.to_string(),
+                source_pid,
+                captured_at,
+                captured_by: CapturedBy::Kernel,
+                trigger: SnapshotTrigger::Manual,
+            },
+            SnapshotSpec {
+                goal: "do stuff".into(),
+                context_summary: "working".into(),
+                context_token_count: 100,
+                memory: SnapshotMemory::default(),
+                pending_requests: vec![],
+                pipes: vec![],
+                environment: SnapshotEnvironment {
+                    temperature: 0.7,
+                    capability_token: "sha256:abc".into(),
+                    granted_tools: vec!["fs/read".into()],
+                },
+                checksum: "sha256:placeholder".into(),
+            },
         )
     }
 
-    #[test]
-    fn test_save_and_load() {
+    // T-SA-05: SnapshotStore async save + load + list
+    #[tokio::test]
+    async fn snapshot_store_save_load_list() {
         let store = SnapshotStore::new();
-        let snap = make_snap("agent-x");
-        let id = store.save(snap.clone()).unwrap();
-        let loaded = store.load(&id).unwrap();
-        assert_eq!(loaded.meta.agent_name, "agent-x");
+        let snap = make_snap("researcher", 42);
+        let name = store.save(snap.clone()).await.unwrap();
+        let loaded = store.load(&name).await.unwrap();
+        assert_eq!(loaded.metadata.source_pid, 42);
+        let list = store.list("researcher").await;
+        assert_eq!(list.len(), 1);
     }
 
-    #[test]
-    fn test_message_history_preserved() {
+    // T-SA-06: SnapshotStore delete
+    #[tokio::test]
+    async fn snapshot_store_delete() {
         let store = SnapshotStore::new();
-        let snap = make_snap("agent-x");
-        let id = store.save(snap).unwrap();
-        let loaded = store.load(&id).unwrap();
-        assert_eq!(loaded.message_history[0].content, "hello");
-        assert_eq!(loaded.message_count(), 1);
+        let name = store.save(make_snap("researcher", 42)).await.unwrap();
+        store.delete(&name).await.unwrap();
+        assert_eq!(store.snapshot_count("researcher").await, 0);
     }
 
-    #[test]
-    fn test_granted_tools_preserved() {
-        let store = SnapshotStore::new();
-        let snap = make_snap("agent-x");
-        let id = store.save(snap).unwrap();
-        let loaded = store.load(&id).unwrap();
-        assert!(loaded.meta.granted_tools.contains(&"fs/read".to_string()));
-    }
-
-    #[test]
-    fn test_list_snapshots() {
-        let store = SnapshotStore::new();
-        store.save(make_snap("agent-x")).unwrap();
-        store.save(make_snap("agent-x")).unwrap();
-        assert_eq!(store.list("agent-x").len(), 2);
-        assert_eq!(store.list("other").len(), 0);
-    }
-
-    #[test]
-    fn test_delete_snapshot() {
-        let store = SnapshotStore::new();
-        let snap = make_snap("agent-x");
-        let id = store.save(snap).unwrap();
-        store.delete(&id).unwrap();
-        assert!(matches!(store.load(&id), Err(SnapshotError::NotFound(_))));
-    }
-
-    #[test]
-    fn test_load_not_found() {
+    #[tokio::test]
+    async fn snapshot_store_load_not_found() {
         let store = SnapshotStore::new();
         assert!(matches!(
-            store.load("nonexistent"),
+            store.load("nonexistent").await,
             Err(SnapshotError::NotFound(_))
         ));
     }
 
-    #[test]
-    fn test_snapshot_unique_ids() {
-        let snap1 = make_snap("agent-x");
-        let snap2 = make_snap("agent-x");
-        assert_ne!(snap1.meta.id, snap2.meta.id);
-    }
-
-    #[test]
-    fn test_snapshot_yaml_roundtrip() {
-        let snap = make_snap("agent-x");
-        let yaml = serde_yaml::to_string(&snap).unwrap();
-        let restored: Snapshot = serde_yaml::from_str(&yaml).unwrap();
-        assert_eq!(restored.meta.agent_name, "agent-x");
-        assert_eq!(restored.message_history[0].content, "hello");
-    }
-
-    #[test]
-    fn test_goal_preserved() {
+    #[tokio::test]
+    async fn snapshot_store_delete_not_found() {
         let store = SnapshotStore::new();
-        let snap = make_snap("agent-x");
-        let id = store.save(snap).unwrap();
-        let loaded = store.load(&id).unwrap();
-        assert_eq!(loaded.meta.goal, "do stuff");
+        assert!(matches!(
+            store.delete("nonexistent").await,
+            Err(SnapshotError::NotFound(_))
+        ));
     }
 
-    #[test]
-    fn test_spawned_by_preserved() {
+    #[tokio::test]
+    async fn snapshot_store_multiple_agents() {
         let store = SnapshotStore::new();
-        let snap = make_snap("agent-x");
-        let id = store.save(snap).unwrap();
-        let loaded = store.load(&id).unwrap();
-        assert_eq!(loaded.meta.spawned_by, 1);
-    }
-
-    #[test]
-    fn test_snapshot_count() {
-        let store = SnapshotStore::new();
-        assert_eq!(store.snapshot_count("agent-x"), 0);
-        store.save(make_snap("agent-x")).unwrap();
-        assert_eq!(store.snapshot_count("agent-x"), 1);
-    }
-
-    #[test]
-    fn test_multiple_agents_independent() {
-        let store = SnapshotStore::new();
-        store.save(make_snap("agent-a")).unwrap();
-        store.save(make_snap("agent-b")).unwrap();
-        assert_eq!(store.list("agent-a").len(), 1);
-        assert_eq!(store.list("agent-b").len(), 1);
-    }
-
-    #[test]
-    fn test_delete_nonexistent() {
-        let store = SnapshotStore::new();
-        let res = store.delete("nonexistent-id");
-        assert!(matches!(res, Err(SnapshotError::NotFound(_))));
-    }
-
-    #[test]
-    fn test_created_at_set() {
-        let snap = make_snap("agent-x");
-        let now = chrono::Utc::now();
-        // created_at should be close to now
-        let diff = now - snap.meta.created_at;
-        assert!(diff.num_seconds().abs() < 5);
+        store.save(make_snap("agent-a", 1)).await.unwrap();
+        store.save(make_snap("agent-b", 2)).await.unwrap();
+        assert_eq!(store.list("agent-a").await.len(), 1);
+        assert_eq!(store.list("agent-b").await.len(), 1);
     }
 }

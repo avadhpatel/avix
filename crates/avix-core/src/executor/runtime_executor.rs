@@ -16,6 +16,7 @@ use crate::memory_svc::{
     service::{CallerContext, MemoryService},
     vfs_layout::init_user_memory_tree,
 };
+use crate::snapshot::{capture, CaptureParams, CapturedBy, SnapshotMemory, SnapshotTrigger};
 use crate::types::{token::CapabilityToken, tool::ToolVisibility, Pid};
 
 use super::mock_kernel::MockKernelHandle;
@@ -97,6 +98,19 @@ pub struct TurnResult {
     pub text: String,
 }
 
+/// Output of a successful [`RuntimeExecutor::restore_from_snapshot`] call.
+#[derive(Debug)]
+pub struct RestoreResult {
+    pub snapshot_name: String,
+    pub agent_name: String,
+    /// Request IDs that were in-flight at capture and need to be re-issued.
+    pub reissued_requests: Vec<String>,
+    /// Pipe IDs that were successfully reconnected.
+    pub reconnected_pipes: Vec<String>,
+    /// Pipe IDs whose target was gone; SIGPIPE will be delivered to these.
+    pub sigpipe_pipes: Vec<String>,
+}
+
 pub struct RuntimeExecutor {
     pub pid: Pid,
     pub agent_name: String,
@@ -129,6 +143,9 @@ pub struct RuntimeExecutor {
     /// Set to `true` by the signal listener when SIGKILL or SIGSTOP is received.
     /// The LLM loop should check this and exit cleanly.
     pub killed: Arc<AtomicBool>,
+    /// Set to `true` by the socket signal listener when SIGSAVE is received.
+    /// The main loop checks this each turn and calls `capture_and_write_snapshot`.
+    pub snapshot_requested: Arc<AtomicBool>,
     /// Memory service — when set, enables memory/log-event dispatch at SIGSTOP.
     memory_svc: Option<Arc<MemoryService>>,
     /// Pre-built memory context block injected into the system prompt at spawn.
@@ -197,6 +214,7 @@ impl RuntimeExecutor {
             registry_ref: RegistryRef::Mock(registry),
             paused: Arc::new(AtomicBool::new(false)),
             killed: Arc::new(AtomicBool::new(false)),
+            snapshot_requested: Arc::new(AtomicBool::new(false)),
             memory_svc: None,
             memory_context: None,
             conversation_history: Vec::new(),
@@ -408,6 +426,10 @@ impl RuntimeExecutor {
                     self.write_status_yaml(vfs).await;
                 }
             }
+            "SIGSAVE" => {
+                self.capture_and_write_snapshot(SnapshotTrigger::Sigsave, CapturedBy::Kernel)
+                    .await;
+            }
             _ => {
                 tracing::debug!(pid = self.pid.as_u32(), signal, "signal received");
                 if let Some(vfs) = &self.vfs {
@@ -415,6 +437,165 @@ impl RuntimeExecutor {
                 }
             }
         }
+    }
+
+    /// Capture a snapshot of current executor state and write it to the VFS.
+    ///
+    /// If no VFS is attached the snapshot is silently skipped — the executor
+    /// still runs normally.
+    async fn capture_and_write_snapshot(&self, trigger: SnapshotTrigger, captured_by: CapturedBy) {
+        let vfs = match &self.vfs {
+            Some(v) => Arc::clone(v),
+            None => {
+                tracing::debug!(pid = self.pid.as_u32(), "snapshot skipped: no VFS attached");
+                return;
+            }
+        };
+
+        let snap = capture(CaptureParams {
+            agent_name: &self.agent_name,
+            pid: self.pid.as_u32(),
+            username: &self.spawned_by,
+            goal: &self.goal,
+            message_history: &self.conversation_history,
+            temperature: 0.7, // default; updated when resolved config carries it
+            granted_tools: &self.token.granted_tools,
+            trigger,
+            captured_by,
+            memory: SnapshotMemory::default(),
+            pending_requests: vec![],
+            open_pipes: vec![],
+        });
+
+        let vfs_path_str = snap.vfs_path(&self.spawned_by);
+        match snap.to_yaml() {
+            Ok(yaml) => match VfsPath::parse(&vfs_path_str) {
+                Ok(path) => {
+                    if let Err(e) = vfs.write(&path, yaml.into_bytes()).await {
+                        tracing::warn!(
+                            pid = self.pid.as_u32(),
+                            path = vfs_path_str,
+                            err = ?e,
+                            "snapshot VFS write failed"
+                        );
+                    } else {
+                        tracing::info!(
+                            pid = self.pid.as_u32(),
+                            path = vfs_path_str,
+                            "snapshot written"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(pid = self.pid.as_u32(), err = ?e, "invalid snapshot VFS path")
+                }
+            },
+            Err(e) => {
+                tracing::warn!(pid = self.pid.as_u32(), err = ?e, "snapshot serialisation failed")
+            }
+        }
+    }
+
+    /// Restore executor state from a named snapshot stored in the VFS.
+    ///
+    /// Steps:
+    /// 1. Read YAML from `/users/<username>/snapshots/<name>.yaml`
+    /// 2. Verify checksum — abort with `AvixError` on mismatch
+    /// 3. Issue a fresh `CapabilityToken` from the snapshotted tool list
+    /// 4. Rebuild conversation context from the context summary
+    /// 5. Report pending requests (for re-issue) and open pipes (for SIGPIPE)
+    pub async fn restore_from_snapshot(
+        &mut self,
+        snapshot_name: &str,
+    ) -> Result<RestoreResult, AvixError> {
+        use crate::snapshot::verify_checksum;
+        use crate::snapshot::SnapshotFile;
+
+        let vfs = match &self.vfs {
+            Some(v) => Arc::clone(v),
+            None => return Err(AvixError::ConfigParse("no VFS attached".into())),
+        };
+
+        // 1. Read YAML from VFS
+        let path_str = format!(
+            "/users/{}/snapshots/{}.yaml",
+            self.spawned_by, snapshot_name
+        );
+        let path = VfsPath::parse(&path_str).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let bytes = vfs
+            .read(&path)
+            .await
+            .map_err(|e| AvixError::NotFound(format!("snapshot '{snapshot_name}': {e}")))?;
+        let yaml = String::from_utf8(bytes).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let file = SnapshotFile::from_str(&yaml)?;
+
+        // 2. Verify checksum
+        verify_checksum(&file)?;
+
+        // 3. Issue a fresh CapabilityToken from the original tool list
+        let original_tools = file.spec.environment.granted_tools.clone();
+        self.token = CapabilityToken::test_token(
+            &original_tools
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>(),
+        );
+
+        // 4. Restore goal and conversation context
+        self.goal = file.spec.goal.clone();
+        if !file.spec.context_summary.is_empty() {
+            self.conversation_history = vec![(
+                "assistant".to_string(),
+                format!(
+                    "[Restored from snapshot '{}']\n\nContext at capture:\n{}",
+                    file.metadata.name, file.spec.context_summary
+                ),
+            )];
+        }
+
+        // 5. Collect pending requests and open pipes
+        let reissued_requests: Vec<String> = file
+            .spec
+            .pending_requests
+            .iter()
+            .filter(|r| r.status == "in-flight")
+            .map(|r| r.request_id.clone())
+            .collect();
+
+        // Pipes always result in SIGPIPE on restore (pipe registry not yet available)
+        let sigpipe_pipes: Vec<String> = file
+            .spec
+            .pipes
+            .iter()
+            .filter(|p| p.state == "open")
+            .map(|p| p.pipe_id.clone())
+            .collect();
+
+        tracing::info!(
+            pid = self.pid.as_u32(),
+            snapshot = %file.metadata.name,
+            reissued = ?reissued_requests,
+            sigpipe = ?sigpipe_pipes,
+            "restore complete"
+        );
+
+        Ok(RestoreResult {
+            snapshot_name: file.metadata.name.clone(),
+            agent_name: file.metadata.agent_name.clone(),
+            reissued_requests,
+            reconnected_pipes: vec![],
+            sigpipe_pipes,
+        })
+    }
+
+    /// Return the current goal (used in tests and restore verification).
+    pub fn goal(&self) -> &str {
+        &self.goal
+    }
+
+    /// Return the current capability token (used in tests and restore verification).
+    pub fn token(&self) -> &CapabilityToken {
+        &self.token
     }
 
     /// Write a session summary to episodic memory when SIGSTOP fires.
@@ -681,6 +862,7 @@ impl RuntimeExecutor {
         let (server, handle) = create_agent_socket(run_dir, self.pid).await?;
         let paused = Arc::clone(&self.paused);
         let killed = Arc::clone(&self.killed);
+        let snapshot_requested = Arc::clone(&self.snapshot_requested);
         let pid = self.pid;
 
         let task = tokio::spawn(async move {
@@ -688,6 +870,7 @@ impl RuntimeExecutor {
                 .serve(move |msg| {
                     let paused = Arc::clone(&paused);
                     let killed = Arc::clone(&killed);
+                    let snapshot_requested = Arc::clone(&snapshot_requested);
                     Box::pin(async move {
                         let (method, params) = match msg {
                             IpcMessage::Notification(n) => (n.method, n.params),
@@ -723,9 +906,10 @@ impl RuntimeExecutor {
                             "SIGRESUME" => paused.store(false, Ordering::Release),
                             "SIGKILL" | "SIGSTOP" => killed.store(true, Ordering::Release),
                             "SIGSAVE" => {
+                                snapshot_requested.store(true, Ordering::Release);
                                 tracing::info!(
                                     pid = pid.as_u32(),
-                                    "SIGSAVE received; snapshot not yet implemented"
+                                    "SIGSAVE received; snapshot requested"
                                 );
                             }
                             other => {
