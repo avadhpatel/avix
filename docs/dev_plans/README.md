@@ -63,6 +63,39 @@ fs-gap-E  →  memory-gap-A  →  memory-gap-B  →  memory-gap-C  →  memory-g
 
 ---
 
+### AgentManifest Gaps
+
+Implement the `AgentManifest` static descriptor per `docs/spec/agent-manifest.md`.
+
+| File | Description | Priority | Depends On |
+|------|-------------|----------|------------|
+| `manifest-gap-A-schema.md` | Core schema types: `AgentManifest`, `ManifestEntrypoint`, `ManifestTools`, `ManifestMemory`, `ManifestSnapshot`, `ManifestDefaults`; YAML round-trip; VFS path helpers | High | — |
+| `manifest-gap-B-spawn-resolution.md` | `ManifestLoader` (VFS load + signature verify), `ToolGrantResolver` (required/optional × user ACL), `ModelValidator`, `GoalRenderer`, `SpawnResolver`; extend `SpawnParams` | High | Gap A |
+
+### Recommended Build Order
+
+```
+manifest-gap-A  →  manifest-gap-B
+```
+
+---
+
+### SessionManifest Gaps
+
+Align `SessionEntry` and the VFS manifest it writes to `docs/spec/session-manifest.md`.
+
+| File | Description | Priority | Depends On |
+|------|-------------|----------|------------|
+| `session-manifest-gap-A-schema.md` | Add missing fields to `SessionEntry`: `uid`, `shell`, `tty`, `workingDirectory`, `agents: Vec<AgentRef>`, `quotaSnapshot`, `lastActivityAt`, `closedAt`, `closedReason`; replace `SessionStatus` with spec-aligned `SessionState`; update VFS manifest output | Medium | — |
+
+### Recommended Build Order
+
+```
+session-manifest-gap-A  (standalone)
+```
+
+---
+
 ### Snapshot Gaps
 
 | File | Description | Priority | Depends On |
