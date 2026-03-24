@@ -5,3 +5,4 @@ Cargo.lock
 *.log
 tarpaulin-report.html
 coverage/
+.agents/reports

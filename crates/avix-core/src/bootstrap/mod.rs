@@ -4,7 +4,10 @@ pub(crate) mod phase2;
 use crate::error::AvixError;
 use crate::memfs::VfsRouter;
 use crate::types::Pid;
+use std::fs;
 use std::path::Path;
+use std::time::Duration;
+use tokio::time;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BootPhase(pub u8);
@@ -111,5 +114,57 @@ impl Runtime {
     /// Returns the Pid assigned to a named built-in service, if it was started.
     pub fn service_pid(&self, name: &str) -> Option<Pid> {
         self.service_pids.get(name).copied()
+    }
+
+    /// Starts the daemon: spawns kernel.agent, services, ATP gateway, and polls for hot reload.
+    pub async fn start_daemon(mut self, port: u16) -> Result<(), AvixError> {
+        // Phase 2: spawn kernel.agent PID1
+        self.phase2_kernel().await?;
+        self.boot_log.push(BootLogEntry {
+            phase: BootPhase(2),
+            message: "phase 2: kernel.agent spawned".into(),
+        });
+
+        // Phase 3: spawn services
+        self.phase3_services().await?;
+        self.boot_log.push(BootLogEntry {
+            phase: BootPhase(3),
+            message: "phase 3: services spawned".into(),
+        });
+
+        // Phase 4: start ATP gateway
+        self.phase4_atp_gateway(port).await?;
+        self.boot_log.push(BootLogEntry {
+            phase: BootPhase(4),
+            message: "phase 4: ATP gateway started".into(),
+        });
+
+        // Poll reload-pending every 5s
+        loop {
+            time::sleep(Duration::from_secs(5)).await;
+            if fs::metadata("/run/avix/reload-pending").is_ok() {
+                self.hot_reload().await?;
+            }
+        }
+    }
+
+    async fn phase2_kernel(&mut self) -> Result<(), AvixError> {
+        // TODO: spawn kernel.agent PID1 full tools
+        todo!("Implement phase2_kernel");
+    }
+
+    async fn phase3_services(&mut self) -> Result<(), AvixError> {
+        // TODO: spawn llm.svc IPC llm/complete multi-prov, router.svc, fs.svc MemFS
+        todo!("Implement phase3_services");
+    }
+
+    async fn phase4_atp_gateway(&mut self, port: u16) -> Result<(), AvixError> {
+        // TODO: axum WS /atp auth→IPC dispatch
+        todo!("Implement phase4_atp_gateway");
+    }
+
+    async fn hot_reload(&mut self) -> Result<(), AvixError> {
+        // TODO: hot reload config
+        todo!("Implement hot_reload");
     }
 }
