@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_default_impl() {
-        let adapter = ElevenLabsAdapter::default();
+        let adapter = ElevenLabsAdapter;
         assert_eq!(adapter.provider_name(), "elevenlabs");
     }
 }

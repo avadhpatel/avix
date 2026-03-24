@@ -172,7 +172,7 @@ mod tests {
             exp: Utc::now() + chrono::Duration::hours(8),
             scope: vec!["auth".into()],
         };
-        let token = store.issue(claims).await.unwrap();
+        let _token = store.issue(claims).await.unwrap();
         // The session must exist in auth_svc for refresh to work
         // (login creates a session; we use the session from login)
         let session = ctx.auth_svc.login("alice", "key123").await.unwrap();

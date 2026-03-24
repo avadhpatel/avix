@@ -35,6 +35,19 @@ impl std::fmt::Display for Role {
     }
 }
 
+impl FromStr for Role {
+    type Err = AvixError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "admin" => Ok(Role::Admin),
+            "operator" => Ok(Role::Operator),
+            "user" => Ok(Role::User),
+            "guest" => Ok(Role::Guest),
+            other => Err(AvixError::ConfigParse(format!("unknown role: {other}"))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -50,18 +63,5 @@ mod tests {
     #[test]
     fn test_can_access_domain_unknown_returns_false() {
         assert!(!Role::Admin.can_access_domain("unknown-domain"));
-    }
-}
-
-impl FromStr for Role {
-    type Err = AvixError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "admin" => Ok(Role::Admin),
-            "operator" => Ok(Role::Operator),
-            "user" => Ok(Role::User),
-            "guest" => Ok(Role::Guest),
-            other => Err(AvixError::ConfigParse(format!("unknown role: {other}"))),
-        }
     }
 }

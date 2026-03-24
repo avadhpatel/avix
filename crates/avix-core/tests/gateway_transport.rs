@@ -281,7 +281,7 @@ async fn cmd_with_invalid_token_returns_eauth() {
     ws.send(TungsteniteMessage::Text(bad_cmd)).await.unwrap();
     let reply = read_text(&mut ws).await;
     assert_eq!(reply["type"].as_str().unwrap(), "reply");
-    assert_eq!(reply["ok"].as_bool().unwrap(), false);
+    assert!(!reply["ok"].as_bool().unwrap());
     assert_eq!(reply["error"]["code"].as_str().unwrap(), "EAUTH");
 }
 
@@ -311,7 +311,7 @@ async fn cmd_with_expired_token_returns_eexpired() {
     ws.send(TungsteniteMessage::Text(cmd)).await.unwrap();
 
     let reply = read_text(&mut ws).await;
-    assert_eq!(reply["ok"].as_bool().unwrap(), false);
+    assert!(!reply["ok"].as_bool().unwrap());
     assert_eq!(reply["error"]["code"].as_str().unwrap(), "EEXPIRED");
 }
 
@@ -336,7 +336,7 @@ async fn duplicate_command_id_returns_eparse() {
     // Second send — duplicate id, should get EPARSE
     ws.send(TungsteniteMessage::Text(cmd)).await.unwrap();
     let reply2 = read_text(&mut ws).await;
-    assert_eq!(reply2["ok"].as_bool().unwrap(), false);
+    assert!(!reply2["ok"].as_bool().unwrap());
     assert_eq!(reply2["error"]["code"].as_str().unwrap(), "EPARSE");
 }
 
@@ -353,7 +353,7 @@ async fn guest_role_proc_spawn_returns_eperm() {
     ws.send(TungsteniteMessage::Text(cmd)).await.unwrap();
 
     let reply = read_text(&mut ws).await;
-    assert_eq!(reply["ok"].as_bool().unwrap(), false);
+    assert!(!reply["ok"].as_bool().unwrap());
     assert_eq!(reply["error"]["code"].as_str().unwrap(), "EPERM");
 }
 
@@ -371,6 +371,6 @@ async fn valid_proc_list_returns_eunavail() {
 
     let reply = read_text(&mut ws).await;
     assert_eq!(reply["id"].as_str().unwrap(), "eunavail-001");
-    assert_eq!(reply["ok"].as_bool().unwrap(), false);
+    assert!(!reply["ok"].as_bool().unwrap());
     assert_eq!(reply["error"]["code"].as_str().unwrap(), "EUNAVAIL");
 }

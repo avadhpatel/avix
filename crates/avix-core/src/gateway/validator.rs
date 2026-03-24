@@ -86,7 +86,7 @@ mod tests {
         store.issue(claims).await.unwrap()
     }
 
-    async fn make_expired_token(store: &ATPTokenStore, session_id: &str) -> String {
+    async fn make_expired_token(_store: &ATPTokenStore, session_id: &str) -> String {
         let claims = ATPTokenClaims {
             sub: "alice".to_string(),
             uid: 1001,
@@ -101,7 +101,7 @@ mod tests {
         crate::auth::atp_token::ATPToken::issue(claims, "test-secret").unwrap()
     }
 
-    fn make_cmd(token: &str, session_id: &str, domain: AtpDomain, op: &str) -> AtpCmd {
+    fn make_cmd(token: &str, _session_id: &str, domain: AtpDomain, op: &str) -> AtpCmd {
         AtpCmd {
             msg_type: "cmd".to_string(),
             id: uuid::Uuid::new_v4().to_string(),

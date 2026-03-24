@@ -1,7 +1,7 @@
-use crate::atp::types::{Cmd, Frame, LoginRequest, LoginResponse, Subscribe};
+use crate::atp::types::{Cmd, Frame, LoginResponse, Subscribe};
 use crate::error::ClientError;
 use futures_util::{SinkExt, StreamExt};
-use http::{header, Request};
+use http::Request;
 use serde_json;
 use tokio::net::TcpStream;
 use tokio_tungstenite::MaybeTlsStream;

@@ -243,7 +243,7 @@ mod tests {
         // openai supports embedding but is disabled
         assert!(!models
             .get("embedding")
-            .map_or(false, |v| v.contains(&"openai".to_string())));
+            .is_some_and(|v| v.contains(&"openai".to_string())));
     }
 
     #[test]

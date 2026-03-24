@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_default_impl() {
-        let adapter = StabilityAdapter::default();
+        let adapter = StabilityAdapter;
         assert_eq!(adapter.provider_name(), "stability-ai");
     }
 }

@@ -605,9 +605,9 @@ async fn run_until_complete_tool_results_appended_to_messages() {
     // Second LLM call messages should include tool result
     let msgs = executor.call_messages(1);
     let has_tool_result = msgs.iter().any(|m| {
-        m["content"].as_array().map_or(false, |c| {
-            c.iter().any(|item| item["type"] == "tool_result")
-        })
+        m["content"]
+            .as_array()
+            .is_some_and(|c| c.iter().any(|item| item["type"] == "tool_result"))
     });
     assert!(has_tool_result);
 }

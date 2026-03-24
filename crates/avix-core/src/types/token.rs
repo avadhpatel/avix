@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn test_tampered_expiry_invalidates_signature() {
         let mut token = fresh_token(&["fs/read"]);
-        token.expires_at = token.expires_at + chrono::Duration::hours(10); // tamper
+        token.expires_at += chrono::Duration::hours(10); // tamper
         assert!(
             !token.verify_signature(TEST_KEY),
             "changing expiry after signing should invalidate the signature"
