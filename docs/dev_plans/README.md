@@ -21,6 +21,24 @@ records are lost on every avix restart.
 
 ---
 
+### GUI + CLI Clients via ATP (spec: `docs/spec/gui-cli-via-atp.md`)
+
+Implement `avix-client-core` shared library, wire it into `avix-cli` (scripting + TUI),
+and lay the groundwork for the Tauri GUI backend. Implement in order A → H.
+
+| File | What it builds | Priority | Depends On |
+|------|---------------|----------|------------|
+| `client-gap-A-avix-client-core-scaffold.md` | New `avix-client-core` crate + all ATP wire types (`Cmd`, `Reply`, `Event`, `Frame`, 16 event kinds, `LoginRequest/Response`) | **Critical** | — |
+| `client-gap-B-atp-websocket-client.md` | `AtpClient` (HTTP login + WS upgrade + bearer auth) + `Dispatcher` (request/reply correlation, event broadcast) | **Critical** | A |
+| `client-gap-C-atp-event-emitter-reconnect.md` | `EventEmitter` typed fan-out + reconnect with exponential backoff (capped 60 s) | **High** | B |
+| `client-gap-D-notification-store-hil-persistence.md` | `NotificationStore` + `HilState` machine + `persistence.rs` (atomic JSON save/load for `notifications.json`, `layout.json`) | **High** | A |
+| `client-gap-E-appstate-config-server.md` | `AppState` + `ClientConfig` + `ServerHandle` (auto-start `avix start`) + `commands.rs` (spawn agent, send signal, resolve HIL) | **High** | B, C, D |
+| `client-gap-F-cli-atp-connect-scripting.md` | New ATP subcommands (`connect`, `agent list/spawn/kill/pipe`, `hil list/approve/deny`, `logs --follow`) + `--json` scripting mode | **High** | E |
+| `client-gap-G-cli-tui-skeleton.md` | Ratatui TUI skeleton: sidebar + main area + tab bar + status bar, key bindings, layout unit tests | **Medium** | F |
+| `client-gap-H-cli-tui-live-events-hil.md` | Live agent output streaming, HIL full-screen modal, notification popup, "new agent" form wired to ATP events | **Medium** | C, D, G |
+
+---
+
 ---
 
 ## Development Workflow
