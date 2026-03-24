@@ -330,7 +330,7 @@ async fn approval_token_concurrent_consume_only_one_wins() {
     let f2 = tokio::spawn(async move { s2.consume(&t2).await });
 
     let (r1, r2) = tokio::join!(f1, f2);
-    let results = vec![r1.unwrap(), r2.unwrap()];
+    let results = [r1.unwrap(), r2.unwrap()];
     let ok_count = results.iter().filter(|r| r.is_ok()).count();
     let err_count = results.iter().filter(|r| r.is_err()).count();
     assert_eq!(ok_count, 1);

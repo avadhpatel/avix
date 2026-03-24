@@ -1,4 +1,4 @@
-use avix_core::syscall::{SyscallContext, SyscallError, SyscallHandler};
+use avix_core::syscall::{SyscallContext, SyscallHandler};
 use avix_core::types::token::CapabilityToken;
 use serde_json::json;
 

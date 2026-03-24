@@ -94,7 +94,5 @@ mod tests {
 
         let _widgets1 = widget.render(&form1, area);
         let _widgets2 = widget.render(&form2, area);
-
-        assert!(true);
     }
 }

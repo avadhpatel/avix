@@ -74,7 +74,6 @@ mod tests {
         let widget = NotificationBarWidget::new();
         let _para = widget.render_bar(5);
         // Can't check content due to private fields, just ensure it doesn't panic
-        assert!(true);
     }
 
     #[test]
@@ -107,7 +106,6 @@ mod tests {
 
         let area = Rect::new(0, 0, 50, 10);
         let _list = widget.render_popup(&notifications, area);
-        assert!(true);
     }
 
     #[test]

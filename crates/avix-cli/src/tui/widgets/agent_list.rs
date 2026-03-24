@@ -93,7 +93,6 @@ mod tests {
         // Just check that render doesn't panic and returns a list
         // Since List internals are private, we can't test content directly
         // In real usage, we'd render it in a frame and snapshot test
-        assert!(true);
     }
 
     #[test]

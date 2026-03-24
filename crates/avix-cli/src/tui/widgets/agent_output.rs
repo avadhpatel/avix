@@ -123,6 +123,5 @@ mod tests {
         let area = Rect::new(0, 0, 50, 2);
         let _para = buf.render(123, area);
         // Can't check content, but ensure it doesn't panic
-        assert!(true);
     }
 }

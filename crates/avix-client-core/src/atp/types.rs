@@ -223,7 +223,7 @@ mod tests {
         assert_eq!(v["type"], "cmd");
         assert_eq!(v["domain"], "proc");
         assert_eq!(v["op"], "spawn");
-        assert!(v["id"].as_str().unwrap().len() > 0);
+        assert!(!v["id"].as_str().unwrap().is_empty());
     }
 
     #[test]

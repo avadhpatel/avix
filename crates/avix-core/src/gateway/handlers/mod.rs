@@ -172,6 +172,7 @@ pub(crate) mod test_helpers {
                 .insert(method.to_string(), Ok(value));
         }
 
+        #[allow(dead_code)]
         pub async fn set_err(&self, method: &str, err: AtpError) {
             self.responses
                 .lock()

@@ -1,7 +1,7 @@
 /// Integration tests for memory VFS layout (memory-gap-B).
 use avix_core::bootstrap::phase1;
 use avix_core::memfs::{VfsPath, VfsRouter};
-use avix_core::memory_svc::vfs_layout::{init_crew_memory_tree, init_user_memory_tree};
+use avix_core::memory_svc::vfs_layout::init_user_memory_tree;
 
 // T-MB-01: memory tree paths are NOT agent-writable
 #[test]

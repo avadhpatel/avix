@@ -524,6 +524,5 @@ mod tests {
     #[test]
     fn test_key_handling_stub() {
         // Stub test for key handling
-        assert!(true);
     }
 }
