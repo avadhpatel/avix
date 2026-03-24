@@ -1,0 +1,22 @@
+[package]
+name    = "avix-app"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "avix_app"
+crate-type = ["lib"]
+
+[[bin]]
+name = "avix-app"
+path = "src/main.rs"
+
+[dependencies]
+avix-client-core     = { path = "../../avix-client-core" }
+tauri                = { version = "1.6", features = ["shell-open"] }
+tokio.workspace      = true
+serde.workspace      = true
+serde_json.workspace = true
+anyhow.workspace     = true
+tracing.workspace    = true
+tracing-subscriber.workspace = true

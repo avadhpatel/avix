@@ -4,7 +4,7 @@ members = [
     "crates/avix-core",
     "crates/avix-client-core",
     "crates/avix-cli",
-    "crates/avix-app",
+    "crates/avix-app/src-tauri",
     "crates/avix-docker",
 ]
 resolver = "2"

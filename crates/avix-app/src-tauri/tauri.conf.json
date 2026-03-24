@@ -1,0 +1,34 @@
+{
+  \"productName\": \"Avix\",
+  \"version\": \"0.1.0\",
+  \"identifier\": \"com.avix.app\",
+  \"build\": {
+    \"beforeBuildCommand\": \"npm run build\",
+    \"beforeDevCommand\": \"npm run dev\",
+    \"devPath\": \"http://localhost:5173\",
+    \"distDir\": \"../dist\"
+  },
+  \"bundle\": {
+    \"active\": true,
+    \"targets\": \"all\",
+    \"createUpdaterBundle\": false,
+    \"windows\": {
+      \"certificateThumbprint\": null,
+      \"digestAlgorithm\": \"sha256\",
+      \"timestampUrl\": null
+    },
+    \"macOS\": {
+      \"frameworks\": [],
+      \"minimumSystemVersion\": \"\"
+    },
+    \"linux\": {
+      \"deb\": {
+        \"depends\": []
+      },
+      \"appimage\": {
+        \"bundleMediaFramework\": false
+      }
+    }
+  },
+  \"plugins\": {}
+}
