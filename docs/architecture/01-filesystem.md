@@ -153,7 +153,7 @@ Written at runtime, lost on reboot. Kernel-owned.
 ├── defaults.yaml
 ├── limits.yaml
 ├── workspace/
-└── snapshots/<agent>-<timestamp>.yaml
+└── snapshots/<agentName>-<YYYYMMDD>-<HHMM>.yaml   # SnapshotFile YAML; kind: Snapshot
 
 /services/<svcname>/
 ├── defaults.yaml

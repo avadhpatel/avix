@@ -273,9 +273,128 @@ Pipe configuration defaults from `/kernel/defaults/pipe.yaml` (`bufferTokens: 81
 
 ## Snapshots
 
-`SIGSAVE` triggers a snapshot:
-1. RuntimeExecutor serialises full conversation context + tool state
-2. Writes to `/users/<username>/snapshots/<agent>-<timestamp>.yaml`
-3. Returns `snapshot_id` to kernel
+Snapshots give agents cross-session continuity. A snapshot is a YAML file written to
+`/users/<username>/snapshots/<name>.yaml` that captures enough state to restart an
+agent where it left off.
 
-Restore: `kernel/proc/spawn` with `restore_from: <snapshot_id>` reconstructs the context.
+### Triggers
+
+| Trigger | Source |
+|---------|--------|
+| `sigsave` | `SIGSAVE` received from kernel (e.g. session close, scheduled) |
+| `auto` | Background auto-snapshot interval (configured in `kernel.yaml`) |
+| `manual` | Agent calls `snap/save` syscall |
+| `crash` | Kernel detects agent crash and captures last-known state |
+
+### `SnapshotFile` Schema
+
+Written to `/users/<username>/snapshots/<agentName>-<YYYYMMDD>-<HHMM>.yaml`.
+All keys are `camelCase`. The file is integrity-protected by a SHA-256 checksum.
+
+```yaml
+apiVersion: avix/v1
+kind: Snapshot
+metadata:
+  name: researcher-20260315-0741          # <agentName>-<YYYYMMDD>-<HHMM>
+  agentName: researcher
+  sourcePid: 57                           # PID at capture time
+  capturedAt: "2026-03-15T07:41:00Z"
+  capturedBy: kernel                      # kernel | user:<uid> | agent:<pid>
+  trigger: sigsave                        # auto | crash | manual | sigsave
+spec:
+  goal: "Research Q3 revenue trends"
+  contextSummary: "Found 12 sources. Synthesising..."
+  contextTokenCount: 64000
+  memory:
+    episodicEvents: 14                    # count from memory.svc at capture
+    semanticKeys: 8
+  pendingRequests:
+    - requestId: req-abc124
+      resource: tool
+      name: web
+      status: in-flight
+  pipes:
+    - pipeId: pipe-001
+      state: open
+  environment:
+    temperature: 0.7
+    capabilityToken: sha256:tokenSig789   # fingerprint of token at capture
+    grantedTools:                         # tool list used to issue a fresh token on restore
+      - fs/read
+      - llm/complete
+  checksum: sha256:abc123...              # SHA-256 over canonical YAML with this field zeroed
+```
+
+**Checksum integrity:** The checksum is computed over the YAML with `checksum` set to `""`.
+On restore, `verify_checksum()` recomputes and compares — tampered snapshots are rejected.
+
+### Capture Flow
+
+```
+SIGSAVE / snap/save / auto-interval
+  → RuntimeExecutor::capture_and_write_snapshot(trigger, captured_by)
+      → capture(CaptureParams) → build SnapshotFile + embed sha256 checksum
+      → snap.to_yaml() → VfsRouter::write(/users/<username>/snapshots/<name>.yaml)
+      → tracing::info("snapshot written")
+```
+
+If no VFS is attached, the snapshot is silently skipped — the executor continues normally.
+
+For SIGSAVE arriving via the agent socket (production path), the socket handler sets
+`snapshot_requested: AtomicBool`. The main turn loop picks this up at the next
+tool boundary and calls `capture_and_write_snapshot`.
+
+For `deliver_signal("SIGSAVE")` (test path), `capture_and_write_snapshot` is called
+directly in the same async context.
+
+### Restore Flow
+
+```
+restore_from_snapshot(snapshot_name)
+  1. Read YAML from VFS (/users/<username>/snapshots/<name>.yaml)
+  2. verify_checksum() — aborts with AvixError on mismatch
+  3. Issue fresh CapabilityToken from spec.environment.grantedTools
+  4. Restore goal and conversation context from spec.contextSummary
+  5. Collect pending in-flight requests → RestoreResult.reissued_requests
+  6. Collect open pipes → RestoreResult.sigpipe_pipes (kernel delivers SIGPIPE to each)
+```
+
+`restore_from_snapshot` returns a `RestoreResult`:
+
+```rust
+pub struct RestoreResult {
+    pub snapshot_name: String,
+    pub agent_name: String,
+    pub reissued_requests: Vec<String>,    // request IDs to re-issue
+    pub reconnected_pipes: Vec<String>,   // pipes that reconnected
+    pub sigpipe_pipes: Vec<String>,       // pipes whose target was gone → SIGPIPE
+}
+```
+
+The restored conversation context is a synthetic `assistant` message:
+
+```
+[Restored from snapshot '<name>']
+
+Context at capture:
+<contextSummary>
+```
+
+This primes the LLM with the prior session's last known state without unbounded context growth.
+
+### `CapturedBy` Encoding
+
+| Value | Meaning |
+|-------|---------|
+| `kernel` | Kernel-triggered (SIGSAVE, auto-interval, crash) |
+| `user:1001` | Human user with UID 1001 triggered via ATP `snap.create` |
+| `agent:57` | Agent at PID 57 triggered via `snap/save` syscall |
+
+### Snapshot Syscalls
+
+| Syscall | Description |
+|---------|-------------|
+| `snap/save` | Trigger a manual snapshot of the calling agent |
+| `snap/list` | List all snapshots for the calling agent |
+| `snap/delete` | Delete a named snapshot |
+| `snap/restore` | Restore calling agent from a named snapshot |
