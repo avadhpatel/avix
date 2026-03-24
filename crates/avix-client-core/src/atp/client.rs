@@ -1,0 +1,107 @@
+use crate::atp::types::{Cmd, Frame, LoginRequest, LoginResponse, Subscribe};
+use crate::error::ClientError;
+use futures_util::{SinkExt, StreamExt};
+use http::{header, Request};
+use serde_json;
+use tokio::net::TcpStream;
+use tokio_tungstenite::MaybeTlsStream;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+pub type WsSink = futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
+pub type WsStream = futures_util::stream::SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
+
+pub struct AtpClient {
+    pub session: LoginResponse,
+    pub sink: WsSink,
+    pub stream: WsStream,
+}
+
+impl AtpClient {
+    pub async fn connect(
+        base_url: &str,
+        identity: &str,
+        credential: &str,
+    ) -> Result<Self, ClientError> {
+        let login_req = LoginRequest {
+            identity: identity.to_string(),
+            credential: credential.to_string(),
+        };
+
+        let resp: LoginResponse = reqwest::Client::new()
+            .post(format!("{base_url}/atp/auth/login"))
+            .json(&login_req)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        let mut ws_url = base_url.to_string();
+        if ws_url.starts_with("https") {
+            ws_url = ws_url.replacen("https://", "wss://", 1);
+        } else {
+            ws_url = ws_url.replacen("http://", "ws://", 1);
+        }
+        ws_url.push_str("/atp");
+
+        let req = Request::builder()
+            .uri(ws_url)
+            .header(header::AUTHORIZATION, format!("Bearer {}", resp.token))
+            .body(())
+            .map_err(|e| ClientError::WebSocket(e.to_string()))?;
+
+        let (ws_stream, _) = connect_async(req)
+            .await
+            .map_err(|(e, _)| ClientError::WebSocket(e.to_string()))?;
+
+        let (sink, stream) = ws_stream.split();
+
+        let subscribe = Subscribe {
+            frame_type: "subscribe".to_string(),
+            events: vec!["*".to_string()],
+        };
+
+        sink.send(Message::Text(serde_json::to_string(&subscribe)?))
+            .await
+            .map_err(|e| ClientError::WebSocket(e.to_string()))?;
+
+        Ok(Self {
+            session: resp,
+            sink,
+            stream,
+        })
+    }
+
+    pub async fn send(&mut self, cmd: &Cmd) -> Result<(), ClientError> {
+        let text = serde_json::to_string(cmd).map_err(ClientError::Json)?;
+        self.sink
+            .send(Message::Text(text))
+            .await
+            .map_err(|e| ClientError::WebSocket(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn next_frame(&mut self) -> Option<Result<Frame, ClientError>> {
+        loop {
+            let opt_msg_res = self.stream.next().await;
+            let msg_res = match opt_msg_res {
+                Some(res) => res,
+                None => return None,
+            };
+            let msg = match msg_res {
+                Ok(m) => m,
+                Err(e) => return Some(Err(ClientError::WebSocket(e.to_string()))),
+            };
+            match msg {
+                Message::Text(text) => {
+                    return Some(serde_json::from_str(&text).map_err(ClientError::Json));
+                }
+                Message::Ping(p) => {
+                    let _ = self.sink.send(Message::Pong(p)).await.map_err(|e| ClientError::WebSocket(e.to_string()));
+                }
+                Message::Close(_) => return None,
+                _ => {}
+            }
+        }
+    }
+}
