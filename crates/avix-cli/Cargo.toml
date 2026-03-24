@@ -18,6 +18,7 @@ clap.workspace       = true
 tracing.workspace    = true
 tracing-subscriber.workspace = true
 uuid.workspace       = true
+chrono.workspace     = true
 autoagents           = { version = "0.3.6", features = ["anthropic", "openai", "ollama"] }
 ratatui              = "0.26"
 crossterm            = "0.27"

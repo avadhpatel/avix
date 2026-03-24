@@ -21,8 +21,9 @@ use avix_client_core::config::ClientConfig;
 use avix_client_core::notification::{HilState, Notification, NotificationKind, NotificationStore};
 use avix_client_core::state::{new_shared, SharedState};
 
-use super::state::{Action, TuiState};
+use super::state::{Action, NewAgentFormState, TuiState};
 use super::widgets::hil_modal::render_hil_modal;
+use super::widgets::new_agent_form::NewAgentFormWidget;
 
 use crate::Cli;
 
@@ -153,12 +154,11 @@ async fn update_state_from_shared(state: &mut TuiState, shared: &SharedState) {
     }
 
     state.agents = s.agents.read().await.clone();
-    state.notifications_count = s.notifications.unread_count().await;
+    state.notifications = s.notifications.all().await;
+    state.notifications_count = state.notifications.iter().filter(|n| !n.read).count();
     // Count HIL pending from notifications
-    state.hil_pending = s
+    state.hil_pending = state
         .notifications
-        .all()
-        .await
         .iter()
         .filter(|n| n.kind == NotificationKind::Hil && n.hil.as_ref().unwrap().outcome.is_none())
         .count();
@@ -247,8 +247,80 @@ async fn run_app(terminal: &mut Tui, cli: Cli) -> Result<()> {
                         }
                         _ => {}
                     }
+                } else if let Some(form) = &state.new_agent_form.clone() {
+                    // Form input mode
+                    match key.code {
+                        KeyCode::Tab => {
+                            let mut new_form = form.clone();
+                            new_form.focused_field = 1 - new_form.focused_field; // toggle 0/1
+                            state.reducer(Action::SetNewAgentForm(Some(new_form)));
+                        }
+                        KeyCode::Enter => {
+                            // Submit form
+                            if let Some(dispatcher) = &shared_state.read().await.dispatcher {
+                                let _ =
+                                    spawn_agent(dispatcher, "token", &form.name, &form.goal, &[])
+                                        .await;
+                            }
+                            state.reducer(Action::SetNewAgentForm(None));
+                        }
+                        KeyCode::Esc => {
+                            state.reducer(Action::SetNewAgentForm(None));
+                        }
+                        KeyCode::Char(c) => {
+                            let mut new_form = form.clone();
+                            if form.focused_field == 0 {
+                                new_form.name.push(c);
+                            } else {
+                                new_form.goal.push(c);
+                            }
+                            state.reducer(Action::SetNewAgentForm(Some(new_form)));
+                        }
+                        KeyCode::Backspace => {
+                            let mut new_form = form.clone();
+                            if form.focused_field == 0 {
+                                new_form.name.pop();
+                            } else {
+                                new_form.goal.pop();
+                            }
+                            state.reducer(Action::SetNewAgentForm(Some(new_form)));
+                        }
+                        _ => {}
+                    }
+                } else if state.notifications_popup_open {
+                    // Notifications popup mode
+                    match key.code {
+                        KeyCode::Esc => {
+                            state.reducer(Action::ToggleNotificationsPopup);
+                        }
+                        KeyCode::Enter => {
+                            // Mark selected as read
+                            if let Some(notif) = state
+                                .notifications
+                                .get(state.notification_bar_widget.selected_index)
+                            {
+                                shared_state
+                                    .read()
+                                    .await
+                                    .notifications
+                                    .mark_read(&notif.id)
+                                    .await;
+                            }
+                        }
+                        KeyCode::Up => {
+                            state
+                                .notification_bar_widget
+                                .select_prev(&state.notifications);
+                        }
+                        KeyCode::Down => {
+                            state
+                                .notification_bar_widget
+                                .select_next(&state.notifications);
+                        }
+                        _ => {}
+                    }
                 } else {
-                    // Normal keys
+                    // Normal mode
                     match key.code {
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('c') => {
@@ -305,6 +377,28 @@ async fn run_app(terminal: &mut Tui, cli: Cli) -> Result<()> {
                                 .await;
                             }
                         }
+                        KeyCode::Char('f') => {
+                            // Toggle new agent form
+                            let new_form = if state.new_agent_form.is_some() {
+                                None
+                            } else {
+                                Some(NewAgentFormState {
+                                    name: String::new(),
+                                    goal: String::new(),
+                                    focused_field: 0,
+                                })
+                            };
+                            state.reducer(Action::SetNewAgentForm(new_form));
+                        }
+                        KeyCode::Char('n') => {
+                            state.reducer(Action::ToggleNotificationsPopup);
+                        }
+                        KeyCode::Up => {
+                            state.agent_list_widget.select_prev(&state.agents);
+                        }
+                        KeyCode::Down => {
+                            state.agent_list_widget.select_next(&state.agents);
+                        }
                         _ => {}
                     }
                 }
@@ -322,14 +416,42 @@ fn ui(f: &mut ratatui::Frame, state: &TuiState) {
         return;
     }
 
+    // If new agent form open, render it
+    if let Some(form) = &state.new_agent_form {
+        let widget = NewAgentFormWidget::new();
+        let size = f.size();
+        let widgets = widget.render(form, size);
+        for (area, para) in widgets {
+            f.render_widget(para, area);
+        }
+        return;
+    }
+
+    // If notifications popup open, render it
+    if state.notifications_popup_open {
+        let size = f.size();
+        let popup_area = Rect {
+            x: size.width / 4,
+            y: size.height / 4,
+            width: size.width / 2,
+            height: size.height / 2,
+        };
+        let list = state
+            .notification_bar_widget
+            .render_popup(&state.notifications, popup_area);
+        f.render_widget(list, popup_area);
+        return;
+    }
+
     let size = f.size();
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // status bar
-            Constraint::Min(1),    // main area
-            Constraint::Length(1), // notification bar
+            Constraint::Length(1),  // status bar
+            Constraint::Length(10), // agents list
+            Constraint::Min(1),     // output pane
+            Constraint::Length(1),  // notification bar
         ])
         .split(size);
 
@@ -344,21 +466,37 @@ fn ui(f: &mut ratatui::Frame, state: &TuiState) {
     f.render_widget(status_bar, layout[0]);
 
     // Agents list
-    let agents_widget =
-        Paragraph::new("Agents").block(Block::default().borders(Borders::ALL).title("Agents"));
-    f.render_widget(agents_widget, layout[1]);
+    let agents_list = state.agent_list_widget.render(&state.agents, layout[1]);
+    f.render_widget(agents_list, layout[1]);
+
+    // Agent output pane
+    if let Some(selected_pid) = state
+        .agents
+        .get(state.agent_list_widget.selected_index)
+        .map(|a| a.pid)
+    {
+        if let Some(buf) = state.agent_output_buffers.get(&selected_pid) {
+            let output_para = buf.render(selected_pid, layout[2]);
+            f.render_widget(output_para, layout[2]);
+        } else {
+            let empty = Paragraph::new("No output yet").block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!("Agent {} Output", selected_pid)),
+            );
+            f.render_widget(empty, layout[2]);
+        }
+    } else {
+        let no_selection = Paragraph::new("No agent selected")
+            .block(Block::default().borders(Borders::ALL).title("Agent Output"));
+        f.render_widget(no_selection, layout[2]);
+    }
 
     // Notifications bar
-    let notifs_widget = Paragraph::new(format!(
-        "Unread notifications: {}",
-        state.notifications_count
-    ))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Notifications"),
-    );
-    f.render_widget(notifs_widget, layout[2]);
+    let notifs_bar = state
+        .notification_bar_widget
+        .render_bar(state.notifications_count);
+    f.render_widget(notifs_bar, layout[3]);
 }
 
 impl TuiState {

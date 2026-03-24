@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use avix_client_core::notification::HilState;
+use avix_client_core::notification::{HilState, Notification};
 use avix_client_core::state::ActiveAgent;
 
+use crate::tui::widgets::agent_list::AgentListWidget;
 use crate::tui::widgets::agent_output::AgentOutputBuffer;
+use crate::tui::widgets::notification_bar::NotificationBarWidget;
 
 #[derive(Debug, Clone, Default)]
 pub struct TuiState {
@@ -17,6 +19,9 @@ pub struct TuiState {
     pub hil_started_at: Option<Instant>,
     pub notifications_popup_open: bool,
     pub new_agent_form: Option<NewAgentFormState>,
+    pub notifications: Vec<Notification>,
+    pub agent_list_widget: AgentListWidget,
+    pub notification_bar_widget: NotificationBarWidget,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -92,6 +97,9 @@ mod tests {
         assert!(state.hil_started_at.is_none());
         assert!(!state.notifications_popup_open);
         assert!(state.new_agent_form.is_none());
+        assert!(state.notifications.is_empty());
+        assert_eq!(state.agent_list_widget.selected_index, 0);
+        assert_eq!(state.notification_bar_widget.selected_index, 0);
     }
 
     #[test]
@@ -130,6 +138,9 @@ mod tests {
                 goal: "goal".into(),
                 focused_field: 0,
             }),
+            notifications: vec![],
+            agent_list_widget: AgentListWidget::default(),
+            notification_bar_widget: NotificationBarWidget::default(),
         };
         state.reducer(Action::Disconnect);
         assert!(!state.connected);
@@ -141,6 +152,10 @@ mod tests {
         assert!(state.hil_started_at.is_none());
         assert!(!state.notifications_popup_open);
         assert!(state.new_agent_form.is_none());
+        assert!(state.notifications.is_empty()); // notifications cleared on disconnect?
+                                                 // widgets reset to default
+        assert_eq!(state.agent_list_widget.selected_index, 0);
+        assert_eq!(state.notification_bar_widget.selected_index, 0);
     }
 
     #[test]

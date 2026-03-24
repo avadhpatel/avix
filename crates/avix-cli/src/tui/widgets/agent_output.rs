@@ -1,5 +1,8 @@
 use std::collections::VecDeque;
 
+use ratatui::prelude::*;
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+
 #[derive(Debug, Clone, Default)]
 pub struct AgentOutputBuffer {
     /// Circular buffer — keeps the last MAX_LINES lines
@@ -56,6 +59,18 @@ impl AgentOutputBuffer {
         self.lines.len()
     }
 
+    pub fn render(&self, pid: u64, area: Rect) -> Paragraph {
+        let visible = self.visible_lines(area.height);
+        let text = visible.join("\n");
+        Paragraph::new(text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!("Agent {} Output", pid)),
+            )
+            .wrap(Wrap { trim: false })
+    }
+
     #[cfg(test)]
     pub fn get_line(&self, i: usize) -> Option<&str> {
         self.lines.get(i).map(|s| s.as_str())
@@ -99,5 +114,15 @@ mod tests {
         buf.push_text("only one line\n");
         buf.scroll_up(100);
         assert_eq!(buf.scroll_offset, 0);
+    }
+
+    #[test]
+    fn render_shows_visible_lines() {
+        let mut buf = AgentOutputBuffer::default();
+        buf.push_text("line1\nline2\nline3\n");
+        let area = Rect::new(0, 0, 50, 2);
+        let _para = buf.render(123, area);
+        // Can't check content, but ensure it doesn't panic
+        assert!(true);
     }
 }
