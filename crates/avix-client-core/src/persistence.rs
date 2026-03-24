@@ -48,3 +48,43 @@ pub fn load_notifications() -> Result<Vec<Notification>, ClientError> {
 pub fn save_notifications(ns: &[Notification]) -> Result<(), ClientError> {
     save_json(&notifications_path(), ns)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::notification::Notification;
+    use tempfile::TempDir;
+
+    #[test]
+    fn save_and_load_notifications_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("notifications.json");
+        let ns = vec![
+            Notification::from_sys_alert("info", "test1"),
+            Notification::from_sys_alert("warn", "test2"),
+        ];
+        save_json(&path, &ns).unwrap();
+        let loaded: Vec<Notification> = load_json(&path).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].message, "test1");
+        assert_eq!(loaded[1].message, "test2");
+    }
+
+    #[test]
+    fn load_json_returns_default_if_missing() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("missing.json");
+        let loaded: Vec<Notification> = load_json(&path).unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn atomic_write_does_not_leave_tmp_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("data.json");
+        let data = vec!["hello"];
+        save_json(&path, &data).unwrap();
+        assert!(!dir.path().join("data.json.tmp").exists());
+        assert!(path.exists());
+    }
+}

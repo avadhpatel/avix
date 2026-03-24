@@ -1,7 +1,7 @@
+use dirs;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::PathBuf;
-use dirs;
 
 use crate::error::ClientError;
 use crate::persistence;
@@ -16,7 +16,9 @@ pub struct ClientConfig {
     pub auto_start_server: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 impl Default for ClientConfig {
     fn default() -> Self {

@@ -49,7 +49,11 @@ impl ServerHandle {
         let avix_bin = std::env::current_exe()
             .map_err(|e| ClientError::Other(anyhow::anyhow!("Cannot find avix binary: {e}")))?;
 
-        info!("Spawning server: {} start --root {:?}", avix_bin.display(), config.runtime_root);
+        info!(
+            "Spawning server: {} start --root {:?}",
+            avix_bin.display(),
+            config.runtime_root
+        );
 
         let mut cmd = Command::new(&avix_bin);
         cmd.arg("start").arg("--root").arg(&config.runtime_root);
@@ -72,7 +76,10 @@ impl ServerHandle {
                 reachable = true;
                 break;
             }
-            warn!("Probe {attempt}/5: server not yet reachable at {}", config.server_url);
+            warn!(
+                "Probe {attempt}/5: server not yet reachable at {}",
+                config.server_url
+            );
         }
 
         if !reachable {
@@ -132,9 +139,9 @@ async fn probe_reachable(server_url: &str) -> bool {
         .build()
         .unwrap_or_default();
     match client.get(&url).send().await {
-        Ok(_) => true,                        // any HTTP response → server is up
-        Err(e) if e.is_connect() => false,    // connection refused
-        Err(_) => false,                      // other errors (timeout, DNS) → treat as down
+        Ok(_) => true,                     // any HTTP response → server is up
+        Err(e) if e.is_connect() => false, // connection refused
+        Err(_) => false,                   // other errors (timeout, DNS) → treat as down
     }
 }
 

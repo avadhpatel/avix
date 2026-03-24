@@ -8,7 +8,8 @@ use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-pub type WsSink = futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
+pub type WsSink =
+    futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 pub type WsStream = futures_util::stream::SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 
 pub struct AtpClient {
@@ -97,7 +98,11 @@ impl AtpClient {
                     return Some(serde_json::from_str(&text).map_err(ClientError::Json));
                 }
                 Message::Ping(p) => {
-                    let _ = self.sink.send(Message::Pong(p)).await.map_err(|e| ClientError::WebSocket(e.to_string()));
+                    let _ = self
+                        .sink
+                        .send(Message::Pong(p))
+                        .await
+                        .map_err(|e| ClientError::WebSocket(e.to_string()));
                 }
                 Message::Close(_) => return None,
                 _ => {}

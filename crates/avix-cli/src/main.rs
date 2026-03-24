@@ -1,7 +1,12 @@
+mod tui;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use avix_client_core::atp::{AtpClient, Dispatcher};
+use avix_client_core::commands::{list_agents, resolve_hil, send_signal, spawn_agent};
 
 use avix_core::bootstrap::Runtime;
 use avix_core::cli::config_init::{run_config_init, ConfigInitParams};
@@ -24,6 +29,22 @@ use avix_core::IpcLlmClient;
 #[derive(Parser)]
 #[command(name = "avix", about = "Avix agent OS", version)]
 struct Cli {
+    /// Output in JSON format
+    #[arg(long)]
+    json: bool,
+
+    /// Launch TUI mode
+    #[arg(long)]
+    tui: bool,
+
+    /// ATP server URL
+    #[arg(long, default_value = "ws://localhost:8080")]
+    url: String,
+
+    /// Authentication token
+    #[arg(long, default_value = "token")]
+    token: String,
+
     #[command(subcommand)]
     command: Cmd,
 }
@@ -76,6 +97,30 @@ enum Cmd {
         #[arg(long, default_value = "~/avix-data")]
         root: PathBuf,
     },
+    /// Connect to an Avix ATP server
+    Connect {
+        /// Server URL (e.g., ws://localhost:8080)
+        url: String,
+        /// Authentication token
+        #[arg(long)]
+        token: String,
+    },
+    /// Manage agents
+    Agent {
+        #[command(subcommand)]
+        sub: AgentCmd,
+    },
+    /// Manage human-in-the-loop requests
+    Hil {
+        #[command(subcommand)]
+        sub: HilCmd,
+    },
+    /// Tail logs from the server
+    Logs {
+        /// Follow logs
+        #[arg(long)]
+        follow: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -103,10 +148,82 @@ enum ConfigCmd {
     },
 }
 
+#[derive(Subcommand)]
+enum AgentCmd {
+    /// Spawn a new agent
+    Spawn {
+        /// Agent name
+        name: String,
+        /// Goal for the agent
+        #[arg(long)]
+        goal: String,
+        /// Capabilities (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        capabilities: Vec<String>,
+    },
+    /// List active agents
+    List,
+    /// Kill an agent
+    Kill {
+        /// PID of the agent
+        pid: u64,
+    },
+}
+
+#[derive(Subcommand)]
+enum HilCmd {
+    /// Approve a HIL request
+    Approve {
+        /// PID of the agent
+        pid: u64,
+        /// HIL ID
+        hil_id: String,
+        /// Approval token
+        #[arg(long)]
+        token: String,
+        /// Optional note
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Deny a HIL request
+    Deny {
+        /// PID of the agent
+        pid: u64,
+        /// HIL ID
+        hil_id: String,
+        /// Approval token
+        #[arg(long)]
+        token: String,
+        /// Optional note
+        #[arg(long)]
+        note: Option<String>,
+    },
+}
+
+/// Emit output in JSON or human-readable format
+fn emit<T: serde::Serialize>(json_mode: bool, human_fn: impl FnOnce(&T) -> String, value: T) {
+    if json_mode {
+        println!("{}", serde_json::to_string(&value).unwrap());
+    } else {
+        println!("{}", human_fn(&value));
+    }
+}
+
+/// Connect to ATP server and return dispatcher
+async fn connect_atp(url: &str, token: &str) -> Result<Dispatcher, anyhow::Error> {
+    let client = AtpClient::connect(url, "user", token).await?;
+    let dispatcher = Dispatcher::new(client);
+    Ok(dispatcher)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
+
+    if cli.tui {
+        return tui::app::run(cli).await;
+    }
 
     match cli.command {
         Cmd::Config {
@@ -254,6 +371,102 @@ async fn main() -> Result<()> {
             let result = executor.run_with_client(&goal, llm_client.as_ref()).await?;
             println!("{}", result.text);
             println!("--- Done ---");
+        }
+
+        Cmd::Connect { url, token } => {
+            connect_atp(&url, &token).await?;
+            emit(cli.json, |_: &()| "Connected to server".to_string(), ());
+        }
+
+        Cmd::Agent { sub } => match sub {
+            AgentCmd::Spawn {
+                name,
+                goal,
+                capabilities,
+            } => {
+                let dispatcher = connect_atp(&cli.url, &cli.token).await?;
+                let pid = spawn_agent(
+                    &dispatcher,
+                    &cli.token,
+                    &name,
+                    &goal,
+                    &capabilities.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                )
+                .await?;
+                emit(
+                    cli.json,
+                    |pid: &u64| format!("Agent spawned with PID {}", pid),
+                    pid,
+                );
+            }
+            AgentCmd::List => {
+                let dispatcher = connect_atp(&cli.url, &cli.token).await?;
+                let agents = list_agents(&dispatcher, &cli.token).await?;
+                emit(
+                    cli.json,
+                    |agents: &Vec<serde_json::Value>| format!("Agents: {:?}", agents),
+                    agents,
+                );
+            }
+            AgentCmd::Kill { pid } => {
+                let dispatcher = connect_atp(&cli.url, &cli.token).await?;
+                send_signal(&dispatcher, &cli.token, pid, "SIGKILL", None).await?;
+                emit(cli.json, |_: &()| format!("Killed agent {}", pid), ());
+            }
+        },
+
+        Cmd::Hil { sub } => match sub {
+            HilCmd::Approve {
+                pid,
+                hil_id,
+                token,
+                note,
+            } => {
+                let dispatcher = connect_atp(&cli.url, &cli.token).await?;
+                resolve_hil(
+                    &dispatcher,
+                    &cli.token,
+                    pid,
+                    &hil_id,
+                    &token,
+                    true,
+                    note.as_deref(),
+                )
+                .await?;
+                emit(
+                    cli.json,
+                    |_: &()| format!("Approved HIL {} for PID {}", hil_id, pid),
+                    (),
+                );
+            }
+            HilCmd::Deny {
+                pid,
+                hil_id,
+                token,
+                note,
+            } => {
+                let dispatcher = connect_atp(&cli.url, &cli.token).await?;
+                resolve_hil(
+                    &dispatcher,
+                    &cli.token,
+                    pid,
+                    &hil_id,
+                    &token,
+                    false,
+                    note.as_deref(),
+                )
+                .await?;
+                emit(
+                    cli.json,
+                    |_: &()| format!("Denied HIL {} for PID {}", hil_id, pid),
+                    (),
+                );
+            }
+        },
+
+        Cmd::Logs { follow: _ } => {
+            // For now, stub
+            emit(cli.json, |_: &()| "Logs output".to_string(), ());
         }
     }
 

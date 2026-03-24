@@ -113,10 +113,7 @@ pub async fn resolve_hil(
 }
 
 /// List active processes. Returns the raw body array from the server.
-pub async fn list_agents(
-    dispatcher: &Dispatcher,
-    token: &str,
-) -> Result<Vec<Value>, ClientError> {
+pub async fn list_agents(dispatcher: &Dispatcher, token: &str) -> Result<Vec<Value>, ClientError> {
     let body = dispatch(dispatcher, token, "proc", "list", serde_json::json!({})).await?;
     match body {
         Some(Value::Array(arr)) => Ok(arr),
@@ -132,10 +129,10 @@ pub async fn list_agents(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atp::types::{Reply, Event};
+    use crate::atp::types::{Event, Reply};
+    use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::{broadcast, Mutex};
-    use std::collections::HashMap;
 
     // ---------------------------------------------------------------------------
     // Minimal fake dispatcher for unit testing commands
@@ -223,11 +220,16 @@ mod tests {
         let fake = FakeDispatcher::new();
         fake.set_reply("proc/spawn", ok_reply(serde_json::json!({"pid": 42})));
 
-        let cmd = Cmd::new("proc", "spawn", "tok", serde_json::json!({
-            "agent": "researcher",
-            "goal": "test",
-            "capabilities": ["fs/read"],
-        }));
+        let cmd = Cmd::new(
+            "proc",
+            "spawn",
+            "tok",
+            serde_json::json!({
+                "agent": "researcher",
+                "goal": "test",
+                "capabilities": ["fs/read"],
+            }),
+        );
         let reply = fake.call(cmd).await.unwrap();
 
         // Replicate what spawn_agent does with the reply.
@@ -262,7 +264,9 @@ mod tests {
 
         // Build the Cmd that resolve_hil would produce.
         let cmd = Cmd::new(
-            "signal", "send", "tok",
+            "signal",
+            "send",
+            "tok",
             serde_json::json!({
                 "pid": 10u64,
                 "signal": "SIGRESUME",
@@ -292,7 +296,9 @@ mod tests {
         fake.set_reply("signal/send", ok_reply(serde_json::json!({})));
 
         let cmd = Cmd::new(
-            "signal", "send", "tok",
+            "signal",
+            "send",
+            "tok",
             serde_json::json!({
                 "pid": 7u64,
                 "signal": "SIGPIPE",
@@ -309,14 +315,17 @@ mod tests {
     #[tokio::test]
     async fn list_agents_returns_empty_on_null_body() {
         let fake = FakeDispatcher::new();
-        fake.set_reply("proc/list", Reply {
-            frame_type: "reply".into(),
-            id: "x".into(),
-            ok: true,
-            code: None,
-            message: None,
-            body: None,
-        });
+        fake.set_reply(
+            "proc/list",
+            Reply {
+                frame_type: "reply".into(),
+                id: "x".into(),
+                ok: true,
+                code: None,
+                message: None,
+                body: None,
+            },
+        );
 
         let cmd = Cmd::new("proc", "list", "tok", serde_json::json!({}));
         let reply = fake.call(cmd).await.unwrap();

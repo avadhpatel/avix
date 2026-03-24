@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::config::ClientConfig;
 use crate::atp::dispatcher::Dispatcher;
 use crate::atp::event_emitter::EventEmitter;
-use crate::notification::NotificationStore;
 use crate::atp::types::AgentStatus;
+use crate::config::ClientConfig;
+use crate::notification::NotificationStore;
 
 /// Shared application state. Both clients wrap this in Arc<RwLock<AppState>>.
 #[derive(Debug)]

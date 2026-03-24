@@ -23,9 +23,10 @@ pub struct Notification {
     pub read: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HilState {
     pub hil_id: String,
+    pub pid: u64,
     pub approval_token: String,
     pub prompt: String,
     pub timeout_secs: u32,
@@ -42,6 +43,7 @@ impl Notification {
             message: body.prompt.clone(),
             hil: Some(HilState {
                 hil_id: body.hil_id.clone(),
+                pid: body.pid,
                 approval_token: body.approval_token.clone(),
                 prompt: body.prompt.clone(),
                 timeout_secs: body.timeout_secs,
@@ -59,7 +61,10 @@ impl Notification {
             kind: NotificationKind::AgentExit,
             agent_pid: Some(pid),
             session_id: Some(session_id.to_string()),
-            message: reason.map_or_else(|| "Agent exited".to_string(), |r| format!("Agent exited: {r}")),
+            message: reason.map_or_else(
+                || "Agent exited".to_string(),
+                |r| format!("Agent exited: {r}"),
+            ),
             hil: None,
             created_at: Utc::now(),
             resolved_at: None,
@@ -83,7 +88,7 @@ impl Notification {
 }
 
 use std::sync::Arc;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{broadcast, Mutex};
 
 impl std::fmt::Debug for NotificationStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -120,7 +125,10 @@ impl NotificationStore {
 
     pub async fn resolve_hil(&self, hil_id: &str, outcome: HilOutcome) {
         let mut inner = self.inner.lock().await;
-        if let Some(notif) = inner.iter_mut().find(|n| n.id == hil_id && n.kind == NotificationKind::Hil) {
+        if let Some(notif) = inner
+            .iter_mut()
+            .find(|n| n.id == hil_id && n.kind == NotificationKind::Hil)
+        {
             if notif.hil.as_ref().unwrap().outcome.is_none() {
                 notif.hil.as_mut().unwrap().outcome = Some(outcome);
                 notif.resolved_at = Some(Utc::now());
@@ -151,5 +159,83 @@ impl NotificationStore {
 
     pub fn subscribe(&self) -> broadcast::Receiver<()> {
         self.changed.subscribe()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn add_increases_unread_count() {
+        let store = NotificationStore::new();
+        assert_eq!(store.unread_count().await, 0);
+        store
+            .add(Notification::from_sys_alert("info", "test"))
+            .await;
+        assert_eq!(store.unread_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn mark_read_decreases_unread_count() {
+        let store = NotificationStore::new();
+        store
+            .add(Notification::from_sys_alert("info", "test"))
+            .await;
+        assert_eq!(store.unread_count().await, 1);
+        let all = store.all().await;
+        let id = all[0].id.clone();
+        store.mark_read(&id).await;
+        assert_eq!(store.unread_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn resolve_hil_sets_outcome() {
+        let store = NotificationStore::new();
+        let hil_req = HilRequestBody {
+            hil_id: "test-hil".to_string(),
+            pid: 123,
+            session_id: "sess".to_string(),
+            prompt: "approve?".to_string(),
+            approval_token: "token".to_string(),
+            timeout_secs: 30,
+        };
+        let notif = Notification::from_hil_request(&hil_req);
+        store.add(notif).await;
+        store.resolve_hil("test-hil", HilOutcome::Approved).await;
+        let all = store.all().await;
+        assert_eq!(
+            all[0].hil.as_ref().unwrap().outcome,
+            Some(HilOutcome::Approved)
+        );
+    }
+
+    #[tokio::test]
+    async fn changed_signal_fires_on_add() {
+        let store = NotificationStore::new();
+        let mut rx = store.subscribe();
+        store
+            .add(Notification::from_sys_alert("info", "test"))
+            .await;
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn all_returns_newest_first() {
+        let store = NotificationStore::new();
+        let mut n1 = Notification::from_sys_alert("info", "first");
+        n1.created_at = chrono::DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut n2 = Notification::from_sys_alert("info", "second");
+        n2.created_at = chrono::DateTime::parse_from_rfc3339("2023-01-02T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        store.add(n1).await;
+        store.add(n2).await;
+        let all = store.all().await;
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].message, "second");
+        assert_eq!(all[1].message, "first");
     }
 }

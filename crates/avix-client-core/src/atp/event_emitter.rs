@@ -5,8 +5,8 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
-use crate::error::ClientError;
 use crate::atp::{Dispatcher, Event, EventKind};
+use crate::error::ClientError;
 
 impl std::fmt::Debug for EventEmitter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -57,7 +57,11 @@ impl EventEmitter {
             }
         });
 
-        Self { rx, connected, _handle: handle }
+        Self {
+            rx,
+            connected,
+            _handle: handle,
+        }
     }
 
     pub fn subscribe_all(&self) -> broadcast::Receiver<Event> {
@@ -90,7 +94,9 @@ impl EventEmitter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atp::types::{AgentOutputBody, AgentStatus, AgentStatusBody, EventBody, SessionReadyBody};
+    use crate::atp::types::{
+        AgentOutputBody, AgentStatus, AgentStatusBody, EventBody, SessionReadyBody,
+    };
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
 
@@ -130,7 +136,9 @@ mod tests {
         assert_eq!(b, Duration::from_secs(2));
         b = b.saturating_mul(2).min(Duration::from_secs(60));
         assert_eq!(b, Duration::from_secs(4));
-        for _ in 0..10 { b = b.saturating_mul(2).min(Duration::from_secs(60)); }
+        for _ in 0..10 {
+            b = b.saturating_mul(2).min(Duration::from_secs(60));
+        }
         assert_eq!(b, Duration::from_secs(60));
     }
 

@@ -55,15 +55,13 @@ impl Dispatcher {
                         tracing::error!("Dispatcher reader error: {:?}", e);
                         break;
                     }
-                    Some(Ok(Message::Text(text))) => {
-                        match serde_json::from_str(&text) {
-                            Ok(f) => f,
-                            Err(e) => {
-                                tracing::warn!("Frame parse error: {:?}", e);
-                                continue;
-                            }
+                    Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            tracing::warn!("Frame parse error: {:?}", e);
+                            continue;
                         }
-                    }
+                    },
                     Some(Ok(Message::Close(_))) => break,
                     Some(Ok(_)) => continue,
                 };
