@@ -23,7 +23,7 @@ fn default_true() -> bool {
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            server_url: "http://127.0.0.1:7700".to_string(),
+            server_url: "http://localhost:9142".to_string(),
             identity: "admin".to_string(),
             credential: String::new(),
             runtime_root: dirs::home_dir()
@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn default_config() {
         let cfg = ClientConfig::default();
-        assert_eq!(cfg.server_url, "http://127.0.0.1:7700");
+        assert_eq!(cfg.server_url, "http://localhost:9142");
         assert_eq!(cfg.identity, "admin");
         assert!(cfg.credential.is_empty());
         assert!(cfg.auto_start_server);

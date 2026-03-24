@@ -19,6 +19,8 @@ use avix_client_core::atp::{AtpClient, Dispatcher};
 use avix_client_core::commands::{list_agents, resolve_hil, spawn_agent};
 use avix_client_core::config::ClientConfig;
 use avix_client_core::notification::{HilState, Notification, NotificationKind, NotificationStore};
+use avix_client_core::persistence;
+use avix_client_core::server::ServerHandle;
 use avix_client_core::state::{new_shared, SharedState};
 
 use super::state::{Action, NewAgentFormState, TuiState};
@@ -66,6 +68,7 @@ async fn dispatch_event(
                     body.reason.as_deref(),
                 );
                 notifications.add(notif).await;
+                let _ = persistence::save_notifications(&notifications.all().await);
             }
         }
         EventKind::HilRequest => {
@@ -73,6 +76,7 @@ async fn dispatch_event(
                 // Add HIL notification
                 let notif = Notification::from_hil_request(&body);
                 notifications.add(notif).await;
+                let _ = persistence::save_notifications(&notifications.all().await);
                 // Send action to set pending_hil
                 let hil = HilState {
                     pid: body.pid,
@@ -89,6 +93,7 @@ async fn dispatch_event(
             if let EventBody::HilResolved(body) = event.body {
                 // Resolve in notifications
                 notifications.resolve_hil(&body.hil_id, body.outcome).await;
+                let _ = persistence::save_notifications(&notifications.all().await);
                 // Send action to clear pending_hil
                 let _ = action_tx.send(Action::SetPendingHil(None)).await;
             }
@@ -98,6 +103,7 @@ async fn dispatch_event(
                 // Add notification
                 let notif = Notification::from_sys_alert(&body.level, &body.message);
                 notifications.add(notif).await;
+                let _ = persistence::save_notifications(&notifications.all().await);
             }
         }
         _ => {} // Ignore other events
@@ -193,9 +199,16 @@ fn restore_terminal(terminal: &mut Tui) -> Result<()> {
 
 async fn run_app(terminal: &mut Tui, cli: Cli) -> Result<()> {
     let mut state = TuiState::default();
-    let client_config = ClientConfig::default();
-    let shared_state = new_shared(client_config);
+    let client_config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+    let shared_state = new_shared(client_config.clone());
     let (action_tx, mut action_rx) = mpsc::channel(100);
+
+    // Load persisted notifications
+    if let Ok(notifications) = persistence::load_notifications() {
+        for notif in notifications {
+            shared_state.read().await.notifications.add(notif).await;
+        }
+    }
 
     loop {
         // Drain action channel
@@ -325,6 +338,9 @@ async fn run_app(terminal: &mut Tui, cli: Cli) -> Result<()> {
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('c') => {
                             if !state.connected {
+                                // Ensure server is running
+                                let _server_handle =
+                                    ServerHandle::ensure_running(&client_config).await?;
                                 if let Ok(dispatcher) = connect_atp(&cli.url, &cli.token).await {
                                     let dispatcher = Arc::new(dispatcher);
                                     let dispatcher_c = Arc::clone(&dispatcher);

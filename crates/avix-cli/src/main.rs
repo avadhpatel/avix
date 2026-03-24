@@ -38,7 +38,7 @@ struct Cli {
     tui: bool,
 
     /// ATP server URL
-    #[arg(long, default_value = "ws://localhost:8080")]
+    #[arg(long, default_value = "ws://localhost:9142/atp")]
     url: String,
 
     /// Authentication token
@@ -99,7 +99,7 @@ enum Cmd {
     },
     /// Connect to an Avix ATP server
     Connect {
-        /// Server URL (e.g., ws://localhost:8080)
+        /// Server URL (e.g., ws://localhost:9142/atp)
         url: String,
         /// Authentication token
         #[arg(long)]

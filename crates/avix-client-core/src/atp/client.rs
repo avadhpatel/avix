@@ -19,8 +19,8 @@ pub struct AtpClient {
 }
 
 impl AtpClient {
-    pub async fn connect() -> Result<Self, ClientError> {
-        let ws_url = "ws://localhost:9142/atp";
+    pub async fn connect(url: &str, _user: &str, _token: &str) -> Result<Self, ClientError> {
+        let ws_url = url;
 
         let req = Request::builder()
             .uri(ws_url)
