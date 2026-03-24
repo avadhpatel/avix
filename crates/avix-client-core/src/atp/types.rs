@@ -89,6 +89,15 @@ pub enum EventBody {
     Raw(Value), // fallback for unrecognised / future kinds
 }
 
+impl EventBody {
+    pub fn as_hil_request(&self) -> Option<&HilRequestBody> {
+        match self {
+            EventBody::HilRequest(body) => Some(body),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionReadyBody {
     pub session_id: String,

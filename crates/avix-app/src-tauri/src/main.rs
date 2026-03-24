@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
-fn main() {
-    avix_app::run();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    avix_app::run().await
 }

@@ -1,34 +1,68 @@
 use avix_client_core::config::ClientConfig;
 use avix_client_core::state::new_shared;
+use tauri::{Emitter, Manager};
 
-pub fn create_app_state() -> avix_client_core::state::SharedState {
-    let config = ClientConfig::default();
-    new_shared(config)
+mod commands;
+
+pub async fn create_app_state(
+) -> Result<avix_client_core::state::SharedState, Box<dyn std::error::Error>> {
+    let config = ClientConfig {
+        auto_start_server: false, // For GUI, assume server is running or start manually
+        ..Default::default()
+    };
+    let state = new_shared(config);
+    {
+        let mut guard = state.write().await;
+        guard.init().await?;
+    }
+    Ok(state)
 }
 
-pub fn run() {
+pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
     tracing::info!("avix-app starting");
 
-    let app_state = create_app_state();
+    let app_state = create_app_state().await?;
 
     tauri::Builder::default()
         .manage(app_state)
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
+        .invoke_handler(tauri::generate_handler![
+            commands::spawn_agent,
+            commands::resolve_hil,
+            commands::list_agents,
+            commands::get_notifications,
+            commands::save_layout
+        ])
+        .setup(|app| {
+            // Set the emit callback
+            let app_handle = app.handle().clone();
+            let state = app.state::<avix_client_core::state::SharedState>();
+            let mut state_guard = state.try_write().unwrap();
+            let callback = Box::new(move |event: &str, data: &serde_json::Value| {
+                let _ = app_handle.emit(event, data);
+            });
+            state_guard.set_emit_callback(callback);
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn creates_app_state_with_default_config() {
-        let state = create_app_state();
+    #[tokio::test]
+    async fn creates_app_state_with_default_config() {
+        let mut config = ClientConfig::default();
+        config.auto_start_server = false;
+        let state = new_shared(config);
         let s = state.try_read().unwrap();
-        assert_eq!(s.config.server_url, "http://127.0.0.1:7700");
+        assert_eq!(s.config.server_url, "http://localhost:9142");
         assert_eq!(
             s.connection_status,
             avix_client_core::state::ConnectionStatus::Disconnected
