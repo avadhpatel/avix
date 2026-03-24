@@ -112,7 +112,6 @@ impl Dispatcher {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[tokio::test]
     #[ignore = "requires mock WS transport (Gap B)"]

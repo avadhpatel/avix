@@ -129,10 +129,10 @@ pub async fn list_agents(dispatcher: &Dispatcher, token: &str) -> Result<Vec<Val
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atp::types::{Event, Reply};
+    use crate::atp::types::Reply;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use tokio::sync::{broadcast, Mutex};
+    use tokio::sync::Mutex;
 
     // ---------------------------------------------------------------------------
     // Minimal fake dispatcher for unit testing commands
@@ -155,16 +155,13 @@ mod tests {
     struct FakeDispatcher {
         replies: Arc<Mutex<HashMap<String, Reply>>>,
         captured_cmds: Arc<Mutex<Vec<Cmd>>>,
-        event_tx: broadcast::Sender<Event>,
     }
 
     impl FakeDispatcher {
         fn new() -> Self {
-            let (event_tx, _) = broadcast::channel(16);
             Self {
                 replies: Arc::new(Mutex::new(HashMap::new())),
                 captured_cmds: Arc::new(Mutex::new(vec![])),
-                event_tx,
             }
         }
 
@@ -278,7 +275,6 @@ mod tests {
                 },
             }),
         );
-        let captured_cmds = fake.captured().await;
         // Not yet captured — call it.
         fake.call(cmd).await.unwrap();
 

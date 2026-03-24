@@ -19,35 +19,11 @@ pub struct AtpClient {
 }
 
 impl AtpClient {
-    pub async fn connect(
-        base_url: &str,
-        identity: &str,
-        credential: &str,
-    ) -> Result<Self, ClientError> {
-        let login_req = LoginRequest {
-            identity: identity.to_string(),
-            credential: credential.to_string(),
-        };
-
-        let resp: LoginResponse = reqwest::Client::new()
-            .post(format!("{base_url}/atp/auth/login"))
-            .json(&login_req)
-            .send()
-            .await?
-            .json()
-            .await?;
-
-        let mut ws_url = base_url.to_string();
-        if ws_url.starts_with("https") {
-            ws_url = ws_url.replacen("https://", "wss://", 1);
-        } else {
-            ws_url = ws_url.replacen("http://", "ws://", 1);
-        }
-        ws_url.push_str("/atp");
+    pub async fn connect() -> Result<Self, ClientError> {
+        let ws_url = "ws://localhost:9142/atp";
 
         let req = Request::builder()
             .uri(ws_url)
-            .header(header::AUTHORIZATION, format!("Bearer {}", resp.token))
             .body(())
             .map_err(|e| ClientError::WebSocket(e.to_string()))?;
 
@@ -67,7 +43,11 @@ impl AtpClient {
             .map_err(|e| ClientError::WebSocket(e.to_string()))?;
 
         Ok(Self {
-            session: resp,
+            session: LoginResponse {
+                token: "dummy".to_string(),
+                expires_at: "dummy".to_string(),
+                session_id: "dummy".to_string(),
+            },
             sink,
             stream,
         })

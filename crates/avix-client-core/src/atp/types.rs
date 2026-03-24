@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -180,6 +181,30 @@ pub enum Frame {
     Event(Event),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HilRequest {
+    pub id: Uuid,
+    pub agent_id: Uuid,
+    pub prompt: String,
+    pub context: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum NotificationKind {
+    Hil,
+    AgentExit,
+    SysAlert,
+}
+
+#[derive(Clone)]
+pub struct Notification {
+    pub id: Uuid,
+    pub kind: NotificationKind,
+    pub title: String,
+    pub body: String,
+    pub timestamp: DateTime<Utc>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,5 +265,27 @@ mod tests {
             let k: EventKind = serde_json::from_str(&v).unwrap();
             assert_eq!(k, expected);
         }
+    }
+
+    #[test]
+    fn hil_request_serialises() {
+        let hr = HilRequest {
+            id: Uuid::new_v4(),
+            agent_id: Uuid::new_v4(),
+            prompt: "test prompt".to_string(),
+            context: vec!["ctx1".to_string()],
+        };
+        let s = serde_json::to_string(&hr).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["prompt"], "test prompt");
+        assert_eq!(v["context"][0], "ctx1");
+    }
+
+    #[test]
+    fn notification_kind_serde() {
+        let nk = NotificationKind::Hil;
+        let s = serde_json::to_string(&nk).unwrap();
+        let d: NotificationKind = serde_json::from_str(&s).unwrap();
+        assert_eq!(d, NotificationKind::Hil);
     }
 }

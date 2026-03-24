@@ -94,15 +94,9 @@ impl EventEmitter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atp::types::{
-        AgentOutputBody, AgentStatus, AgentStatusBody, EventBody, SessionReadyBody,
-    };
+
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
-
-    async fn fake_connect(_: Arc<AtomicUsize>) -> Result<Dispatcher, ClientError> {
-        todo!("Mock Dispatcher from gap B tests");
-    }
 
     #[tokio::test]
     #[ignore = "requires mock Dispatcher transport (Gap B)"]
