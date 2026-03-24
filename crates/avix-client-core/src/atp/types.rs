@@ -36,7 +36,7 @@ pub struct Subscribe {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Reply {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", skip_deserializing, default)]
     pub frame_type: String, // always "reply"
     pub id: String,
     pub ok: bool,
@@ -47,7 +47,7 @@ pub struct Reply {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", skip_deserializing, default)]
     pub frame_type: String, // always "event"
     pub kind: EventKind,
     pub owner_session: Option<String>,

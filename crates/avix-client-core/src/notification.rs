@@ -2,7 +2,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::atp::types::{HilOutcome, HilRequestBody};
-use crate::error::ClientError;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum NotificationKind {
@@ -60,7 +59,7 @@ impl Notification {
             kind: NotificationKind::AgentExit,
             agent_pid: Some(pid),
             session_id: Some(session_id.to_string()),
-            message: reason.map_or_else(|| \"Agent exited\".to_string(), |r| format!(\"Agent exited: {r}\")),
+            message: reason.map_or_else(|| "Agent exited".to_string(), |r| format!("Agent exited: {r}")),
             hil: None,
             created_at: Utc::now(),
             resolved_at: None,
@@ -68,7 +67,7 @@ impl Notification {
         }
     }
 
-    pub fn from_sys_alert(level: &str, message: &str) -> Self {
+    pub fn from_sys_alert(_level: &str, message: &str) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             kind: NotificationKind::SysAlert,
@@ -86,9 +85,21 @@ impl Notification {
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast};
 
+impl std::fmt::Debug for NotificationStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotificationStore").finish_non_exhaustive()
+    }
+}
+
 pub struct NotificationStore {
     inner: Arc<Mutex<Vec<Notification>>>,
     changed: broadcast::Sender<()>,
+}
+
+impl Default for NotificationStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NotificationStore {

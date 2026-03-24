@@ -52,9 +52,9 @@ impl AtpClient {
 
         let (ws_stream, _) = connect_async(req)
             .await
-            .map_err(|(e, _)| ClientError::WebSocket(e.to_string()))?;
+            .map_err(|e| ClientError::WebSocket(e.to_string()))?;
 
-        let (sink, stream) = ws_stream.split();
+        let (mut sink, stream) = ws_stream.split();
 
         let subscribe = Subscribe {
             frame_type: "subscribe".to_string(),

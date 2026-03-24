@@ -19,6 +19,12 @@ struct DispatcherInner {
     event_tx: broadcast::Sender<Event>,
 }
 
+impl std::fmt::Debug for Dispatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Dispatcher").finish_non_exhaustive()
+    }
+}
+
 pub struct Dispatcher {
     inner: Arc<DispatcherInner>,
     sink_mutex: Arc<Mutex<WsSink>>,
@@ -38,18 +44,28 @@ impl Dispatcher {
         let sink_mutex = Arc::new(Mutex::new(client.sink));
         let mut reader_stream = client.stream;
         let reader_inner = Arc::clone(&inner);
-        let reader_sink_mutex = Arc::clone(&sink_mutex);
 
         let handle = tokio::spawn(async move {
+            use futures_util::StreamExt as _;
             loop {
-                let frame_res = reader_stream.next_frame().await;
-                let frame = match frame_res {
-                    Some(Ok(f)) => f,
+                let opt = reader_stream.next().await;
+                let frame: Frame = match opt {
+                    None => break,
                     Some(Err(e)) => {
                         tracing::error!("Dispatcher reader error: {:?}", e);
                         break;
                     }
-                    None => break,
+                    Some(Ok(Message::Text(text))) => {
+                        match serde_json::from_str(&text) {
+                            Ok(f) => f,
+                            Err(e) => {
+                                tracing::warn!("Frame parse error: {:?}", e);
+                                continue;
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) => break,
+                    Some(Ok(_)) => continue,
                 };
                 match frame {
                     Frame::Reply(reply) => {
@@ -78,7 +94,7 @@ impl Dispatcher {
         self.inner.pending.lock().await.insert(cmd.id.clone(), tx);
 
         let text = serde_json::to_string(cmd).map_err(ClientError::Json)?;
-        let mut sink: WsSink = self.sink_mutex.lock().await;
+        let mut sink = self.sink_mutex.lock().await;
         sink.send(Message::Text(text))
             .await
             .map_err(|e| ClientError::WebSocket(e.to_string()))?;
@@ -88,7 +104,7 @@ impl Dispatcher {
         timeout(Duration::from_secs(30), rx)
             .await
             .map_err(|_| ClientError::Timeout)?
-            .map_err(|e| ClientError::Other(anyhow!("oneshot cancelled: {}", e)))?
+            .map_err(|e| ClientError::Other(anyhow!("oneshot cancelled: {}", e)))
     }
 
     pub fn events(&self) -> broadcast::Receiver<Event> {
@@ -101,21 +117,25 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "requires mock WS transport (Gap B)"]
     async fn call_returns_matching_reply() {
         todo!("Mock transport and test reply routing");
     }
 
     #[tokio::test]
+    #[ignore = "requires mock WS transport (Gap B)"]
     async fn call_returns_error_on_not_ok_reply() {
         todo!("Inject bad reply, assert ClientError::Atp");
     }
 
     #[tokio::test]
+    #[ignore = "requires mock WS transport (Gap B)"]
     async fn event_broadcast_reaches_subscriber() {
         todo!("Inject event, assert received via events()");
     }
 
     #[tokio::test]
+    #[ignore = "requires mock WS transport (Gap B)"]
     async fn call_times_out_if_no_reply() {
         todo!("No reply injected, assert ClientError::Timeout");
     }
