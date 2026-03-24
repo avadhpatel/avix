@@ -59,7 +59,7 @@ impl AgentOutputBuffer {
         self.lines.len()
     }
 
-    pub fn render(&self, pid: u64, area: Rect) -> Paragraph {
+    pub fn render(&self, pid: u64, area: Rect) -> Paragraph<'_> {
         let visible = self.visible_lines(area.height);
         let text = visible.join("\n");
         Paragraph::new(text)

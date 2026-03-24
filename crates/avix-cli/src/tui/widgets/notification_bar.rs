@@ -9,6 +9,7 @@ pub struct NotificationBarWidget {
 }
 
 impl NotificationBarWidget {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -25,7 +26,7 @@ impl NotificationBarWidget {
         }
     }
 
-    pub fn render_bar(&self, unread_count: usize) -> Paragraph {
+    pub fn render_bar(&self, unread_count: usize) -> Paragraph<'_> {
         let text = format!("Unread notifications: {}", unread_count);
         Paragraph::new(text).block(
             Block::default()
@@ -34,7 +35,7 @@ impl NotificationBarWidget {
         )
     }
 
-    pub fn render_popup(&self, notifications: &[Notification], _area: Rect) -> List {
+    pub fn render_popup(&self, notifications: &[Notification], _area: Rect) -> List<'_> {
         let items: Vec<ListItem> = notifications
             .iter()
             .enumerate()

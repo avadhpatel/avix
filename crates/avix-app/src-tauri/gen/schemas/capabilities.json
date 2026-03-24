@@ -1,0 +1,1 @@
+{"main":{"identifier":"main","description":"Main capability","local":true,"permissions":["fs:default","http:default"]}}

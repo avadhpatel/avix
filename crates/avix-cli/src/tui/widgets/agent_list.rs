@@ -6,10 +6,12 @@ use avix_client_core::state::ActiveAgent;
 #[derive(Debug, Clone, Default)]
 pub struct AgentListWidget {
     pub selected_index: usize,
+    #[allow(dead_code)]
     pub scroll_offset: usize,
 }
 
 impl AgentListWidget {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -26,7 +28,7 @@ impl AgentListWidget {
         }
     }
 
-    pub fn render(&self, agents: &[ActiveAgent], _area: Rect) -> List {
+    pub fn render(&self, agents: &[ActiveAgent], _area: Rect) -> List<'_> {
         let items: Vec<ListItem> = agents
             .iter()
             .enumerate()

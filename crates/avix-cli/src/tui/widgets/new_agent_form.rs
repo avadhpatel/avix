@@ -8,7 +8,7 @@ pub struct NewAgentFormWidget;
 
 impl NewAgentFormWidget {
     pub fn new() -> Self {
-        Self::default()
+        Self {}
     }
 
     pub fn render<'a>(

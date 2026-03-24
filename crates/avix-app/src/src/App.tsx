@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from \"react\";
-import { GoldenLayout } from \"golden-layout\";
+import React, { useEffect, useRef } from "react";
+import { GoldenLayout } from "golden-layout";
 
 const App: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -8,11 +8,11 @@ const App: React.FC = () => {
     if (containerRef.current) {
       const layout = new GoldenLayout(containerRef.current);
 
-      layout.registerComponent(\"welcome\", () => <div>Welcome to Avix!</div>);
+      layout.registerComponent("welcome", () => <div>Welcome to Avix!</div>);
 
       layout.addItem({
-        type: \"component\",
-        componentName: \"welcome\",
+        type: "component",
+        componentType: "welcome",
         componentState: {},
       });
 
@@ -21,7 +21,7 @@ const App: React.FC = () => {
   }, []);
 
   return (
-    <div ref={containerRef} style={{ width: \"100vw\", height: \"100vh\" }} />
+    <div ref={containerRef} style={{ width: "100vw", height: "100vh" }} />
   );
 };
 

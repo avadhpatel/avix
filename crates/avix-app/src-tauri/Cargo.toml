@@ -11,9 +11,14 @@ crate-type = ["lib"]
 name = "avix-app"
 path = "src/main.rs"
 
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
 [dependencies]
 avix-client-core     = { path = "../../avix-client-core" }
-tauri                = { version = "1.6", features = ["shell-open"] }
+tauri                = { version = "2", features = [] }
+tauri-plugin-fs      = "2"
+tauri-plugin-http    = "2"
 tokio.workspace      = true
 serde.workspace      = true
 serde_json.workspace = true

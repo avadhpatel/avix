@@ -1,34 +1,42 @@
 {
-  \"productName\": \"Avix\",
-  \"version\": \"0.1.0\",
-  \"identifier\": \"com.avix.app\",
-  \"build\": {
-    \"beforeBuildCommand\": \"npm run build\",
-    \"beforeDevCommand\": \"npm run dev\",
-    \"devPath\": \"http://localhost:5173\",
-    \"distDir\": \"../dist\"
+  "productName": "Avix",
+  "version": "0.1.0",
+  "identifier": "com.avix.app",
+  "build": {
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
   },
-  \"bundle\": {
-    \"active\": true,
-    \"targets\": \"all\",
-    \"createUpdaterBundle\": false,
-    \"windows\": {
-      \"certificateThumbprint\": null,
-      \"digestAlgorithm\": \"sha256\",
-      \"timestampUrl\": null
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "url": "/index.html",
+        "width": 800,
+        "height": 600
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": false,
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": null
     },
-    \"macOS\": {
-      \"frameworks\": [],
-      \"minimumSystemVersion\": \"\"
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": ""
     },
-    \"linux\": {
-      \"deb\": {
-        \"depends\": []
+    "linux": {
+      "deb": {
+        "depends": []
       },
-      \"appimage\": {
-        \"bundleMediaFramework\": false
+      "appimage": {
+        "bundleMediaFramework": false
       }
     }
   },
-  \"plugins\": {}
+  "plugins": {}
 }

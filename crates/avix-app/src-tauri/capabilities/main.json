@@ -1,0 +1,8 @@
+{
+  "identifier": "main",
+  "description": "Main capability",
+  "permissions": [
+    "fs:default",
+    "http:default"
+  ]
+}
