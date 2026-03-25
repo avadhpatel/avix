@@ -76,6 +76,100 @@ impl IpcRouter for NullIpcRouter {
     }
 }
 
+/// Test IPC router — simulates kernel responses for testing, seeds procs, emits events.
+/// Links: docs/dev_plans/ATP-WS-TESTS-PLAN.md#51
+pub struct TestIpcRouter {
+    event_bus: Arc<crate::gateway::event_bus::AtpEventBus>,
+}
+
+impl TestIpcRouter {
+    pub fn new(event_bus: Arc<crate::gateway::event_bus::AtpEventBus>) -> Self {
+        Self { event_bus }
+    }
+}
+
+#[async_trait]
+impl IpcRouter for TestIpcRouter {
+    async fn call(&self, method: &str, params: Value) -> Result<Value, AtpError> {
+        use crate::gateway::atp::types::AtpEventKind;
+        use crate::types::Role;
+
+        tracing::debug!(method, "test IPC call");
+
+        match method {
+            "kernel/proc/spawn" => {
+                // Simulate spawning an echo or sleep proc
+                let cmd = params["cmd"].as_array().map(|v| v.clone()).unwrap_or(vec![]);
+                let name = params["name"].as_str().unwrap_or("test-proc");
+                let pid = 1000 + rand::random::<u32>() % 1000; // random PID
+
+                // Emit proc.start event
+                self.event_bus.publish(
+                    crate::gateway::atp::frame::AtpEvent::new(
+                        AtpEventKind::ProcStart,
+                        "test-session",
+                        serde_json::json!({ "pid": pid, "cmd": cmd, "name": name }),
+                    ),
+                    None, // system-wide
+                    Role::User,
+                );
+
+                // If echo, emit proc.output immediately
+                if cmd.first().and_then(|s| s.as_str()) == Some("echo") {
+                    let output = cmd.get(1).and_then(|s| s.as_str()).unwrap_or("");
+                    self.event_bus.publish(
+                        crate::gateway::atp::frame::AtpEvent::new(
+                            AtpEventKind::ProcOutput,
+                            "test-session",
+                            serde_json::json!({ "pid": pid, "text": output }),
+                        ),
+                        None,
+                        Role::User,
+                    );
+                    // Then proc.exit
+                    self.event_bus.publish(
+                        crate::gateway::atp::frame::AtpEvent::new(
+                            AtpEventKind::ProcExit,
+                            "test-session",
+                            serde_json::json!({ "pid": pid, "exitCode": 0 }),
+                        ),
+                        None,
+                        Role::User,
+                    );
+                }
+
+                Ok(serde_json::json!({ "id": pid, "status": "running" }))
+            }
+            "kernel/proc/list" => {
+                // Return empty list for now
+                Ok(serde_json::json!([]))
+            }
+            "kernel/proc/kill" => {
+                let pid = params["id"].as_u64().unwrap_or(0);
+                // Emit proc.exit
+                self.event_bus.publish(
+                    crate::gateway::atp::frame::AtpEvent::new(
+                        AtpEventKind::ProcExit,
+                        "test-session",
+                        serde_json::json!({ "pid": pid, "exitCode": 0 }),
+                    ),
+                    None,
+                    Role::User,
+                );
+                Ok(serde_json::json!({ "ok": true }))
+            }
+            "kernel/proc/status" => {
+                let pid = params["id"].as_u64().unwrap_or(0);
+                Ok(serde_json::json!({ "id": pid, "status": "running" }))
+            }
+            _ => Err(AtpError::new(
+                AtpErrorCode::Eunavail,
+                format!("test IPC: no handler for '{method}'"),
+            )),
+        }
+    }
+}
+
 fn ipc_code_to_atp(msg: &str, code: i32) -> AtpErrorCode {
     match code {
         -32003 => AtpErrorCode::Enotfound,

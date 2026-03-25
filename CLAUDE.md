@@ -175,6 +175,7 @@ All three must exit 0. Fix before committing.
 - Integration tests go in `crates/avix-core/tests/`
 - Always use `tempfile::tempdir()` for tests that need a filesystem root
 - Always use `tokio::time::timeout` when testing async operations that might hang
+- ATP E2E: `crates/avix-tests-integration` covers full WS cycle (auth/cmd/reply/event) + Gap4 ops/events.
 
 ---
 

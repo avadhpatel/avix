@@ -437,3 +437,24 @@ side effects.
 
 Replay state is **per-connection** — the same `id` can be reused across separate
 WebSocket connections.
+
+## End-to-End Integration Tests
+
+End-to-end ATP WebSocket integration tests are in `crates/avix-tests-integration`.
+
+**Coverage:**
+* `basic` — successful spawn + output
+* `errors` — auth/perm failures
+* `events` — subscription + delivery
+* `lifecycle` — connect/disconnect/session
+* `full_errors` — Gap4 kernel-unavailable mocks
+* `reconnect` — WS reconnect handling
+
+**Run:**
+```
+cargo test -p avix-tests-integration
+```
+
+**Status:** Partial coverage. Tests require `--test-mode` server (IPC mocks via env).
+
+---

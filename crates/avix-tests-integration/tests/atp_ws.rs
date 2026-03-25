@@ -69,13 +69,15 @@ async fn spawn_debug_server() -> Result<(tokio::process::Child, u16, String)> {
         .arg("avix-cli")
         .arg("--bin")
         .arg("avix")
+        .arg("--")
+        .arg("--log")
+        .arg("trace")
         .arg("server")
         .arg("--root")
         .arg(&root)
         .arg("--port")
         .arg(port.to_string())
-        .arg("--log")
-        .arg("trace")
+        .arg("--test-mode")
         .env("RUST_LOG", "avix=trace")
         .env("AVIX_MASTER_KEY", "changeme")
         .spawn()?;
@@ -346,7 +348,7 @@ async fn test_proc_lifecycle() -> Result<()> {
     Ok(())
 }
 
-/// Test full errors: bad token upgrade, invalid method, malformed JSON-RPC.
+/// Test full errors: bad token (fails on session.ready), invalid method, malformed JSON-RPC.
 /// Covers Gap4.2: Full Errors.
 /// Links: docs/dev_plans/ATP-WS-TESTS-PLAN.md#42
 #[tokio::test]
@@ -354,9 +356,10 @@ async fn test_full_errors() -> Result<()> {
     let _span = span!(Level::INFO, "test_full_errors").entered();
     // Spawn server
     let (mut server, port, _api_key) = spawn_debug_server().await?;
-    // Try WS upgrade with bad token (should fail at connect)
-    let bad_result = ws_connect("bad-token", port).await;
-    assert!(bad_result.is_err(), "WS upgrade with bad token should fail");
+    // WS upgrade with bad token succeeds, but session.ready fails
+    let (mut write, mut read) = ws_connect("bad-token", port).await?;
+    let resp = send_rpc(&mut write, &mut read, "session.ready", json!({})).await;
+    assert!(resp.is_err(), "session.ready with bad token should fail");
     // Login to get valid token
     let (mut server2, port2, api_key) = spawn_debug_server().await?;
     let token = login_http(port2, &api_key).await?;

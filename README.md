@@ -104,6 +104,30 @@ export AVIX_API_KEY=<the-key-printed-by-config-init>
 ./target/debug/avix llm status
 ```
 
+## ATP Quickstart (Manual Testing)
+
+Manual ATP testing with curl + websocat (assumes `avix start --test-mode` on port 7700):
+
+### 1. Login
+```bash
+curl -X POST http://localhost:7700/atp/auth/login \\
+  -H 'Content-Type: application/json' \\
+  -d '{"identity":"alice","credential":"<api_key>"}'
+```
+
+### 2. WS Connect + Interact
+```bash
+websocat "ws://localhost:7700/atp" \\
+  -H "Authorization: Bearer <token_from_login>" \\
+  --interactive
+```
+
+In websocat shell:
+```
+{"type":"subscribe","events":["*"]}
+{"type":"cmd","id":"req-1","token":"<token>","domain":"proc","op":"spawn","body":{"agent":"researcher","goal":"Hello world"}}
+```
+
 ---
 
 ## Architecture
@@ -215,6 +239,9 @@ avix/ (Cargo workspace)
 
 ```bash
 cargo test --workspace
+
+# ATP WS E2E
+cargo test -p avix-tests-integration
 ```
 
 ### Coverage (target: 95%+)

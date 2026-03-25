@@ -59,12 +59,12 @@ impl GatewayServer {
     }
 
     /// Bind both ports and run until either exits. Returns the bound addresses.
-    pub async fn run(self: Arc<Self>) -> anyhow::Result<(SocketAddr, SocketAddr)> {
+    pub async fn run(self: Arc<Self>, test_mode: bool) -> anyhow::Result<(SocketAddr, SocketAddr)> {
         let user_addr = self.config.user_addr;
         let admin_addr = self.config.admin_addr;
 
-        let user_bound = Arc::clone(&self).bind_and_run(user_addr, false).await?;
-        let admin_bound = Arc::clone(&self).bind_and_run(admin_addr, true).await?;
+        let user_bound = Arc::clone(&self).bind_and_run(user_addr, false, test_mode).await?;
+        let admin_bound = Arc::clone(&self).bind_and_run(admin_addr, true, test_mode).await?;
 
         Ok((user_bound, admin_bound))
     }
@@ -74,17 +74,21 @@ impl GatewayServer {
         self: Arc<Self>,
         addr: SocketAddr,
         is_admin_port: bool,
+        test_mode: bool,
     ) -> anyhow::Result<SocketAddr> {
-        // Build IPC router: use configured socket, fall back to env var, then null.
-        let ipc: Arc<dyn crate::gateway::handlers::IpcRouter> = self
-            .config
-            .kernel_sock
-            .clone()
-            .or_else(|| std::env::var("AVIX_KERNEL_SOCK").ok().map(Into::into))
-            .map(|path| -> Arc<dyn crate::gateway::handlers::IpcRouter> {
-                Arc::new(LiveIpcRouter::new(IpcClient::new(path)))
-            })
-            .unwrap_or_else(|| Arc::new(NullIpcRouter));
+        // Build IPC router: use test router if test_mode, else configured socket, fall back to env var, then null.
+        let ipc: Arc<dyn crate::gateway::handlers::IpcRouter> = if test_mode {
+            Arc::new(crate::gateway::handlers::TestIpcRouter::new(Arc::clone(&self.event_bus)))
+        } else {
+            self.config
+                .kernel_sock
+                .clone()
+                .or_else(|| std::env::var("AVIX_KERNEL_SOCK").ok().map(Into::into))
+                .map(|path| -> Arc<dyn crate::gateway::handlers::IpcRouter> {
+                    Arc::new(LiveIpcRouter::new(IpcClient::new(path)))
+                })
+                .unwrap_or_else(|| Arc::new(NullIpcRouter))
+        };
 
         let handler_ctx = Arc::new(HandlerCtx {
             ipc,
@@ -122,6 +126,49 @@ impl GatewayServer {
                 warn!(error = %e, "gateway server error");
             }
         });
+
+        // If test_mode, spawn event emitter task
+        if test_mode {
+            let event_bus = Arc::clone(&self.event_bus);
+            tokio::spawn(async move {
+                use crate::gateway::atp::types::AtpEventKind;
+
+                use tokio::time::{interval, Duration};
+
+                let mut interval = interval(Duration::from_secs(5));
+                loop {
+                    interval.tick().await;
+                    // Emit all event kinds periodically for testing
+                    for kind in [
+                        AtpEventKind::SessionReady,
+                        AtpEventKind::SessionClosing,
+                        AtpEventKind::TokenExpiring,
+                        AtpEventKind::AgentOutput,
+                        AtpEventKind::AgentStatus,
+                        AtpEventKind::AgentToolCall,
+                        AtpEventKind::AgentToolResult,
+                        AtpEventKind::AgentExit,
+                        AtpEventKind::ProcSignal,
+                        AtpEventKind::HilRequest,
+                        AtpEventKind::HilResolved,
+                        AtpEventKind::FsChanged,
+                        AtpEventKind::ToolChanged,
+                        AtpEventKind::CronFired,
+                        AtpEventKind::SysService,
+                        AtpEventKind::SysAlert,
+                    ] {
+                        let (min_role, owner_scoped) = crate::gateway::event_bus::event_scope(&kind);
+                        let event = crate::gateway::atp::frame::AtpEvent::new(
+                            kind,
+                            "test-emitter",
+                            serde_json::json!({ "test": true }),
+                        );
+                        event_bus.publish(event, owner_scoped.then(|| "test-session".to_string()), min_role);
+                    }
+                    tracing::debug!("emitted all event kinds for testing");
+                }
+            });
+        }
 
         Ok(bound_addr)
     }

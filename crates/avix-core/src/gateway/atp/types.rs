@@ -38,6 +38,12 @@ pub enum AtpEventKind {
     AgentToolResult,
     #[serde(rename = "agent.exit")]
     AgentExit,
+    #[serde(rename = "proc.start")]
+    ProcStart,
+    #[serde(rename = "proc.output")]
+    ProcOutput,
+    #[serde(rename = "proc.exit")]
+    ProcExit,
     #[serde(rename = "proc.signal")]
     ProcSignal,
     #[serde(rename = "hil.request")]

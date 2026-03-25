@@ -68,6 +68,9 @@ enum Cmd {
         /// ATP port (default 9142)
         #[arg(long, default_value = "9142")]
         port: u16,
+        /// Enable test mode: mock IPC layer with seeded procs and periodic events
+        #[arg(long)]
+        test_mode: bool,
     },
     /// Run an agent (requires AVIX_MASTER_KEY + provider API key env var)
     Run {
@@ -112,6 +115,11 @@ enum Cmd {
     },
     /// Connect to an Avix ATP server
     Connect,
+    /// ATP protocol commands
+    Atp {
+        #[command(subcommand)]
+        sub: AtpCmd,
+    },
     /// Manage agents
     Agent {
         #[command(subcommand)]
@@ -163,6 +171,9 @@ enum ConfigCmd {
         /// ATP port (default 9142)
         #[arg(long, default_value = "9142")]
         port: u16,
+        /// Enable test mode: mock IPC layer with seeded procs and periodic events
+        #[arg(long)]
+        test_mode: bool,
     },
 }
 
@@ -194,6 +205,9 @@ enum AgentCmd {
         /// ATP port (default 9142)
         #[arg(long, default_value = "9142")]
         port: u16,
+        /// Enable test mode: mock IPC layer with seeded procs and periodic events
+        #[arg(long)]
+        test_mode: bool,
     },
 }
 
@@ -233,6 +247,22 @@ enum HilCmd {
         /// ATP port (default 9142)
         #[arg(long, default_value = "9142")]
         port: u16,
+        /// Enable test mode: mock IPC layer with seeded procs and periodic events
+        #[arg(long)]
+        test_mode: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum AtpCmd {
+    /// Interactive ATP shell (REPL)
+    Shell {
+        /// ATP server URL (default ws://localhost:9142/atp)
+        #[arg(long, default_value = "ws://localhost:9142/atp")]
+        server: String,
+        /// Authentication token (if not provided, prompts for login)
+        #[arg(long)]
+        token: Option<String>,
     },
 }
 
@@ -337,10 +367,10 @@ async fn main() -> Result<()> {
                 }
             }
 
-            ConfigCmd::Server { root, port } => {
+            ConfigCmd::Server { root, port, test_mode } => {
                 let root = expand_home(root);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
-                runtime.start_daemon(port).await?;
+                runtime.start_daemon(port, test_mode).await?;
             }
         },
 
@@ -437,16 +467,22 @@ async fn main() -> Result<()> {
             println!("--- Done ---");
         }
 
-        Cmd::Server { root, port } => {
+        Cmd::Server { root, port, test_mode } => {
             let root = expand_home(root);
             let runtime = Runtime::bootstrap_with_root(&root).await?;
-            runtime.start_daemon(port).await?;
+            runtime.start_daemon(port, test_mode).await?;
         }
 
         Cmd::Connect => {
             connect_config().await?;
             emit(cli.json, |_: &()| "Connected to server".to_string(), ());
         }
+
+        Cmd::Atp { sub } => match sub {
+            AtpCmd::Shell { server, token } => {
+                run_atp_shell(server, token).await?;
+            }
+        },
 
         Cmd::Agent { sub } => match sub {
             AgentCmd::Spawn {
@@ -486,10 +522,10 @@ async fn main() -> Result<()> {
                 send_signal(&dispatcher, &config.credential, pid, "SIGKILL", None).await?;
                 emit(cli.json, |_: &()| format!("Killed agent {}", pid), ());
             }
-            AgentCmd::Server { root, port } => {
+            AgentCmd::Server { root, port, test_mode } => {
                 let root = expand_home(root);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
-                runtime.start_daemon(port).await?;
+                runtime.start_daemon(port, test_mode).await?;
             }
         },
 
@@ -542,10 +578,10 @@ async fn main() -> Result<()> {
                     (),
                 );
             }
-            HilCmd::Server { root, port } => {
+            HilCmd::Server { root, port, test_mode } => {
                 let root = expand_home(root);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
-                runtime.start_daemon(port).await?;
+                runtime.start_daemon(port, test_mode).await?;
             }
         },
 
@@ -656,6 +692,117 @@ fn build_llm_client(provider: &ProviderConfig, model: &str) -> Result<Box<dyn Ll
             other
         )),
     }
+}
+
+/// Run the interactive ATP shell REPL.
+/// Connects to the given server, logs in if no token, subscribes to all events, then enters REPL.
+/// Links: docs/dev_plans/ATP-WS-TESTS-PLAN.md#52
+async fn run_atp_shell(server_url: String, token: Option<String>) -> Result<()> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::{connect_async, tungstenite::{client::IntoClientRequest, Message}};
+    use serde_json::Value;
+    use std::io::{self, Write};
+
+    println!("ATP Shell — connecting to {}", server_url);
+
+    // If token provided, use as credential; else prompt
+    let credential = if let Some(t) = token {
+        t
+    } else {
+        print!("Credential: ");
+        io::stdout().flush()?;
+        let mut credential = String::new();
+        io::stdin().read_line(&mut credential)?;
+        credential.trim().to_string()
+    };
+
+    // HTTP login
+    let client = reqwest::Client::new();
+    let login_url = server_url.replace("ws://", "http://").replace("wss://", "https://").replace("/atp", "/atp/auth/login");
+    let resp = client
+        .post(&login_url)
+        .json(&serde_json::json!({"identity": "test", "credential": credential}))
+        .send()
+        .await?;
+    let body: Value = resp.json().await?;
+    let token = body["token"].as_str().ok_or_else(|| anyhow::anyhow!("Login failed: {:?}", body))?.to_string();
+
+    println!("Logged in, connecting WS...");
+
+    // Connect WS
+    let mut request = server_url.into_client_request()?;
+    request.headers_mut().insert("Authorization", format!("Bearer {}", token).parse()?);
+    let (ws_stream, _) = connect_async(request).await?;
+    let (mut write, mut read) = ws_stream.split();
+
+    // Subscribe to all events
+    let sub_msg = serde_json::json!({"type": "subscribe", "events": ["*"]});
+    write.send(Message::Text(sub_msg.to_string())).await?;
+
+    println!("Connected. Type JSON-RPC commands, or 'help', 'quit'.");
+    println!("Events will be printed as received.");
+
+    // Spawn event reader
+    let event_handle = tokio::spawn(async move {
+        while let Some(msg) = read.next().await {
+            match msg {
+                Ok(Message::Text(text)) => {
+                    if let Ok(event) = serde_json::from_str::<Value>(&text) {
+                        if event.get("type").is_some() && event["type"] != "reply" {
+                            println!("EVENT: {}", serde_json::to_string_pretty(&event).unwrap());
+                        }
+                    }
+                }
+                Ok(Message::Close(_)) => break,
+                Err(e) => eprintln!("WS error: {}", e),
+                _ => {}
+            }
+        }
+    });
+
+    // REPL loop
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+    loop {
+        print!("atp> ");
+        stdout.flush()?;
+        let mut line = String::new();
+        stdin.read_line(&mut line)?;
+        let line = line.trim();
+
+        match line {
+            "" => continue,
+            "quit" | "exit" => break,
+            "help" => {
+                println!("Commands:");
+                println!("  <json>  - Send JSON-RPC request");
+                println!("  help    - This help");
+                println!("  quit    - Exit");
+                continue;
+            }
+            _ => {
+                // Try to parse as JSON
+                match serde_json::from_str::<Value>(line) {
+                    Ok(mut req) => {
+                        static mut ID: u64 = 0;
+                        unsafe { ID += 1 };
+                        req["jsonrpc"] = "2.0".into();
+                        req["id"] = unsafe { ID }.into();
+                        write.send(Message::Text(req.to_string())).await?;
+                        println!("Sent: {}", req);
+                    }
+                    Err(_) => {
+                        eprintln!("Invalid JSON. Try: {{\"method\": \"proc.list\", \"params\": {{}}}}");
+                    }
+                }
+            }
+        }
+    }
+
+    // Close WS
+    write.send(Message::Close(None)).await?;
+    event_handle.abort();
+    Ok(())
 }
 
 fn expand_home(path: PathBuf) -> PathBuf {

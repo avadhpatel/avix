@@ -123,7 +123,7 @@ impl Runtime {
     }
 
     /// Starts the daemon: spawns kernel.agent, services, ATP gateway, and polls for hot reload.
-    pub async fn start_daemon(mut self, port: u16) -> Result<(), AvixError> {
+    pub async fn start_daemon(mut self, port: u16, test_mode: bool) -> Result<(), AvixError> {
         // Phase 2: spawn kernel.agent PID1
         self.phase2_kernel().await?;
         self.boot_log.push(BootLogEntry {
@@ -139,7 +139,7 @@ impl Runtime {
         });
 
         // Phase 4: start ATP gateway
-        self.phase4_atp_gateway(port).await?;
+        self.phase4_atp_gateway(port, test_mode).await?;
         self.boot_log.push(BootLogEntry {
             phase: BootPhase(4),
             message: "phase 4: ATP gateway started".into(),
@@ -164,7 +164,7 @@ impl Runtime {
         Ok(())
     }
 
-    async fn phase4_atp_gateway(&mut self, port: u16) -> Result<(), AvixError> {
+    async fn phase4_atp_gateway(&mut self, port: u16, test_mode: bool) -> Result<(), AvixError> {
         let auth_yaml = self
             .vfs
             .read(&VfsPath::parse("/etc/avix/auth.conf")?)
@@ -183,10 +183,10 @@ impl Runtime {
             hil_timeout_secs: 600,
             kernel_sock: std::env::var("AVIX_ROUTER_SOCK").ok().map(PathBuf::from),
         };
-        let user_addr = config.user_addr;
+        let _user_addr = config.user_addr;
         let server = GatewayServer::new(config, auth_svc, token_store, event_bus);
         tokio::spawn(async move {
-            let _ = server.bind_and_run(user_addr, false).await;
+            let _ = server.run(test_mode).await;
         });
         Ok(())
     }
