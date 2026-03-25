@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::debug;
 
 use crate::atp::dispatcher::Dispatcher;
 use crate::atp::event_emitter::EventEmitter;
@@ -90,6 +91,10 @@ impl AppState {
             for n in persisted {
                 self.notifications.add(n).await;
             }
+            let agents_len = 0; // no agents loaded yet
+            let notifs_count = self.notifications.unread_count().await;
+            let hil_pending = 0; // no hil loaded yet
+            debug!("State update agents={} notifs={} hil={}", agents_len, notifs_count, hil_pending);
         }
 
         // TODO: Connect to server and start emitter

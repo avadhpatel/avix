@@ -50,9 +50,24 @@ starting a new gap — they contain bugs and gotchas found by previous agents.
 
 ## Active dev plans (next up)
 
+### Client (avix-client-core + avix-cli)
+
 | Gap | File | Depends on |
 |-----|------|------------|
 | D tests | `docs/dev_plans/client-gap-D-notification-store-hil-persistence.md` | — |
 | F | `docs/dev_plans/client-gap-F-cli-atp-connect-scripting.md` | E (done) |
 | G | `docs/dev_plans/client-gap-G-cli-tui-skeleton.md` | F |
 | H | `docs/dev_plans/client-gap-H-cli-tui-live-events-hil.md` | C, D, G |
+
+### Service authoring (avix-core)
+
+| Gap | File | Depends on |
+|-----|------|------------|
+| svc-A | `docs/dev_plans/svc-gap-A-service-unit-parser.md` | — |
+| svc-B | `docs/dev_plans/svc-gap-B-service-process-spawner.md` | svc-A |
+| svc-C | `docs/dev_plans/svc-gap-C-tool-descriptor-scanner.md` | svc-A, svc-B |
+| svc-D | `docs/dev_plans/svc-gap-D-service-installer.md` | svc-A |
+| svc-E | `docs/dev_plans/svc-gap-E-cli-service-commands.md` | svc-D, client-F |
+| svc-F | `docs/dev_plans/svc-gap-F-ipc-tool-add-remove-wire.md` | svc-A, svc-B, svc-C |
+| svc-G | `docs/dev_plans/svc-gap-G-caller-injection.md` | svc-A, svc-F |
+| svc-H | `docs/dev_plans/svc-gap-H-restart-watchdog-secrets.md` | svc-A, svc-B |

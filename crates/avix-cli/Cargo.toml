@@ -17,6 +17,7 @@ anyhow.workspace     = true
 clap.workspace       = true
 tracing.workspace    = true
 tracing-subscriber.workspace = true
+tracing-appender.workspace = true
 uuid.workspace       = true
 chrono.workspace     = true
 autoagents           = { version = "0.3.6", features = ["anthropic", "openai", "ollama"] }

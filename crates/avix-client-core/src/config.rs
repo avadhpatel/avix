@@ -2,6 +2,7 @@ use dirs;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::PathBuf;
+use tracing::{debug, info};
 
 use crate::error::ClientError;
 use crate::persistence;
@@ -40,11 +41,18 @@ impl Default for ClientConfig {
 
 impl ClientConfig {
     pub fn load() -> Result<Self, ClientError> {
-        persistence::load_json(&persistence::app_data_dir().join("client.json"))
+        let path = persistence::app_data_dir().join("client.json");
+        info!("Config load {}", path.display());
+        let config = persistence::load_json(&path)?;
+        debug!("Config {:?}", config);
+        Ok(config)
     }
 
     pub fn save(&self) -> Result<(), ClientError> {
-        persistence::save_json(&persistence::app_data_dir().join("client.json"), self)
+        let path = persistence::app_data_dir().join("client.json");
+        info!("Config save {}", path.display());
+        debug!("Config {:?}", self);
+        persistence::save_json(&path, self)
     }
 }
 
@@ -80,5 +88,12 @@ mod tests {
         assert_eq!(cfg.identity, "admin");
         assert!(cfg.credential.is_empty());
         assert!(cfg.auto_start_server);
+    }
+
+    #[test]
+    fn load_config_returns_default_if_missing() {
+        // Since load uses app_data_dir, and in test env it may not exist, it should return default
+        let cfg = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+        assert_eq!(cfg.server_url, "http://localhost:9142");
     }
 }

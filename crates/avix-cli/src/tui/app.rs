@@ -12,6 +12,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::time;
+use tracing::{debug, info, warn};
 
 use avix_client_core::atp::event_emitter::EventEmitter;
 use avix_client_core::atp::types::{Event as AtpEvent, EventBody, EventKind};
@@ -27,8 +28,6 @@ use super::state::{Action, NewAgentFormState, TuiState};
 use super::widgets::hil_modal::render_hil_modal;
 use super::widgets::new_agent_form::NewAgentFormWidget;
 
-
-
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
@@ -40,9 +39,11 @@ async fn dispatch_event(
     event: AtpEvent,
     action_tx: &tokio::sync::mpsc::Sender<Action>,
 ) {
+    debug!("Dispatching event: {:?}", event.kind);
     match event.kind {
         EventKind::AgentOutput => {
             if let EventBody::AgentOutput(body) = event.body {
+                debug!("Agent output: pid={}", body.pid);
                 // Send action to update TuiState
                 let _ = action_tx
                     .send(Action::UpdateAgentOutput(body.pid, body.text))
@@ -51,6 +52,7 @@ async fn dispatch_event(
         }
         EventKind::AgentStatus => {
             if let EventBody::AgentStatus(body) = event.body {
+                debug!("Agent status: pid={}, status={:?}", body.pid, body.status);
                 // Update agent status
                 let s = state.read().await;
                 let mut agents = s.agents.write().await;
@@ -61,6 +63,7 @@ async fn dispatch_event(
         }
         EventKind::AgentExit => {
             if let EventBody::AgentExit(body) = event.body {
+                debug!("Agent exited: pid={}", body.pid);
                 // Add notification
                 let notif = Notification::from_agent_exit(
                     body.pid,
@@ -73,6 +76,7 @@ async fn dispatch_event(
         }
         EventKind::HilRequest => {
             if let EventBody::HilRequest(body) = event.body {
+                debug!("HIL request received: pid={}", body.pid);
                 // Add HIL notification
                 let notif = Notification::from_hil_request(&body);
                 notifications.add(notif).await;
@@ -91,6 +95,7 @@ async fn dispatch_event(
         }
         EventKind::HilResolved => {
             if let EventBody::HilResolved(body) = event.body {
+                debug!("HIL resolved: hil_id={}", body.hil_id);
                 // Resolve in notifications
                 notifications.resolve_hil(&body.hil_id, body.outcome).await;
                 let _ = persistence::save_notifications(&notifications.all().await);
@@ -100,6 +105,7 @@ async fn dispatch_event(
         }
         EventKind::SysAlert => {
             if let EventBody::SysAlert(body) = event.body {
+                debug!("Sys alert: {}", body.message);
                 // Add notification
                 let notif = Notification::from_sys_alert(&body.level, &body.message);
                 notifications.add(notif).await;
@@ -110,13 +116,9 @@ async fn dispatch_event(
     }
 }
 
-async fn connect_atp(url: &str, token: &str) -> Result<Dispatcher> {
-    let client = AtpClient::connect(url, "user", token).await?;
-    let dispatcher = Dispatcher::new(client);
-    Ok(dispatcher)
-}
 
-async fn update_state_from_shared(state: &mut TuiState, shared: &SharedState) {
+
+async fn update_state_from_shared(state: &mut TuiState, shared: &SharedState, config: &ClientConfig) {
     #[derive(Deserialize)]
     struct AgentInfo {
         pid: u64,
@@ -135,7 +137,7 @@ async fn update_state_from_shared(state: &mut TuiState, shared: &SharedState) {
     if state.connected {
         if let Some(dispatcher) = &s.dispatcher {
             // Fetch agents
-            if let Ok(agents) = list_agents(dispatcher, "token").await {
+            if let Ok(agents) = list_agents(dispatcher, &config.credential).await {
                 // Convert to ActiveAgent
                 let active_agents: Vec<_> = agents
                     .into_iter()
@@ -154,6 +156,7 @@ async fn update_state_from_shared(state: &mut TuiState, shared: &SharedState) {
                         })
                     })
                     .collect();
+                debug!("Agents updated: {} agents", active_agents.len());
                 *s.agents.write().await = active_agents;
             }
         }
@@ -161,6 +164,7 @@ async fn update_state_from_shared(state: &mut TuiState, shared: &SharedState) {
 
     state.agents = s.agents.read().await.clone();
     state.notifications = s.notifications.all().await;
+    debug!("Notifications updated: {} total", state.notifications.len());
     state.notifications_count = state.notifications.iter().filter(|n| !n.read).count();
     // Count HIL pending from notifications
     state.hil_pending = state
@@ -168,11 +172,12 @@ async fn update_state_from_shared(state: &mut TuiState, shared: &SharedState) {
         .iter()
         .filter(|n| n.kind == NotificationKind::Hil && n.hil.as_ref().unwrap().outcome.is_none())
         .count();
+    debug!("HIL pending: {}", state.hil_pending);
 }
 
-pub async fn run(url: String, token: String, _json: bool) -> Result<()> {
+pub async fn run(_json: bool) -> Result<()> {
     let mut terminal = setup_terminal()?;
-    let result = run_app(&mut terminal, url, token, _json).await;
+    let result = run_app(&mut terminal, _json).await;
     restore_terminal(&mut terminal)?;
     result
 }
@@ -197,9 +202,10 @@ fn restore_terminal(terminal: &mut Tui) -> Result<()> {
     Ok(())
 }
 
-async fn run_app(terminal: &mut Tui, url: String, token: String, _json: bool) -> Result<()> {
+async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
     let mut state = TuiState::default();
     let client_config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+    debug!("TUI config: url={} identity={}", client_config.server_url, client_config.identity);
     let shared_state = new_shared(client_config.clone());
     let (action_tx, mut action_rx) = mpsc::channel(100);
 
@@ -211,13 +217,23 @@ async fn run_app(terminal: &mut Tui, url: String, token: String, _json: bool) ->
     }
 
     loop {
+        let was_connected = state.connected;
+
         // Drain action channel
         while let Ok(action) = action_rx.try_recv() {
             state.reducer(action);
         }
 
         // Update TuiState from shared_state
-        update_state_from_shared(&mut state, &shared_state).await;
+        update_state_from_shared(&mut state, &shared_state, &client_config).await;
+
+        if state.connected != was_connected {
+            if state.connected {
+                info!("Login successful");
+            } else {
+                info!("Disconnected");
+            }
+        }
 
         terminal.draw(|f| ui(f, &state))?;
 
@@ -227,10 +243,11 @@ async fn run_app(terminal: &mut Tui, url: String, token: String, _json: bool) ->
                     // Handle HIL modal keys
                     match key.code {
                         KeyCode::Char('a') | KeyCode::Char('A') => {
+                            debug!("Key event: approve HIL");
                             if let Some(dispatcher) = &shared_state.read().await.dispatcher {
                                 let _ = resolve_hil(
                                     dispatcher,
-                                    "token",
+                                    &client_config.credential,
                                     hil.pid,
                                     &hil.hil_id,
                                     &hil.approval_token,
@@ -241,10 +258,11 @@ async fn run_app(terminal: &mut Tui, url: String, token: String, _json: bool) ->
                             }
                         }
                         KeyCode::Char('d') | KeyCode::Char('D') => {
+                            debug!("Key event: deny HIL");
                             if let Some(dispatcher) = &shared_state.read().await.dispatcher {
                                 let _ = resolve_hil(
                                     dispatcher,
-                                    "token",
+                                    &client_config.credential,
                                     hil.pid,
                                     &hil.hil_id,
                                     &hil.approval_token,
@@ -255,6 +273,7 @@ async fn run_app(terminal: &mut Tui, url: String, token: String, _json: bool) ->
                             }
                         }
                         KeyCode::Esc => {
+                            debug!("Key event: dismiss HIL");
                             // Dismiss without responding
                             state.reducer(Action::SetPendingHil(None));
                         }
@@ -269,10 +288,11 @@ async fn run_app(terminal: &mut Tui, url: String, token: String, _json: bool) ->
                             state.reducer(Action::SetNewAgentForm(Some(new_form)));
                         }
                         KeyCode::Enter => {
+                            debug!("Key event: submit new agent form");
                             // Submit form
                             if let Some(dispatcher) = &shared_state.read().await.dispatcher {
                                 let _ =
-                                    spawn_agent(dispatcher, "token", &form.name, &form.goal, &[])
+                                    spawn_agent(dispatcher, &client_config.credential, &form.name, &form.goal, &[])
                                         .await;
                             }
                             state.reducer(Action::SetNewAgentForm(None));
@@ -307,6 +327,7 @@ async fn run_app(terminal: &mut Tui, url: String, token: String, _json: bool) ->
                             state.reducer(Action::ToggleNotificationsPopup);
                         }
                         KeyCode::Enter => {
+                            debug!("Key event: mark notification read");
                             // Mark selected as read
                             if let Some(notif) = state
                                 .notifications
@@ -339,9 +360,15 @@ async fn run_app(terminal: &mut Tui, url: String, token: String, _json: bool) ->
                         KeyCode::Char('c') => {
                             if !state.connected {
                                 // Ensure server is running
-                                let _server_handle =
-                                    ServerHandle::ensure_running(&client_config).await?;
-                                if let Ok(dispatcher) = connect_atp(&url, &token).await {
+                                if let Err(e) = ServerHandle::ensure_running(&client_config).await {
+                                    warn!("Failed to ensure local server running: {}", e);
+                                    let notif = Notification::from_sys_alert("error", &format!("Local server failed to start: {}", e));
+                                    let notifications = &shared_state.read().await.notifications;
+let _ = notifications.add(notif).await;
+                                }
+                                debug!("Connecting to WS {}", client_config.server_url);
+                                if let Ok(client) = AtpClient::connect(client_config.clone()).await {
+                                    let dispatcher = Dispatcher::new(client);
                                     let dispatcher = Arc::new(dispatcher);
                                     let dispatcher_c = Arc::clone(&dispatcher);
                                     let emitter = EventEmitter::start(move || {
@@ -377,15 +404,19 @@ async fn run_app(terminal: &mut Tui, url: String, token: String, _json: bool) ->
                                             });
                                         }
                                     }
+                                    debug!("Connection successful");
                                     state.reducer(Action::Connect);
+                                } else {
+                                debug!("Connection failed");
                                 }
                             }
                         }
                         KeyCode::Char('a') => {
+                            debug!("Key event: spawn test agent");
                             if let Some(dispatcher) = &shared_state.read().await.dispatcher {
                                 let _ = spawn_agent(
                                     dispatcher,
-                                    "token",
+                                    &client_config.credential,
                                     "test-agent",
                                     "test goal",
                                     &[],
@@ -394,6 +425,7 @@ async fn run_app(terminal: &mut Tui, url: String, token: String, _json: bool) ->
                             }
                         }
                         KeyCode::Char('f') => {
+                            debug!("Key event: toggle new agent form");
                             // Toggle new agent form
                             let new_form = if state.new_agent_form.is_some() {
                                 None

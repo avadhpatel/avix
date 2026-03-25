@@ -4,9 +4,13 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt};
 
 use avix_client_core::atp::{AtpClient, Dispatcher};
 use avix_client_core::commands::{list_agents, resolve_hil, send_signal, spawn_agent};
+use avix_client_core::config::ClientConfig;
+use avix_client_core::persistence;
 
 use avix_core::bootstrap::Runtime;
 use avix_core::cli::config_init::{run_config_init, ConfigInitParams};
@@ -33,6 +37,10 @@ struct Cli {
     #[arg(long)]
     json: bool,
 
+    /// Log level
+    #[arg(long = "log", default_value_t = LevelFilter::WARN)]
+    log: LevelFilter,
+
     /// ATP server URL
     #[arg(long, default_value = "ws://localhost:9142/atp")]
     url: String,
@@ -52,8 +60,8 @@ enum Cmd {
         #[command(subcommand)]
         sub: ConfigCmd,
     },
-    /// Start the Avix daemon
-    Start {
+    /// Run the Avix server
+    Server {
         /// Runtime root directory
         #[arg(long)]
         root: PathBuf,
@@ -103,13 +111,7 @@ enum Cmd {
         root: PathBuf,
     },
     /// Connect to an Avix ATP server
-    Connect {
-        /// Server URL (e.g., ws://localhost:9142/atp)
-        url: String,
-        /// Authentication token
-        #[arg(long)]
-        token: String,
-    },
+    Connect,
     /// Manage agents
     Agent {
         #[command(subcommand)]
@@ -153,8 +155,8 @@ enum ConfigCmd {
         #[arg(long, default_value = "~/avix-data")]
         root: PathBuf,
     },
-    /// Start the Avix daemon
-    Start {
+    /// Run the Avix server
+    Server {
         /// Runtime root directory
         #[arg(long)]
         root: PathBuf,
@@ -184,8 +186,8 @@ enum AgentCmd {
         /// PID of the agent
         pid: u64,
     },
-    /// Start the Avix daemon
-    Start {
+    /// Run the Avix server
+    Server {
         /// Runtime root directory
         #[arg(long)]
         root: PathBuf,
@@ -223,8 +225,8 @@ enum HilCmd {
         #[arg(long)]
         note: Option<String>,
     },
-    /// Start the Avix daemon
-    Start {
+    /// Run the Avix server
+    Server {
         /// Runtime root directory
         #[arg(long)]
         root: PathBuf,
@@ -243,17 +245,45 @@ fn emit<T: serde::Serialize>(json_mode: bool, human_fn: impl FnOnce(&T) -> Strin
     }
 }
 
-/// Connect to ATP server and return dispatcher
-async fn connect_atp(url: &str, token: &str) -> Result<Dispatcher, anyhow::Error> {
-    let client = AtpClient::connect(url, "user", token).await?;
+fn log_filename(cmd: &Cmd) -> &str {
+    match cmd {
+        Cmd::Server { .. } => "server",
+        Cmd::Tui => "tui",
+        Cmd::Agent { .. } => "agent",
+        Cmd::Hil { .. } => "hil",
+        Cmd::Logs { .. } => "logs",
+        _ => "cli",
+    }
+}
+
+/// Connect to ATP server using loaded config and return dispatcher
+async fn connect_config() -> Result<Dispatcher, anyhow::Error> {
+    let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+    let client = AtpClient::connect(config).await?;
     let dispatcher = Dispatcher::new(client);
     Ok(dispatcher)
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
     let cli = Cli::parse();
+    let log_level = cli.log;
+    let log_dir = persistence::app_data_dir().join("logs");
+    let log_filename = log_filename(&cli.command);
+    let appender = RollingFileAppender::new(Rotation::DAILY, log_dir.clone(), log_filename);
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(appender)
+                .with_target(false)
+                .with_thread_ids(true)
+                .with_file(true)
+                .with_line_number(true)
+                .json(),
+        )
+        .with(log_level);
+    tracing::subscriber::set_global_default(subscriber)?;
+    tracing::info!("log_dir={} level={:?} filename={}", log_dir.display(), cli.log, log_filename);
 
     match cli.command {
         Cmd::Config { sub } => match sub {
@@ -307,12 +337,12 @@ async fn main() -> Result<()> {
                 }
             }
 
-            ConfigCmd::Start { root, port } => {
+            ConfigCmd::Server { root, port } => {
                 let root = expand_home(root);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
                 runtime.start_daemon(port).await?;
             }
-        }
+        },
 
         Cmd::Resolve {
             kind,
@@ -407,14 +437,14 @@ async fn main() -> Result<()> {
             println!("--- Done ---");
         }
 
-        Cmd::Start { root, port } => {
+        Cmd::Server { root, port } => {
             let root = expand_home(root);
             let runtime = Runtime::bootstrap_with_root(&root).await?;
             runtime.start_daemon(port).await?;
         }
 
-        Cmd::Connect { url, token } => {
-            connect_atp(&url, &token).await?;
+        Cmd::Connect => {
+            connect_config().await?;
             emit(cli.json, |_: &()| "Connected to server".to_string(), ());
         }
 
@@ -424,10 +454,11 @@ async fn main() -> Result<()> {
                 goal,
                 capabilities,
             } => {
-                let dispatcher = connect_atp(&cli.url, &cli.token).await?;
+                let dispatcher = connect_config().await?;
+                let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
                 let pid = spawn_agent(
                     &dispatcher,
-                    &cli.token,
+                    &config.credential,
                     &name,
                     &goal,
                     &capabilities.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
@@ -440,8 +471,9 @@ async fn main() -> Result<()> {
                 );
             }
             AgentCmd::List => {
-                let dispatcher = connect_atp(&cli.url, &cli.token).await?;
-                let agents = list_agents(&dispatcher, &cli.token).await?;
+                let dispatcher = connect_config().await?;
+                let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+                let agents = list_agents(&dispatcher, &config.credential).await?;
                 emit(
                     cli.json,
                     |agents: &Vec<serde_json::Value>| format!("Agents: {:?}", agents),
@@ -449,16 +481,17 @@ async fn main() -> Result<()> {
                 );
             }
             AgentCmd::Kill { pid } => {
-                let dispatcher = connect_atp(&cli.url, &cli.token).await?;
-                send_signal(&dispatcher, &cli.token, pid, "SIGKILL", None).await?;
+                let dispatcher = connect_config().await?;
+                let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+                send_signal(&dispatcher, &config.credential, pid, "SIGKILL", None).await?;
                 emit(cli.json, |_: &()| format!("Killed agent {}", pid), ());
             }
-            AgentCmd::Start { root, port } => {
+            AgentCmd::Server { root, port } => {
                 let root = expand_home(root);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
                 runtime.start_daemon(port).await?;
             }
-        }
+        },
 
         Cmd::Hil { sub } => match sub {
             HilCmd::Approve {
@@ -467,10 +500,11 @@ async fn main() -> Result<()> {
                 token,
                 note,
             } => {
-                let dispatcher = connect_atp(&cli.url, &cli.token).await?;
+                let dispatcher = connect_config().await?;
+                let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
                 resolve_hil(
                     &dispatcher,
-                    &cli.token,
+                    &config.credential,
                     pid,
                     &hil_id,
                     &token,
@@ -490,10 +524,11 @@ async fn main() -> Result<()> {
                 token,
                 note,
             } => {
-                let dispatcher = connect_atp(&cli.url, &cli.token).await?;
+                let dispatcher = connect_config().await?;
+                let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
                 resolve_hil(
                     &dispatcher,
-                    &cli.token,
+                    &config.credential,
                     pid,
                     &hil_id,
                     &token,
@@ -507,15 +542,15 @@ async fn main() -> Result<()> {
                     (),
                 );
             }
-            HilCmd::Start { root, port } => {
+            HilCmd::Server { root, port } => {
                 let root = expand_home(root);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
                 runtime.start_daemon(port).await?;
             }
-        }
+        },
 
         Cmd::Tui => {
-            return tui::app::run(cli.url, cli.token, cli.json).await;
+            return tui::app::run(cli.json).await;
         }
 
         Cmd::Logs { follow: _ } => {
@@ -632,3 +667,5 @@ fn expand_home(path: PathBuf) -> PathBuf {
     }
     path
 }
+
+

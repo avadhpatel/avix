@@ -31,6 +31,7 @@ impl ServerHandle {
     /// If not reachable and `config.auto_start_server` is true, spawn `avix start`
     /// and wait for the server to come up (5 probes × 500 ms).
     pub async fn ensure_running(config: &ClientConfig) -> Result<Self, ClientError> {
+        info!("Server connect/start");
         if probe_reachable(&config.server_url).await {
             info!("Server already reachable at {}", config.server_url);
             return Ok(Self {
@@ -111,6 +112,7 @@ impl ServerHandle {
 
     /// Kill the child process if we own it. No-op if we did not spawn the server.
     pub fn stop(&self) -> Result<(), ClientError> {
+        info!("Server stop");
         if !self.owned {
             return Ok(());
         }

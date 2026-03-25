@@ -103,6 +103,7 @@ impl GatewayServer {
         };
 
         let app = Router::new()
+            .route("/atp/health", get(|| async { "ok" }))
             .route("/atp/auth/login", post(handle_login))
             .route("/atp", get(handle_ws_upgrade))
             .with_state(state);

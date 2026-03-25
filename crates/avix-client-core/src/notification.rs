@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 use crate::atp::types::{HilOutcome, HilRequestBody};
 
@@ -117,10 +118,12 @@ impl NotificationStore {
 
     pub async fn add(&self, n: Notification) {
         let mut inner = self.inner.lock().await;
-        inner.push(n);
+        inner.push(n.clone());
+        let count = inner.iter().filter(|n| !n.read).count();
         inner.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         drop(inner);
         let _ = self.changed.send(());
+        debug!("Notif add {:?} unread={}", n.message, count);
     }
 
     pub async fn resolve_hil(&self, hil_id: &str, outcome: HilOutcome) {

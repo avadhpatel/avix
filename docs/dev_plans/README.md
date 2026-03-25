@@ -101,3 +101,9 @@ via `memory/log-event`. The raw history is then discarded.
 
 This design means agents gain continuity across sessions without unbounded context
 growth. The LLM summary is the cross-session artifact; the full transcript is ephemeral.
+
+---
+
+## To-Do List
+
+- Convert 'auth.conf' file to 'auth.yaml' - everything else is yaml format

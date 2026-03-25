@@ -1,15 +1,20 @@
 pub mod phase1;
 pub(crate) mod phase2;
 
+use crate::auth::atp_token::ATPTokenStore;
+use crate::auth::service::AuthService;
 use crate::error::AvixError;
-use crate::memfs::VfsRouter;
+use crate::gateway::config::GatewayConfig;
+use crate::gateway::event_bus::AtpEventBus;
+use crate::gateway::server::GatewayServer;
+use crate::memfs::{VfsPath, VfsRouter};
 use crate::types::Pid;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time;
-use axum::{routing::get, Router};
-use tokio::net::TcpListener;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BootPhase(pub u8);
@@ -21,7 +26,7 @@ pub struct BootLogEntry {
 }
 
 pub struct Runtime {
-    master_key_set: bool,
+    master_key: Arc<String>,
     boot_log: Vec<BootLogEntry>,
     service_pids: std::collections::HashMap<String, Pid>,
     vfs: VfsRouter,
@@ -30,7 +35,7 @@ pub struct Runtime {
 impl std::fmt::Debug for Runtime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Runtime")
-            .field("master_key_set", &self.master_key_set)
+            .field("master_key_set", &true)
             .finish()
     }
 }
@@ -65,7 +70,6 @@ impl Runtime {
             .map_err(|_| AvixError::ConfigParse("AVIX_MASTER_KEY env var not set".into()))?;
         // Zero the env var immediately
         std::env::remove_var("AVIX_MASTER_KEY");
-        let _key_bytes = master_key.into_bytes(); // held in memory only
 
         phase2::mount_persistent_trees(&vfs, root).await?;
         log.push(BootLogEntry {
@@ -94,7 +98,7 @@ impl Runtime {
         });
 
         Ok(Runtime {
-            master_key_set: true,
+            master_key: Arc::new(master_key),
             boot_log: log,
             service_pids,
             vfs,
@@ -106,7 +110,7 @@ impl Runtime {
     }
 
     pub fn has_master_key(&self) -> bool {
-        self.master_key_set
+        true
     }
 
     pub fn boot_log(&self) -> &[BootLogEntry] {
@@ -160,11 +164,29 @@ impl Runtime {
         Ok(())
     }
 
-    async fn phase4_atp_gateway(&mut self, _port: u16) -> Result<(), AvixError> {
-        let app = Router::new().route("/atp/health", get(|| async { "ok" }));
-        let listener = TcpListener::bind("0.0.0.0:9142").await.map_err(|e| AvixError::Io(e.to_string()))?;
+    async fn phase4_atp_gateway(&mut self, port: u16) -> Result<(), AvixError> {
+        let auth_yaml = self
+            .vfs
+            .read(&VfsPath::parse("/etc/avix/auth.conf")?)
+            .await?;
+        let auth_config: crate::config::auth::AuthConfig = serde_yaml::from_slice(&auth_yaml)
+            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let auth_svc = Arc::new(AuthService::new(auth_config));
+        let token_store = Arc::new(ATPTokenStore::new(self.master_key.as_ref().clone()));
+        let event_bus = Arc::new(AtpEventBus::default());
+        let config = GatewayConfig {
+            user_addr: format!("0.0.0.0:{}", port)
+                .parse()
+                .map_err(|_| AvixError::ConfigParse("invalid port".into()))?,
+            admin_addr: "127.0.0.1:7701".parse().unwrap(),
+            tls_enabled: false,
+            hil_timeout_secs: 600,
+            kernel_sock: std::env::var("AVIX_ROUTER_SOCK").ok().map(PathBuf::from),
+        };
+        let user_addr = config.user_addr;
+        let server = GatewayServer::new(config, auth_svc, token_store, event_bus);
         tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service()).await.unwrap();
+            let _ = server.bind_and_run(user_addr, false).await;
         });
         Ok(())
     }
