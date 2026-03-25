@@ -28,6 +28,7 @@ You are the **Testing Agent**. You verify correctness, surface bugs, generate ac
   - Suggest concrete improvements to logging/tracing (add spans, events, fields).
   - Write a clear bug report + patch (if small) or hand off to Coding Agent.
 - After Coding Agent finishes a feature, immediately run a full test pass and generate a **Testing Report** (prefixed `TESTING-` using the standard report format).
+  - Place the report in .agents/reports folder
 
 You improve observability so future debugging is easier.
 

@@ -14,7 +14,13 @@ pub fn check_domain_role(domain: AtpDomain, op: &str, caller: Role) -> Result<()
     Ok(())
 }
 
+/// Determines the minimum role required to invoke operations on a given ATP domain (§6).
+/// This enforces access control based on domain sensitivity and operation type.
+/// For domains with operation-specific roles, matches on `op`; otherwise defaults to a fixed role.
+/// Tracing logs every call for audit and debugging.
+/// Links: [ATP Spec §6](https://atproto.com/specs/atp)
 fn domain_min_role(domain: AtpDomain, op: &str) -> Role {
+    tracing::debug!("domain_min_role: domain={:?}, op={}", domain, op);
     match domain {
         AtpDomain::Auth => Role::Guest,
         AtpDomain::Proc => match op {
@@ -50,6 +56,7 @@ fn domain_min_role(domain: AtpDomain, op: &str) -> Role {
             _ => Role::Admin,
         },
         AtpDomain::Pipe => Role::User,
+        AtpDomain::Session => Role::User,
     }
 }
 
@@ -77,7 +84,7 @@ pub fn check_fs_hard_veto(path: &str, op: &str) -> Result<(), AtpError> {
     if op != "write" {
         return Ok(());
     }
-    if path.starts_with("/secrets/") || path.starts_with("/proc/") {
+    if path.starts_with(r#"/secrets/"#) || path.starts_with(r#"/proc/"#) {
         return Err(AtpError::new(
             AtpErrorCode::Eperm,
             format!("writes to '{path}' are unconditionally forbidden"),
@@ -231,6 +238,11 @@ mod tests {
     }
 
     #[test]
+    fn user_can_manage_session() {
+        assert!(check_domain_role(AtpDomain::Session, "create", Role::User).is_ok());
+    }
+
+    #[test]
     fn guest_cannot_send_signal() {
         assert!(check_domain_role(AtpDomain::Signal, "send", Role::Guest).is_err());
     }
@@ -276,28 +288,28 @@ mod tests {
 
     #[test]
     fn write_to_secrets_always_blocked() {
-        assert!(check_fs_hard_veto("/secrets/api_key", "write").is_err());
+        assert!(check_fs_hard_veto(r#"/secrets/api_key"#, "write").is_err());
     }
 
     #[test]
     fn write_to_proc_always_blocked() {
-        assert!(check_fs_hard_veto("/proc/57/status.yaml", "write").is_err());
+        assert!(check_fs_hard_veto(r#"/proc/57/status.yaml"#, "write").is_err());
     }
 
     #[test]
     fn read_from_secrets_not_vetoed_here() {
         // /secrets/ read EPERM is enforced by VFS, not this check
-        assert!(check_fs_hard_veto("/secrets/api_key", "read").is_ok());
+        assert!(check_fs_hard_veto(r#"/secrets/api_key"#, "read").is_ok());
     }
 
     #[test]
     fn write_to_users_not_vetoed() {
-        assert!(check_fs_hard_veto("/users/alice/data.yaml", "write").is_ok());
+        assert!(check_fs_hard_veto(r#"/users/alice/data.yaml"#, "write").is_ok());
     }
 
     #[test]
     fn read_from_proc_not_vetoed() {
-        assert!(check_fs_hard_veto("/proc/57/status.yaml", "read").is_ok());
+        assert!(check_fs_hard_veto(r#"/proc/57/status.yaml"#, "read").is_ok());
     }
 
     // ── admin port ────────────────────────────────────────────────────────────

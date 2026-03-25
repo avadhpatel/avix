@@ -30,4 +30,7 @@ You are the **Coding Agent** for the Avix OS codebase. Your sole focus is writin
   - Alternatives considered: …
   - Trade-offs accepted: …
   - Links: [spec](../spec/…), [dev-plan](../dev_plans/…)
+  ```
+  - Place decision log in the .agents/reports folder
+
 
