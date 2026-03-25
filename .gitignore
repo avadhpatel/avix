@@ -7,3 +7,4 @@ tarpaulin-report.html
 coverage/
 .agents/reports
 **.swp
+temp/
