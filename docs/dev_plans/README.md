@@ -107,3 +107,5 @@ growth. The LLM summary is the cross-session artifact; the full transcript is ep
 ## To-Do List
 
 - Convert 'auth.conf' file to 'auth.yaml' - everything else is yaml format
+- Separate client.json and server.json - and move both to yaml
+

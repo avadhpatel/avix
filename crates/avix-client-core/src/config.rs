@@ -92,8 +92,10 @@ mod tests {
 
     #[test]
     fn load_config_returns_default_if_missing() {
-        // Since load uses app_data_dir, and in test env it may not exist, it should return default
-        let cfg = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+        // load_json on a guaranteed-missing path errors; unwrap_or_else must produce the default.
+        let missing = std::path::PathBuf::from("/nonexistent/__avix_test_config__.json");
+        let cfg: ClientConfig =
+            persistence::load_json(&missing).unwrap_or_else(|_| ClientConfig::default());
         assert_eq!(cfg.server_url, "http://localhost:9142");
     }
 }

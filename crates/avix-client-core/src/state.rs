@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
+use tracing::warn;
 
-use crate::atp::dispatcher::Dispatcher;
-use crate::atp::event_emitter::EventEmitter;
+use crate::atp::{AtpClient, Dispatcher, EventEmitter};
 use crate::atp::types::AgentStatus;
 use crate::config::ClientConfig;
 use crate::error::ClientError;
@@ -84,7 +84,11 @@ impl AppState {
 
     pub async fn init(&mut self) -> Result<(), ClientError> {
         // Ensure server is running
-        self.server_handle = Some(ServerHandle::ensure_running(&self.config).await?);
+        if let Ok(handle) = ServerHandle::ensure_running(&self.config).await {
+            self.server_handle = Some(handle);
+        } else {
+            warn!("Failed to start server in init");
+        }
 
         // Load persisted notifications
         if let Ok(persisted) = persistence::load_notifications() {
@@ -97,7 +101,29 @@ impl AppState {
             debug!("State update agents={} notifs={} hil={}", agents_len, notifs_count, hil_pending);
         }
 
-        // TODO: Connect to server and start emitter
+        debug!("State init: connecting to ATP server {}", self.config.server_url);
+
+        self.connection_status = ConnectionStatus::Connecting;
+
+        let client = AtpClient::connect(self.config.clone()).await.map_err(|e| {
+            warn!("Failed to connect in init: {}", e);
+            ClientError::Other(e.into())
+        })?;
+
+        let dispatcher = Arc::new(Dispatcher::new(client));
+        let dispatcher_c = Arc::clone(&dispatcher);
+        let emitter = EventEmitter::start(move || {
+            let d = Arc::clone(&dispatcher_c);
+            async move { Ok(Arc::try_unwrap(d).unwrap()) }
+        });
+
+        self.dispatcher = Some(dispatcher);
+        self.emitter = Some(emitter);
+        self.connection_status = ConnectionStatus::Connected {
+            session_id: "core-init".to_string(),
+        };
+
+        debug!("State init complete, connected");
 
         Ok(())
     }

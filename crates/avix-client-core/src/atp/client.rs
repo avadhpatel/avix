@@ -9,7 +9,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub type WsSink =
     futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
@@ -33,22 +33,52 @@ impl AtpClient {
         };
         let client = reqwest::Client::new();
         let res = client.post(&login_url).json(&login_req).send().await?;
-        let login_resp: LoginResponse = res.json().await?;
+        let status = res.status();
+        debug!("Login response status: {}", status);
+        if !status.is_success() {
+            let body = res.text().await.unwrap_or_default();
+            warn!("Login failed with status {}: {}", status, body);
+            return Err(ClientError::Other(anyhow::anyhow!(
+                "login failed: HTTP {} — {}",
+                status,
+                body
+            )));
+        }
+        let login_resp: LoginResponse = res.json().await.map_err(|e| {
+            warn!("Failed to decode login response: {}", e);
+            e
+        })?;
         debug!("Login resp {:?}", login_resp);
         info!(session_id = %login_resp.session_id, "Logged in to ATP server");
 
         // WS connect
         let ws_url = config.server_url.replace("http", "ws") + "/atp";
         debug!("WS connect {}", ws_url);
+        // When passing a custom Request to connect_async, tungstenite does NOT
+        // auto-generate the required WebSocket handshake headers — we must add them.
+        let ws_key = tokio_tungstenite::tungstenite::handshake::client::generate_key();
+        let uri: http::Uri = ws_url
+            .parse()
+            .map_err(|e: http::uri::InvalidUri| ClientError::WebSocket(e.to_string()))?;
+        let host = uri
+            .authority()
+            .map(|a| a.as_str().to_owned())
+            .unwrap_or_else(|| "localhost".to_owned());
         let req = Request::builder()
-            .uri(&ws_url)
+            .uri(uri)
+            .header("Host", host)
             .header("Authorization", format!("Bearer {}", login_resp.token))
+            .header("Upgrade", "websocket")
+            .header("Connection", "Upgrade")
+            .header("Sec-WebSocket-Key", ws_key)
+            .header("Sec-WebSocket-Version", "13")
             .body(())
             .map_err(|e| ClientError::WebSocket(e.to_string()))?;
 
-        let (ws_stream, _) = connect_async(req)
-            .await
-            .map_err(|e| ClientError::WebSocket(e.to_string()))?;
+        let (ws_stream, _) = connect_async(req).await.map_err(|e| {
+            error!("WebSocket handshake failed: {}", e);
+            ClientError::WebSocket(e.to_string())
+        })?;
         info!("WebSocket connected to ATP server");
 
         let (mut sink, stream) = ws_stream.split();
@@ -177,10 +207,10 @@ mod tests {
         let result = AtpClient::connect(config).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        // Should be Http error
+        // Should be an error indicating auth failure (Http or Other)
         match err {
-            ClientError::Http(_) => {}
-            _ => panic!("Expected Http error, got {:?}", err),
+            ClientError::Http(_) | ClientError::Other(_) => {}
+            _ => panic!("Expected Http or Other error for auth failure, got {:?}", err),
         }
         _m.assert_async().await;
     }

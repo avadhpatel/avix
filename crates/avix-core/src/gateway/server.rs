@@ -2,8 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State, ConnectInfo};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -14,7 +13,7 @@ use futures::SinkExt;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::auth::atp_token::{ATPTokenClaims, ATPTokenStore};
 use crate::auth::service::AuthService;
@@ -114,7 +113,12 @@ impl GatewayServer {
         info!(addr = %bound_addr, is_admin_port, "gateway listener bound");
 
         tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, app).await {
+            if let Err(e) = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            {
                 warn!(error = %e, "gateway server error");
             }
         });
@@ -132,9 +136,11 @@ struct LoginRequest {
 }
 
 async fn handle_login(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
     Json(body): Json<LoginRequest>,
 ) -> impl IntoResponse {
+    info!(remote_addr = %addr, identity = %body.identity, "ATP login attempt");
     match state.auth_svc.login(&body.identity, &body.credential).await {
         Ok(session) => {
             let now = Utc::now();
@@ -156,20 +162,27 @@ async fn handle_login(
                     "sessionId": session.session_id,
                 }))
                 .into_response(),
-                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+                Err(_) => {
+                    error!(remote_addr = %addr, identity = %session.identity_name, "ATP token issue failed after login success");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                },
             }
         }
-        Err(_) => (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "EAUTH", "message": "invalid credential"})),
-        )
-            .into_response(),
+        Err(_) => {
+            info!(remote_addr = %addr, identity = %body.identity, "ATP login failed: invalid credential");
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "EAUTH", "message": "invalid credential"})),
+            )
+            .into_response()
+        }
     }
 }
 
 // ── WebSocket upgrade ──────────────────────────────────────────────────────────
 
 async fn handle_ws_upgrade(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -182,6 +195,7 @@ async fn handle_ws_upgrade(
     {
         Some(t) => t.to_string(),
         None => {
+            info!(remote_addr = %addr, "ATP WS upgrade rejected: missing Authorization header");
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({"error": "EAUTH", "message": "missing Authorization header"})),
@@ -194,6 +208,7 @@ async fn handle_ws_upgrade(
     let claims = match state.token_store.validate(&token_str).await {
         Ok(c) => c,
         Err(_) => {
+            info!(remote_addr = %addr, token_len = token_str.len(), "ATP WS upgrade rejected: invalid/expired token");
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({"error": "EAUTH", "message": "invalid or expired token"})),
@@ -204,6 +219,8 @@ async fn handle_ws_upgrade(
 
     let session_id = claims.session_id.clone();
     let role = claims.role;
+
+    info!(remote_addr = %addr, session_id = %session_id, role = ?role, "ATP WS upgrade accepted");
 
     ws.on_upgrade(move |socket| run_connection(socket, state, session_id, role, token_str))
 }
@@ -217,6 +234,7 @@ async fn run_connection(
     role: Role,
     _token_str: String,
 ) {
+    info!(session_id = %session_id, role = ?role, "ATP WS connection established");
     let (ws_sender, mut ws_receiver) = ws.split();
     let (tx, rx) = mpsc::channel::<WsOutMsg>(64);
 
@@ -282,7 +300,7 @@ async fn run_connection(
                         debug!(session_id = %session_id, "pong received");
                     }
                     Some(Ok(Message::Close(_))) | None => {
-                        debug!(session_id = %session_id, "ws connection closed");
+                        info!(session_id = %session_id, "ATP WS connection closed");
                         break;
                     }
                     _ => {}
@@ -291,7 +309,7 @@ async fn run_connection(
             _ = ping_interval.tick() => {
                 // Check if last pong was more than 40s ago (30s interval + 10s grace)
                 if last_pong.elapsed() > Duration::from_secs(40) {
-                    warn!(session_id = %session_id, "ping timeout, closing connection");
+                    info!(session_id = %session_id, "ATP WS connection closed: ping timeout");
                     break;
                 }
                 last_pong = tokio::time::Instant::now();
@@ -311,6 +329,7 @@ async fn handle_text_frame(
     tx: &mpsc::Sender<WsOutMsg>,
     filter: &Arc<RwLock<EventFilter>>,
 ) {
+    trace!(session_id = %session_id, frame_len = text.len(), frame = %text, "incoming ATP frame");
     match AtpFrame::parse(text) {
         Ok(AtpFrame::Cmd(cmd)) => {
             let cmd_id = cmd.id.clone();

@@ -14,7 +14,6 @@ use tokio::sync::mpsc;
 use tokio::time;
 use tracing::{debug, info, warn};
 
-use avix_client_core::atp::event_emitter::EventEmitter;
 use avix_client_core::atp::types::{Event as AtpEvent, EventBody, EventKind};
 use avix_client_core::atp::{AtpClient, Dispatcher};
 use avix_client_core::commands::{list_agents, resolve_hil, spawn_agent};
@@ -367,47 +366,58 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
 let _ = notifications.add(notif).await;
                                 }
                                 debug!("Connecting to WS {}", client_config.server_url);
-                                if let Ok(client) = AtpClient::connect(client_config.clone()).await {
-                                    let dispatcher = Dispatcher::new(client);
-                                    let dispatcher = Arc::new(dispatcher);
-                                    let dispatcher_c = Arc::clone(&dispatcher);
-                                    let emitter = EventEmitter::start(move || {
-                                        let d = Arc::clone(&dispatcher_c);
-                                        async move { Ok(Arc::try_unwrap(d).unwrap()) }
-                                    });
-                                    {
-                                        let mut s = shared_state.write().await;
-                                        s.dispatcher = Some(Arc::clone(&dispatcher));
-                                        s.emitter = Some(emitter);
-                                        s.connection_status =
-                                            avix_client_core::state::ConnectionStatus::Connected {
-                                                session_id: "tui-session".into(),
-                                            };
+                                match AtpClient::connect(client_config.clone()).await {
+                                    Ok(client) => {
+                                        let dispatcher = Arc::new(Dispatcher::new(client));
+                                        {
+                                            let mut s = shared_state.write().await;
+                                            s.connection_status =
+                                                avix_client_core::state::ConnectionStatus::Connected {
+                                                    session_id: "tui-session".into(),
+                                                };
 
-                                        // Start background event task
-                                        if let Some(emitter) = &s.emitter {
-                                            let rx = emitter.subscribe_all();
+                                            // Subscribe to dispatcher events directly — avoids
+                                            // the Arc::try_unwrap panic in the old emitter setup.
+                                            let mut rx = dispatcher.events();
                                             let state_c = Arc::clone(&shared_state);
                                             let notifications = Arc::clone(&s.notifications);
                                             let action_tx_c = action_tx.clone();
                                             tokio::spawn(async move {
-                                                let mut rx = rx;
-                                                while let Ok(event) = rx.recv().await {
-                                                    dispatch_event(
-                                                        &state_c,
-                                                        &notifications,
-                                                        event,
-                                                        &action_tx_c,
-                                                    )
-                                                    .await;
+                                                loop {
+                                                    match rx.recv().await {
+                                                        Ok(event) => {
+                                                            dispatch_event(
+                                                                &state_c,
+                                                                &notifications,
+                                                                event,
+                                                                &action_tx_c,
+                                                            )
+                                                            .await;
+                                                        }
+                                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                                            warn!("Event receiver lagged by {} messages", n);
+                                                        }
+                                                        Err(_) => {
+                                                            warn!("ATP event stream closed");
+                                                            break;
+                                                        }
+                                                    }
                                                 }
                                             });
+
+                                            s.dispatcher = Some(dispatcher);
                                         }
+                                        debug!("Connection successful");
+                                        state.reducer(Action::Connect);
                                     }
-                                    debug!("Connection successful");
-                                    state.reducer(Action::Connect);
-                                } else {
-                                debug!("Connection failed");
+                                    Err(e) => {
+                                        warn!("ATP connection failed: {}", e);
+                                        let notif = Notification::from_sys_alert(
+                                            "error",
+                                            &format!("Connection failed: {e}"),
+                                        );
+                                        let _ = shared_state.read().await.notifications.add(notif).await;
+                                    }
                                 }
                             }
                         }

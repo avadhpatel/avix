@@ -41,15 +41,19 @@ impl EventEmitter {
                 if let Ok(disp) = disp_res {
                     connected_c.store(true, Ordering::SeqCst);
                     let mut disp_rx = disp.events();
-                    tokio::select! {
-                        res = disp_rx.recv() => {
-                            if let Ok(event) = res {
+                    loop {
+                        match disp_rx.recv().await {
+                            Ok(event) => {
                                 let _ = tx_c.send(event);
                             }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!("EventEmitter lagged {} events", n);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
                     }
                     connected_c.store(false, Ordering::SeqCst);
-                    // Reset backoff after stable (here simplified)
+                    // Reset backoff after stable connection
                     backoff = Duration::from_secs(1);
                 }
                 tokio::time::sleep(backoff).await;

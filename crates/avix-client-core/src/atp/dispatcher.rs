@@ -6,7 +6,7 @@ use futures_util::SinkExt;
 use tokio::sync::{broadcast, oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 
 use crate::atp::client::{AtpClient, WsSink};
 use crate::atp::types::{Cmd, Event, Frame, Reply};
