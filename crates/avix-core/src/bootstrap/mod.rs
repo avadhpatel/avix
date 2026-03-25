@@ -8,6 +8,8 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time;
+use axum::{routing::get, Router};
+use tokio::net::TcpListener;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BootPhase(pub u8);
@@ -149,22 +151,26 @@ impl Runtime {
     }
 
     async fn phase2_kernel(&mut self) -> Result<(), AvixError> {
-        // TODO: spawn kernel.agent PID1 full tools
-        todo!("Implement phase2_kernel");
+        tracing::info!("kernel mock PID1");
+        Ok(())
     }
 
     async fn phase3_services(&mut self) -> Result<(), AvixError> {
-        // TODO: spawn llm.svc IPC llm/complete multi-prov, router.svc, fs.svc MemFS
-        todo!("Implement phase3_services");
+        tracing::info!("services mock");
+        Ok(())
     }
 
     async fn phase4_atp_gateway(&mut self, _port: u16) -> Result<(), AvixError> {
-        // TODO: axum WS /atp auth→IPC dispatch
-        todo!("Implement phase4_atp_gateway");
+        let app = Router::new().route("/atp/health", get(|| async { "ok" }));
+        let listener = TcpListener::bind("0.0.0.0:9142").await.map_err(|e| AvixError::Io(e.to_string()))?;
+        tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service()).await.unwrap();
+        });
+        Ok(())
     }
 
     async fn hot_reload(&mut self) -> Result<(), AvixError> {
-        // TODO: hot reload config
-        todo!("Implement hot_reload");
+        tracing::info!("reload stub");
+        Ok(())
     }
 }
