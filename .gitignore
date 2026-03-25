@@ -6,3 +6,4 @@ Cargo.lock
 tarpaulin-report.html
 coverage/
 .agents/reports
+**.swp

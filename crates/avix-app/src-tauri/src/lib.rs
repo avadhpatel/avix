@@ -6,10 +6,7 @@ mod commands;
 
 pub async fn create_app_state(
 ) -> Result<avix_client_core::state::SharedState, Box<dyn std::error::Error>> {
-    let config = ClientConfig {
-        auto_start_server: false, // For GUI, assume server is running or start manually
-        ..Default::default()
-    };
+    let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
     let state = new_shared(config);
     {
         let mut guard = state.write().await;
