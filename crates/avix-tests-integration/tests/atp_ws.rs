@@ -185,6 +185,45 @@ async fn send_rpc(
     }
 }
 
+/// Sends a subscribe message over WebSocket.
+/// Subscribes to the given events.
+/// Refer to ATP protocol for subscription details.
+/// Links: docs/dev_plans/ATP-PROTOCOL-REVIEW-20241025.md
+async fn send_subscribe(
+    write: &mut futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>,
+    events: Vec<&str>,
+) -> Result<()> {
+    let _span = span!(Level::INFO, "send_subscribe").entered();
+    let req = json!({
+        "type": "subscribe",
+        "events": events
+    });
+    write.send(Message::Text(req.to_string())).await?;
+    info!("Subscribed to events: {:?}", events);
+    Ok(())
+}
+
+/// Receives the next event message from WebSocket.
+/// Times out after 30 seconds.
+/// Returns the parsed JSON Value.
+/// Refer to ATP event format.
+/// Links: docs/architecture/04-atp.md
+async fn recv_event(
+    read: &mut futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+) -> Result<Value> {
+    let _span = span!(Level::INFO, "recv_event").entered();
+    let msg_opt = timeout(Duration::from_secs(30), read.next()).await?;
+    let msg = msg_opt.ok_or_else(|| anyhow::anyhow!("No event message"))?;
+    let msg = msg?;
+    match msg {
+        Message::Text(text) => {
+            let event: Value = serde_json::from_str(&text)?;
+            Ok(event)
+        }
+        _ => Err(anyhow::anyhow!("Unexpected message type")),
+    }
+}
+
 /// Basic ATP test: spawn server, login, connect WS, send session.ready, assert ack, send proc.list, assert array, kill server.
 #[tokio::test]
 async fn test_basic() -> Result<()> {
@@ -245,11 +284,140 @@ async fn test_events() -> Result<()> {
     // Connect WS
     let (mut write, mut read) = ws_connect(&token, port).await?;
     // Subscribe to proc events
-    // For now, just send proc.start and see if it works
-    let resp = send_rpc(&mut write, &mut read, "proc.start", json!({"cmd": "echo hello"})).await?;
+    send_subscribe(&mut write, vec!["*"]).await?;
+    // Send proc.start
+    let resp = send_rpc(&mut write, &mut read, "proc.spawn", json!({"cmd": ["echo", "hello"], "name": "test-proc"})).await?;
     assert!(resp["result"].is_object()); // Should return proc info
+    // Receive proc.start event
+    let event = recv_event(&mut read).await?;
+    assert_eq!(event["type"], "proc.start");
     // Kill server
     server.kill().await?;
     info!("Test events passed");
+    Ok(())
+}
+
+/// Test full proc lifecycle events: spawn, output, exit, list.
+/// Covers Gap4.1: Proc Lifecycle Events (spawn/output/exit).
+/// Links: docs/dev_plans/ATP-WS-TESTS-PLAN.md#41
+#[tokio::test]
+async fn test_proc_lifecycle() -> Result<()> {
+    let _span = span!(Level::INFO, "test_proc_lifecycle").entered();
+    // Spawn server
+    let (mut server, port, api_key) = spawn_debug_server().await?;
+    // Login
+    let token = login_http(port, &api_key).await?;
+    // Connect WS
+    let (mut write, mut read) = ws_connect(&token, port).await?;
+    // Subscribe to all events
+    send_subscribe(&mut write, vec!["*"]).await?;
+    // Spawn a proc
+    let resp = send_rpc(&mut write, &mut read, "proc.spawn", json!({"cmd": ["echo", "hi"], "name": "test-proc"})).await?;
+    assert!(resp["result"].is_object());
+    let pid = resp["result"]["id"].as_u64().unwrap();
+    // Receive proc.start event
+    let event = recv_event(&mut read).await?;
+    assert_eq!(event["type"], "proc.start");
+    assert_eq!(event["pid"], pid);
+    // Check proc.list includes it
+    let resp = send_rpc(&mut write, &mut read, "proc.list", json!({})).await?;
+    let list = resp["result"].as_array().unwrap();
+    assert!(list.iter().any(|p| p["id"] == pid));
+    // Receive proc.output event (echo outputs)
+    let event = recv_event(&mut read).await?;
+    assert_eq!(event["type"], "proc.output");
+    assert_eq!(event["pid"], pid);
+    // Check proc.status
+    let resp = send_rpc(&mut write, &mut read, "proc.status", json!({"id": pid})).await?;
+    assert!(resp["result"].is_object());
+    // Kill the proc
+    send_rpc(&mut write, &mut read, "proc.kill", json!({"id": pid})).await?;
+    // Receive proc.exit event
+    let event = recv_event(&mut read).await?;
+    assert_eq!(event["type"], "proc.exit");
+    assert_eq!(event["pid"], pid);
+    // Check proc.list is empty
+    let resp = send_rpc(&mut write, &mut read, "proc.list", json!({})).await?;
+    let list = resp["result"].as_array().unwrap();
+    assert!(list.is_empty());
+    // Kill server
+    server.kill().await?;
+    info!("Test proc lifecycle passed");
+    Ok(())
+}
+
+/// Test full errors: bad token upgrade, invalid method, malformed JSON-RPC.
+/// Covers Gap4.2: Full Errors.
+/// Links: docs/dev_plans/ATP-WS-TESTS-PLAN.md#42
+#[tokio::test]
+async fn test_full_errors() -> Result<()> {
+    let _span = span!(Level::INFO, "test_full_errors").entered();
+    // Spawn server
+    let (mut server, port, _api_key) = spawn_debug_server().await?;
+    // Try WS upgrade with bad token (should fail at connect)
+    let bad_result = ws_connect("bad-token", port).await;
+    assert!(bad_result.is_err(), "WS upgrade with bad token should fail");
+    // Login to get valid token
+    let (mut server2, port2, api_key) = spawn_debug_server().await?;
+    let token = login_http(port2, &api_key).await?;
+    // Connect WS
+    let (mut write, mut read) = ws_connect(&token, port2).await?;
+    // Send invalid method
+    let resp = send_rpc(&mut write, &mut read, "proc.unknown_op", json!({})).await;
+    assert!(resp.is_err(), "Invalid method should error");
+    // Send malformed JSON-RPC (missing jsonrpc)
+    let malformed = json!({"id": 1, "method": "proc.list", "params": {}});
+    write.send(Message::Text(malformed.to_string())).await?;
+    let msg_opt = timeout(Duration::from_secs(5), read.next()).await?;
+    if let Some(msg) = msg_opt {
+        let msg = msg?;
+        if let Message::Text(text) = msg {
+            let resp: Value = serde_json::from_str(&text)?;
+            assert!(resp.get("error").is_some(), "Malformed JSON should return error");
+        }
+    }
+    // Kill servers
+    server.kill().await?;
+    server2.kill().await?;
+    info!("Test full errors passed");
+    Ok(())
+}
+
+/// Test basic reconnect: close WS, reopen with same token, session persists.
+/// Covers Gap4.3: Basic Reconnect.
+/// Links: docs/dev_plans/ATP-WS-TESTS-PLAN.md#43
+#[tokio::test]
+async fn test_basic_reconnect() -> Result<()> {
+    let _span = span!(Level::INFO, "test_basic_reconnect").entered();
+    // Spawn server
+    let (mut server, port, api_key) = spawn_debug_server().await?;
+    // Login
+    let token = login_http(port, &api_key).await?;
+    // Connect WS first time
+    let (mut write, mut read) = ws_connect(&token, port).await?;
+    // Subscribe
+    send_subscribe(&mut write, vec!["*"]).await?;
+    // Spawn a proc
+    let resp = send_rpc(&mut write, &mut read, "proc.spawn", json!({"cmd": ["sleep", "10"], "name": "persistent-proc"})).await?;
+    let pid = resp["result"]["id"].as_u64().unwrap();
+    // Close WS (drop handles)
+    drop(write);
+    drop(read);
+    // Reconnect with same token
+    let (mut write2, mut read2) = ws_connect(&token, port).await?;
+    // Subscribe again
+    send_subscribe(&mut write2, vec!["*"]).await?;
+    // Check session.ready (should be sent after reconnect)
+    let event = recv_event(&mut read2).await?;
+    assert_eq!(event["type"], "session.ready");
+    // Check proc.list has the same proc
+    let resp = send_rpc(&mut write2, &mut read2, "proc.list", json!({})).await?;
+    let list = resp["result"].as_array().unwrap();
+    assert!(list.iter().any(|p| p["id"] == pid));
+    // Kill the proc
+    send_rpc(&mut write2, &mut read2, "proc.kill", json!({"id": pid})).await?;
+    // Kill server
+    server.kill().await?;
+    info!("Test basic reconnect passed");
     Ok(())
 }
