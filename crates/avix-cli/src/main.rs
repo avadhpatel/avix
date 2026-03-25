@@ -55,7 +55,7 @@ enum Cmd {
     Config {
         #[command(subcommand)]
         sub: ConfigCmd,
-    ,
+    },
     /// Start the Avix daemon
     Start {
         /// Runtime root directory
@@ -65,7 +65,6 @@ enum Cmd {
         #[arg(long, default_value = "9142")]
         port: u16,
     },
-}
     /// Run an agent (requires AVIX_MASTER_KEY + provider API key env var)
     Run {
         /// Runtime root directory
@@ -80,17 +79,7 @@ enum Cmd {
         /// Override the model (uses defaultProviders.text from etc/llm.yaml if omitted)
         #[arg(long)]
         model: Option<String>,
-    ,
-    /// Start the Avix daemon
-    Start {
-        /// Runtime root directory
-        #[arg(long)]
-        root: PathBuf,
-        /// ATP port (default 9142)
-        #[arg(long, default_value = "9142")]
-        port: u16,
     },
-}
     /// Resolve agent parameters for a user (without spawning an agent)
     Resolve {
         /// Parameter kind to resolve (currently always `agent-manifest`)
@@ -117,15 +106,6 @@ enum Cmd {
         #[arg(long, default_value = "~/avix-data")]
         root: PathBuf,
     },
-    /// Start the Avix daemon
-    Start {
-        /// Runtime root directory
-        #[arg(long)]
-        root: PathBuf,
-        /// ATP port (default 9142)
-        #[arg(long, default_value = "9142")]
-        port: u16,
-    },
     /// Connect to an Avix ATP server
     Connect {
         /// Server URL (e.g., ws://localhost:9142/atp)
@@ -133,43 +113,24 @@ enum Cmd {
         /// Authentication token
         #[arg(long)]
         token: String,
-}
+    },
     /// Manage agents
     Agent {
         #[command(subcommand)]
         sub: AgentCmd,
-    ,
-    /// Start the Avix daemon
-    Start {
-        /// Runtime root directory
-        #[arg(long)]
-        root: PathBuf,
-        /// ATP port (default 9142)
-        #[arg(long, default_value = "9142")]
-        port: u16,
     },
-}
     /// Manage human-in-the-loop requests
     Hil {
         #[command(subcommand)]
         sub: HilCmd,
-    ,
-    /// Start the Avix daemon
-    Start {
-        /// Runtime root directory
-        #[arg(long)]
-        root: PathBuf,
-        /// ATP port (default 9142)
-        #[arg(long, default_value = "9142")]
-        port: u16,
     },
-}
     /// Tail logs from the server
     Logs {
         /// Follow logs
         #[arg(long)]
         follow: bool,
-    }
+    },
+}
 
 #[derive(Subcommand)]
 enum ConfigCmd {
@@ -184,17 +145,7 @@ enum ConfigCmd {
         /// User role
         #[arg(long, default_value = "admin")]
         role: String,
-    ,
-    /// Start the Avix daemon
-    Start {
-        /// Runtime root directory
-        #[arg(long)]
-        root: PathBuf,
-        /// ATP port (default 9142)
-        #[arg(long, default_value = "9142")]
-        port: u16,
     },
-}
     /// Validate and apply hot-reloadable kernel config changes
     Reload {
         /// Only validate and classify sections — do not write reload-pending marker
@@ -203,7 +154,7 @@ enum ConfigCmd {
         /// Runtime root directory
         #[arg(long, default_value = "~/avix-data")]
         root: PathBuf,
-    ,
+    },
     /// Start the Avix daemon
     Start {
         /// Runtime root directory
@@ -213,7 +164,6 @@ enum ConfigCmd {
         #[arg(long, default_value = "9142")]
         port: u16,
     },
-}
 }
 
 #[derive(Subcommand)]
@@ -228,24 +178,14 @@ enum AgentCmd {
         /// Capabilities (comma-separated)
         #[arg(long, value_delimiter = ',')]
         capabilities: Vec<String>,
-    ,
-    /// Start the Avix daemon
-    Start {
-        /// Runtime root directory
-        #[arg(long)]
-        root: PathBuf,
-        /// ATP port (default 9142)
-        #[arg(long, default_value = "9142")]
-        port: u16,
     },
-}
     /// List active agents
     List,
     /// Kill an agent
     Kill {
         /// PID of the agent
         pid: u64,
-    ,
+    },
     /// Start the Avix daemon
     Start {
         /// Runtime root directory
@@ -255,7 +195,6 @@ enum AgentCmd {
         #[arg(long, default_value = "9142")]
         port: u16,
     },
-}
 }
 
 #[derive(Subcommand)]
@@ -272,17 +211,7 @@ enum HilCmd {
         /// Optional note
         #[arg(long)]
         note: Option<String>,
-    ,
-    /// Start the Avix daemon
-    Start {
-        /// Runtime root directory
-        #[arg(long)]
-        root: PathBuf,
-        /// ATP port (default 9142)
-        #[arg(long, default_value = "9142")]
-        port: u16,
     },
-}
     /// Deny a HIL request
     Deny {
         /// PID of the agent
@@ -295,7 +224,7 @@ enum HilCmd {
         /// Optional note
         #[arg(long)]
         note: Option<String>,
-    ,
+    },
     /// Start the Avix daemon
     Start {
         /// Runtime root directory
@@ -305,7 +234,6 @@ enum HilCmd {
         #[arg(long, default_value = "9142")]
         port: u16,
     },
-}
 }
 
 /// Emit output in JSON or human-readable format
@@ -334,57 +262,61 @@ async fn main() -> Result<()> {
     }
 
     match cli.command {
-        Cmd::Config {
-            sub: ConfigCmd::Init { root, user, role },
-        } => {
-            let root = expand_home(root);
-            let result = run_config_init(ConfigInitParams {
-                root: root.clone(),
-                identity_name: user,
-                credential_type: "api_key".into(),
-                role,
-                master_key_source: "env".into(),
-                mode: "cli".into(),
-            })?;
-            println!("Avix runtime initialised at: {}", root.display());
-            println!("API key (Avix): {}", result.api_key);
-            println!();
-            println!("Next step:");
-            println!(
-                "  AVIX_MASTER_KEY=<key> <PROVIDER>_API_KEY=<key> \\\n  avix run --root {} --provider <anthropic|openai|xai|ollama> --goal \"say hello world\"",
-                root.display()
-            );
-        }
-
-        Cmd::Config {
-            sub: ConfigCmd::Reload { check, root },
-        } => {
-            let root = expand_home(root);
-            let result = run_config_reload(ReloadParams {
-                root,
-                check_only: check,
-            })
-            .await?;
-            if result.restart_required.is_empty() {
+        Cmd::Config { sub } => match sub {
+            ConfigCmd::Init { root, user, role } => {
+                let root = expand_home(root);
+                let result = run_config_init(ConfigInitParams {
+                    root: root.clone(),
+                    identity_name: user,
+                    credential_type: "api_key".into(),
+                    role,
+                    master_key_source: "env".into(),
+                    mode: "cli".into(),
+                })?;
+                println!("Avix runtime initialised at: {}", root.display());
+                println!("API key (Avix): {}", result.api_key);
+                println!();
+                println!("Next step:");
                 println!(
-                    "Config valid — hot-reloadable sections: {}",
-                    result.reloaded_sections.join(", ")
+                    "  AVIX_MASTER_KEY=<key> <PROVIDER>_API_KEY=<key> \\\n  avix run --root {} --provider <anthropic|openai|xai|ollama> --goal \\\"say hello world\\\"",
+                    root.display()
                 );
-                if check {
-                    println!("(--check mode: no reload-pending marker written)");
-                }
-            } else {
-                eprintln!(
-                    "WARNING: sections requiring restart: {}",
-                    result.restart_required.join(", ")
-                );
-                if !result.reloaded_sections.is_empty() {
+            }
+
+            ConfigCmd::Reload { check, root } => {
+                let root = expand_home(root);
+                let result = run_config_reload(ReloadParams {
+                    root,
+                    check_only: check,
+                })
+                .await?;
+                if result.restart_required.is_empty() {
                     println!(
-                        "Hot-reloadable sections: {}",
+                        "Config valid — hot-reloadable sections: {}",
                         result.reloaded_sections.join(", ")
                     );
+                    if check {
+                        println!("(--check mode: no reload-pending marker written)");
+                    }
+                } else {
+                    eprintln!(
+                        "WARNING: sections requiring restart: {}",
+                        result.restart_required.join(", ")
+                    );
+                    if !result.reloaded_sections.is_empty() {
+                        println!(
+                            "Hot-reloadable sections: {}",
+                            result.reloaded_sections.join(", ")
+                        );
+                    }
+                    std::process::exit(1);
                 }
-                std::process::exit(1);
+            }
+
+            ConfigCmd::Start { root, port } => {
+                let root = expand_home(root);
+                let runtime = Runtime::bootstrap_with_root(&root).await?;
+                runtime.start_daemon(port).await?;
             }
         }
 
@@ -483,7 +415,7 @@ async fn main() -> Result<()> {
 
         Cmd::Start { root, port } => {
             let root = expand_home(root);
-            let mut runtime = Runtime::bootstrap_with_root(&root).await?;
+            let runtime = Runtime::bootstrap_with_root(&root).await?;
             runtime.start_daemon(port).await?;
         }
 
@@ -527,17 +459,12 @@ async fn main() -> Result<()> {
                 send_signal(&dispatcher, &cli.token, pid, "SIGKILL", None).await?;
                 emit(cli.json, |_: &()| format!("Killed agent {}", pid), ());
             }
-    ,
-    /// Start the Avix daemon
-    Start {
-        /// Runtime root directory
-        #[arg(long)]
-        root: PathBuf,
-        /// ATP port (default 9142)
-        #[arg(long, default_value = "9142")]
-        port: u16,
-    },
-}
+            AgentCmd::Start { root, port } => {
+                let root = expand_home(root);
+                let runtime = Runtime::bootstrap_with_root(&root).await?;
+                runtime.start_daemon(port).await?;
+            }
+        }
 
         Cmd::Hil { sub } => match sub {
             HilCmd::Approve {
@@ -586,17 +513,12 @@ async fn main() -> Result<()> {
                     (),
                 );
             }
-    ,
-    /// Start the Avix daemon
-    Start {
-        /// Runtime root directory
-        #[arg(long)]
-        root: PathBuf,
-        /// ATP port (default 9142)
-        #[arg(long, default_value = "9142")]
-        port: u16,
-    },
-}
+            HilCmd::Start { root, port } => {
+                let root = expand_home(root);
+                let runtime = Runtime::bootstrap_with_root(&root).await?;
+                runtime.start_daemon(port).await?;
+            }
+        }
 
         Cmd::Logs { follow: _ } => {
             // For now, stub

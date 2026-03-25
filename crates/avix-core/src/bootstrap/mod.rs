@@ -158,7 +158,7 @@ impl Runtime {
         todo!("Implement phase3_services");
     }
 
-    async fn phase4_atp_gateway(&mut self, port: u16) -> Result<(), AvixError> {
+    async fn phase4_atp_gateway(&mut self, _port: u16) -> Result<(), AvixError> {
         // TODO: axum WS /atp auth→IPC dispatch
         todo!("Implement phase4_atp_gateway");
     }
