@@ -39,6 +39,25 @@ and lay the groundwork for the Tauri GUI backend. Implement in order A → H.
 
 ---
 
+### Service Authoring (spec: `docs/spec/service-authoring.md`)
+
+Implement the full service lifecycle: `service.unit` parsing, process spawning, tool
+descriptor scanning, installation pipeline, CLI management, `_caller` injection, and
+restart/secrets. Implement in order A → H.
+
+| File | What it builds | Priority | Depends On |
+|------|---------------|----------|------------|
+| `svc-gap-A-service-unit-parser.md` | `ServiceUnit` TOML parser + all section types (`RestartPolicy`, `HostAccess`, `RunAs`, `JobsSection`) + `InstallReceipt` + `parse_duration` | **Critical** | — |
+| `svc-gap-B-service-process-spawner.md` | `ServiceProcess` OS spawn + env injection + `ServiceStatus` VFS file + `discover_installed` + Phase 4 bootstrap | **Critical** | A |
+| `svc-gap-C-tool-descriptor-scanner.md` | Typed `ToolDescriptor` + `ToolScanner` (reads `*.tool.yaml`) + wire into `handle_ipc_register` | **High** | A, B |
+| `svc-gap-D-service-installer.md` | `ServiceInstaller` (fetch, SHA-256 verify, tar extract, conflict check, receipt) + `sys/install` syscall handler | **High** | A |
+| `svc-gap-E-cli-service-commands.md` | `avix service install/list/status/start/stop/restart/uninstall/logs` subcommands | **High** | D, client-gap-F |
+| `svc-gap-F-ipc-tool-add-remove-wire.md` | Wire `ipc.tool-add/remove` JSON-RPC methods + typed params + `drain` semantics + `tool.changed` ATP event | **High** | A, B, C |
+| `svc-gap-G-caller-injection.md` | `CallerInfo` struct + `caller_scoped` in `ServiceRecord` + router dispatcher injection + `ServiceSpawnRequest::from_unit` | **Medium** | A, F |
+| `svc-gap-H-restart-watchdog-secrets.md` | `ServiceWatchdog` background task + `kernel/secret/get` IPC method + `avix secret set --for-service` CLI | **Medium** | A, B |
+
+---
+
 ---
 
 ## Development Workflow
