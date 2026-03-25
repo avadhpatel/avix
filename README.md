@@ -34,13 +34,43 @@ capabilities — are applied to agentic concepts.
 cargo build --workspace
 ```
 
-### Initialise Configuration
+### Quickstart (Daemon + Clients)
 
-Run once before first start. Generates `auth.conf` and prints your API key — store it
-in your password manager:
+1. Build:
+   ```bash
+   cargo build --workspace
+   ```
 
-```bash
-./target/debug/avix config init \
+2. Init config (prints API key):
+   ```bash
+   ./target/debug/avix config init \\
+     --root ~/avix-data \\
+     --user alice \\
+     --role admin \\
+     --credential-type api_key \\
+     --mode cli
+   ```
+
+3. Start daemon:
+   ```bash
+   export AVIX_MASTER_KEY=<your-32-byte-hex-key>
+   ./target/debug/avix start --root ~/avix-data  # ws://localhost:9142/atp
+   ```
+
+4. CLI connect:
+   ```bash
+   export AVIX_API_KEY=<api-key-from-init>
+   ./target/debug/avix agent list
+   ./target/debug/avix agent spawn researcher \\
+     --goal "Research Q3 earnings"
+   ```
+
+5. GUI dev:
+   ```bash
+   cd crates/avix-app
+   npm install
+   tauri dev  # auto-connects to localhost:9142
+   ```
   --root ~/avix-data \
   --user alice \
   --role admin \
@@ -156,50 +186,28 @@ Supported providers: Anthropic, OpenAI, Ollama, Stability AI, ElevenLabs.
 
 ---
 
-## Repository Layout
+## Clients
+
+* **Daemon**: `avix start --root <dir> [--port 9142]` — ATP WS gateway + services + kernel.agent
+* **CLI**: `avix agent spawn/list/kill`, `avix hil approve/deny`, `avix logs --follow`, `--tui`
+* **GUI**: `cd crates/avix-app && tauri dev` — GoldenLayout UI, dockable panels, HIL modals
+
+All share `avix-client-core` ATP lib.
+
+## Repository Layout (Workspace Structure)
 
 ```
-avix/
-├── CLAUDE.md                 ← AI assistant development instructions
-├── README.md                 ← This file
-├── Cargo.toml                ← Workspace root
-│
+avix/ (Cargo workspace)
+├── Cargo.toml
 ├── crates/
-│   ├── avix-core/            ← All logic as a library (tested here)
-│   ├── avix-cli/             ← CLI binary (thin wrapper)
-│   ├── avix-app/             ← Desktop app binary (thin wrapper)
-│   └── avix-docker/          ← Headless Docker binary (thin wrapper)
-│
-├── docs/
-│   ├── architecture/
-│   │   ├── 00-overview.md
-│   │   ├── 01-filesystem.md
-│   │   ├── 02-bootstrap.md
-│   │   ├── 03-ipc.md
-│   │   ├── 04-atp.md
-│   │   ├── 05-capabilities.md
-│   │   ├── 06-agents.md
-│   │   ├── 07-services.md
-│   │   ├── 08-llm-service.md         ← LLM service spec
-│   │   └── 09-runtime-executor-tools.md  ← Tool exposure model
-│   ├── development/
-│   │   ├── setup.md
-│   │   ├── testing.md
-│   │   ├── tdd-workflow.md
-│   │   └── benchmarking.md
-│   ├── user/
-│   │   ├── quickstart.md
-│   │   ├── installation.md
-│   │   └── tutorial.md
-│   └── dev_plans/            ← Active development plans and gap analyses
-│
-└── .github/
-    └── workflows/
-        ├── ci.yml
-        └── coverage.yml
+│   ├── avix-client-core/    ← ATP protocol + shared state
+│   ├── avix-core/           ← Runtime + kernel + VFS + IPC
+│   ├── avix-cli/            ← CLI binary
+│   ├── avix-app/            ← Tauri GUI (Rust backend + React/Vite frontend)
+│   └── avix-docker/         ← Headless daemon
+├── docs/architecture/       ← 00-12 docs
+└── ...
 ```
-
----
 
 ## Development
 
