@@ -27,7 +27,7 @@ use super::state::{Action, NewAgentFormState, TuiState};
 use super::widgets::hil_modal::render_hil_modal;
 use super::widgets::new_agent_form::NewAgentFormWidget;
 
-use crate::Cli;
+
 
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -170,9 +170,9 @@ async fn update_state_from_shared(state: &mut TuiState, shared: &SharedState) {
         .count();
 }
 
-pub async fn run(cli: Cli) -> Result<()> {
+pub async fn run(url: String, token: String, _json: bool) -> Result<()> {
     let mut terminal = setup_terminal()?;
-    let result = run_app(&mut terminal, cli).await;
+    let result = run_app(&mut terminal, url, token, _json).await;
     restore_terminal(&mut terminal)?;
     result
 }
@@ -197,7 +197,7 @@ fn restore_terminal(terminal: &mut Tui) -> Result<()> {
     Ok(())
 }
 
-async fn run_app(terminal: &mut Tui, cli: Cli) -> Result<()> {
+async fn run_app(terminal: &mut Tui, url: String, token: String, _json: bool) -> Result<()> {
     let mut state = TuiState::default();
     let client_config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
     let shared_state = new_shared(client_config.clone());
@@ -341,7 +341,7 @@ async fn run_app(terminal: &mut Tui, cli: Cli) -> Result<()> {
                                 // Ensure server is running
                                 let _server_handle =
                                     ServerHandle::ensure_running(&client_config).await?;
-                                if let Ok(dispatcher) = connect_atp(&cli.url, &cli.token).await {
+                                if let Ok(dispatcher) = connect_atp(&url, &token).await {
                                     let dispatcher = Arc::new(dispatcher);
                                     let dispatcher_c = Arc::clone(&dispatcher);
                                     let emitter = EventEmitter::start(move || {

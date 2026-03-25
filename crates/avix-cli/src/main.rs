@@ -33,10 +33,6 @@ struct Cli {
     #[arg(long)]
     json: bool,
 
-    /// Launch TUI mode
-    #[arg(long)]
-    tui: bool,
-
     /// ATP server URL
     #[arg(long, default_value = "ws://localhost:9142/atp")]
     url: String,
@@ -124,6 +120,8 @@ enum Cmd {
         #[command(subcommand)]
         sub: HilCmd,
     },
+    /// Launch TUI dashboard
+    Tui,
     /// Tail logs from the server
     Logs {
         /// Follow logs
@@ -256,10 +254,6 @@ async fn connect_atp(url: &str, token: &str) -> Result<Dispatcher, anyhow::Error
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
-
-    if cli.tui {
-        return tui::app::run(cli).await;
-    }
 
     match cli.command {
         Cmd::Config { sub } => match sub {
@@ -518,6 +512,10 @@ async fn main() -> Result<()> {
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
                 runtime.start_daemon(port).await?;
             }
+        }
+
+        Cmd::Tui => {
+            return tui::app::run(cli.url, cli.token, cli.json).await;
         }
 
         Cmd::Logs { follow: _ } => {
