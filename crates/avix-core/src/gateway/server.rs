@@ -383,7 +383,10 @@ enum WsOutMsg {
 async fn writer_task(mut sender: SplitSink<WebSocket, Message>, mut rx: mpsc::Receiver<WsOutMsg>) {
     while let Some(msg) = rx.recv().await {
         let ws_msg = match msg {
-            WsOutMsg::Text(t) => Message::Text(t),
+            WsOutMsg::Text(t) => {
+                trace!(frame_len = t.len(), frame = %t, "outgoing ATP frame");
+                Message::Text(t)
+            },
             WsOutMsg::Ping => Message::Ping(vec![]),
         };
         if sender.send(ws_msg).await.is_err() {

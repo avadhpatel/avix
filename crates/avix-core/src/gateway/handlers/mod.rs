@@ -18,6 +18,7 @@ pub mod cron;
 pub mod fs;
 pub mod pipe;
 pub mod proc;
+pub mod session;
 pub mod signal;
 pub mod snap;
 pub mod sys;
@@ -117,6 +118,7 @@ pub async fn dispatch(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
         AtpDomain::Cap => cap::handle(cmd, ctx).await,
         AtpDomain::Sys => sys::handle(cmd, ctx).await,
         AtpDomain::Pipe => pipe::handle(cmd, ctx).await,
+        AtpDomain::Session => session::handle(cmd, ctx).await,
     }
 }
 

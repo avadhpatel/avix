@@ -15,6 +15,7 @@ pub enum AtpDomain {
     Cap,
     Sys,
     Pipe,
+    Session,
 }
 
 /// All 16 server-push event kinds defined in ATP §7.

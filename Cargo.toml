@@ -6,6 +6,7 @@ members = [
     "crates/avix-cli",
     "crates/avix-app/src-tauri",
     "crates/avix-docker",
+    "crates/avix-tests-integration",
 ]
 resolver = "2"
 
@@ -38,10 +39,10 @@ aes-gcm            = { version = "0.10" }
 rand               = { version = "0.8" }
 base64             = { version = "0.21" }
 cron               = { version = "0.12" }
-tokio-tungstenite  = { version = "0.21" }
+tokio-tungstenite  = { version = "0.24", features = ["native-tls"] }
 clap               = { version = "4", features = ["derive"] }
 autoagents         = { version = "0.3.6" }
-reqwest            = { version = "0.11", default-features = false, features = ["json", "multipart", "stream", "rustls-tls"] }
+reqwest            = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 axum               = { version = "0.7", features = ["ws"] }
 tower              = { version = "0.4" }
 tracing-appender   = { version = "0.2" }
