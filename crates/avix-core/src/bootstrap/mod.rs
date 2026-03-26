@@ -7,7 +7,9 @@ use crate::error::AvixError;
 use crate::gateway::config::GatewayConfig;
 use crate::gateway::event_bus::AtpEventBus;
 use crate::gateway::server::GatewayServer;
+use crate::kernel::phase3_re_adopt;
 use crate::memfs::{VfsPath, VfsRouter};
+use crate::process::table::ProcessTable;
 use crate::types::Pid;
 use std::fs;
 use std::path::Path;
@@ -30,6 +32,8 @@ pub struct Runtime {
     boot_log: Vec<BootLogEntry>,
     service_pids: std::collections::HashMap<String, Pid>,
     vfs: VfsRouter,
+    process_table: Arc<ProcessTable>,
+    root: PathBuf,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -45,6 +49,7 @@ impl Runtime {
         let mut log = Vec::new();
         let mut service_pids = std::collections::HashMap::new();
         let vfs = VfsRouter::new();
+        let process_table = Arc::new(ProcessTable::new());
 
         // Phase 0: init
         log.push(BootLogEntry {
@@ -102,6 +107,8 @@ impl Runtime {
             boot_log: log,
             service_pids,
             vfs,
+            process_table,
+            root: root.to_path_buf(),
         })
     }
 
@@ -136,6 +143,14 @@ impl Runtime {
         self.boot_log.push(BootLogEntry {
             phase: BootPhase(3),
             message: "phase 3: services spawned".into(),
+        });
+
+        // Phase 3.5: re-adopt orphaned agents
+        let agents_yaml_path = self.root.join("etc/avix/agents.yaml");
+        phase3_re_adopt(self.process_table.clone(), agents_yaml_path).await?;
+        self.boot_log.push(BootLogEntry {
+            phase: BootPhase(3),
+            message: "phase 3.5: re-adopted agents".into(),
         });
 
         // Phase 4: start ATP gateway
