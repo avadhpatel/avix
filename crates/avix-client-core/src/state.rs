@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
 use tracing::warn;
+use serde_json;
 
 use crate::atp::types::AgentStatus;
 use crate::atp::{AtpClient, Dispatcher, EventEmitter};
@@ -143,8 +144,19 @@ impl AppState {
     }
 
     fn start_event_bridge(&self) {
-        if let (Some(_emitter), Some(_callback)) = (&self.emitter, &self.emit_callback) {
-            // TODO: start the bridge
+        if let (Some(emitter), Some(callback)) = (&self.emitter, &self.emit_callback) {
+            let mut rx = emitter.subscribe_all();
+            let callback = callback.clone(); // Clone the Arc to move into the spawn
+            tokio::spawn(async move {
+                while let Ok(event) = rx.recv().await {
+                    let event_name = match event.kind {
+                        crate::atp::types::EventKind::SessionReady => "daemon-ready",
+                        _ => continue, // Only emit daemon-ready for now
+                    };
+                    let data = serde_json::to_value(&event.body).unwrap_or(serde_json::Value::Null);
+                    (callback)(event_name, &data);
+                }
+            });
         }
     }
 }
@@ -153,7 +165,7 @@ impl AppState {
 pub type SharedState = Arc<RwLock<AppState>>;
 
 /// Callback for emitting events to frontend.
-pub type EmitCallback = Box<dyn Fn(&str, &serde_json::Value) + Send + Sync>;
+pub type EmitCallback = Arc<dyn Fn(&str, &serde_json::Value) + Send + Sync>;
 
 pub fn new_shared(config: ClientConfig) -> SharedState {
     Arc::new(RwLock::new(AppState::new(config)))
