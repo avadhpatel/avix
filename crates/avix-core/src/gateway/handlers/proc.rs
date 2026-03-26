@@ -14,13 +14,14 @@ pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
         "spawn" | "kill" | "list" | "stat" | "pause" | "resume" | "wait" | "setcap" => {
             let ipc_method = format!("kernel/proc/{op}");
             tracing::info!(op, ipc_method = %ipc_method, "forwarding to kernel IPC");
-            ipc_forward(
-                &id,
-                &ipc_method,
-                cmd.cmd.body,
-                ctx.ipc.as_ref(),
-            )
-            .await
+            let span = if op == "spawn" {
+                Some(tracing::trace_span!("atp.proc.spawn"))
+            } else {
+                None
+            };
+            let _enter = span.as_ref().map(|s| s.enter());
+            drop(_enter); // drop before await
+            ipc_forward(&id, &ipc_method, cmd.cmd.body, ctx.ipc.as_ref()).await
         }
         op => {
             tracing::warn!(op, "unknown proc op");

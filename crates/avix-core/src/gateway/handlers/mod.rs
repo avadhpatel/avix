@@ -44,12 +44,15 @@ impl LiveIpcRouter {
 #[async_trait]
 impl IpcRouter for LiveIpcRouter {
     async fn call(&self, method: &str, params: Value) -> Result<Value, AtpError> {
+        let span = tracing::trace_span!("ipc.call", method = %method);
+        let _enter = span.enter();
         let req = JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: uuid::Uuid::new_v4().to_string(),
             method: method.to_string(),
             params,
         };
+        drop(_enter); // drop before await
         let resp = self
             .client
             .call(req)

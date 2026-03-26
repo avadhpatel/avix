@@ -8,8 +8,8 @@ use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt};
 
 use avix_client_core::atp::{AtpClient, Dispatcher};
-use avix_client_core::commands::{kill_agent, list_agents, resolve_hil};
 use avix_client_core::commands::spawn_agent::spawn_agent;
+use avix_client_core::commands::{kill_agent, list_agents, resolve_hil};
 use avix_client_core::config::ClientConfig;
 use avix_client_core::persistence;
 
@@ -72,6 +72,9 @@ enum Cmd {
         /// Enable test mode: mock IPC layer with seeded procs and periodic events
         #[arg(long)]
         test_mode: bool,
+        /// Kernel IPC socket path
+        #[arg(long, default_value = "/run/avix/kernel.sock")]
+        kernel_sock: PathBuf,
     },
     /// Run an agent (requires AVIX_MASTER_KEY + provider API key env var)
     Run {
@@ -139,6 +142,11 @@ enum Cmd {
         #[arg(long)]
         follow: bool,
     },
+    /// Run minimal executor (read IPC → exec goal → output/exit)
+    Re {
+        /// Goal for the executor
+        goal: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -175,6 +183,9 @@ enum ConfigCmd {
         /// Enable test mode: mock IPC layer with seeded procs and periodic events
         #[arg(long)]
         test_mode: bool,
+        /// Kernel IPC socket path
+        #[arg(long, default_value = "/run/avix/kernel.sock")]
+        kernel_sock: PathBuf,
     },
 }
 
@@ -209,6 +220,9 @@ enum AgentCmd {
         /// Enable test mode: mock IPC layer with seeded procs and periodic events
         #[arg(long)]
         test_mode: bool,
+        /// Kernel IPC socket path
+        #[arg(long, default_value = "/run/avix/kernel.sock")]
+        kernel_sock: PathBuf,
     },
 }
 
@@ -251,6 +265,9 @@ enum HilCmd {
         /// Enable test mode: mock IPC layer with seeded procs and periodic events
         #[arg(long)]
         test_mode: bool,
+        /// Kernel IPC socket path
+        #[arg(long, default_value = "/run/avix/kernel.sock")]
+        kernel_sock: PathBuf,
     },
 }
 
@@ -377,8 +394,10 @@ async fn main() -> Result<()> {
                 root,
                 port,
                 test_mode,
+                kernel_sock,
             } => {
                 let root = expand_home(root);
+                std::env::set_var("AVIX_KERNEL_SOCK", kernel_sock);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
                 runtime.start_daemon(port, test_mode).await?;
             }
@@ -481,8 +500,10 @@ async fn main() -> Result<()> {
             root,
             port,
             test_mode,
+            kernel_sock,
         } => {
             let root = expand_home(root);
+            std::env::set_var("AVIX_KERNEL_SOCK", kernel_sock);
             let runtime = Runtime::bootstrap_with_root(&root).await?;
             runtime.start_daemon(port, test_mode).await?;
         }
@@ -538,8 +559,10 @@ async fn main() -> Result<()> {
                 root,
                 port,
                 test_mode,
+                kernel_sock,
             } => {
                 let root = expand_home(root);
+                std::env::set_var("AVIX_KERNEL_SOCK", kernel_sock);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
                 runtime.start_daemon(port, test_mode).await?;
             }
@@ -554,15 +577,7 @@ async fn main() -> Result<()> {
             } => {
                 let dispatcher = connect_config().await?;
                 let _config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
-                resolve_hil(
-                    &dispatcher,
-                    pid,
-                    &hil_id,
-                    &token,
-                    true,
-                    note.as_deref(),
-                )
-                .await?;
+                resolve_hil(&dispatcher, pid, &hil_id, &token, true, note.as_deref()).await?;
                 emit(
                     cli.json,
                     |_: &()| format!("Approved HIL {} for PID {}", hil_id, pid),
@@ -577,15 +592,7 @@ async fn main() -> Result<()> {
             } => {
                 let dispatcher = connect_config().await?;
                 let _config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
-                resolve_hil(
-                    &dispatcher,
-                    pid,
-                    &hil_id,
-                    &token,
-                    false,
-                    note.as_deref(),
-                )
-                .await?;
+                resolve_hil(&dispatcher, pid, &hil_id, &token, false, note.as_deref()).await?;
                 emit(
                     cli.json,
                     |_: &()| format!("Denied HIL {} for PID {}", hil_id, pid),
@@ -596,8 +603,10 @@ async fn main() -> Result<()> {
                 root,
                 port,
                 test_mode,
+                kernel_sock,
             } => {
                 let root = expand_home(root);
+                std::env::set_var("AVIX_KERNEL_SOCK", kernel_sock);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
                 runtime.start_daemon(port, test_mode).await?;
             }
@@ -610,6 +619,13 @@ async fn main() -> Result<()> {
         Cmd::Logs { follow: _ } => {
             // For now, stub
             emit(cli.json, |_: &()| "Logs output".to_string(), ());
+        }
+
+        Cmd::Re { goal } => {
+            // Minimal loop: read IPC → exec goal → output/exit
+            println!("avix-re: executing goal '{}'", goal);
+            // TODO: implement IPC read and exec
+            println!("Output: goal executed");
         }
     }
 

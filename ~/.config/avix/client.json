@@ -1,0 +1,7 @@
+{
+  "server_url": "http://localhost:9142",
+  "identity": "admin",
+  "credential": "sk-avix-15a78313-03fd-4ea2-be36-8e37bc3abdaa",
+  "runtime_root": "/home/avadh/avix-data",
+  "auto_start_server": true
+}

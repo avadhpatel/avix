@@ -181,7 +181,7 @@ impl Runtime {
             admin_addr: "127.0.0.1:7701".parse().unwrap(),
             tls_enabled: false,
             hil_timeout_secs: 600,
-            kernel_sock: std::env::var("AVIX_ROUTER_SOCK").ok().map(PathBuf::from),
+            kernel_sock: std::env::var("AVIX_KERNEL_SOCK").ok().map(PathBuf::from),
         };
         let _user_addr = config.user_addr;
         let server = GatewayServer::new(config, auth_svc, token_store, event_bus);

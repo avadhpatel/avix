@@ -2,9 +2,9 @@ use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 use avix_client_core::atp::types::EventKind;
-use tracing::debug;
 use avix_client_core::notification::{HilState, Notification};
 use avix_client_core::state::ActiveAgent;
+use tracing::debug;
 
 use crate::tui::widgets::agent_list::AgentListWidget;
 use crate::tui::widgets::agent_output::AgentOutputBuffer;

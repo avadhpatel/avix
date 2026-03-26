@@ -16,8 +16,8 @@ use tracing::{debug, info, warn};
 
 use avix_client_core::atp::types::{Event as AtpEvent, EventBody, EventKind};
 use avix_client_core::atp::{AtpClient, Dispatcher};
-use avix_client_core::commands::{kill_agent, list_agents, resolve_hil};
 use avix_client_core::commands::spawn_agent::spawn_agent;
+use avix_client_core::commands::{kill_agent, list_agents, resolve_hil};
 use avix_client_core::config::ClientConfig;
 use avix_client_core::notification::{HilState, Notification, NotificationKind, NotificationStore};
 use avix_client_core::persistence;
@@ -482,13 +482,7 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                             debug!("Key event: submit new agent form");
                             // Submit form
                             if let Some(dispatcher) = &shared_state.read().await.dispatcher {
-                                let _ = spawn_agent(
-                                    dispatcher,
-                                    &form.name,
-                                    &form.goal,
-                                    &[],
-                                )
-                                .await;
+                                let _ = spawn_agent(dispatcher, &form.name, &form.goal, &[]).await;
                             }
                             state.reducer(Action::SetNewAgentForm(None));
                         }
@@ -689,13 +683,8 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                         KeyCode::Char('a') => {
                             debug!("Key event: spawn test agent");
                             if let Some(dispatcher) = &shared_state.read().await.dispatcher {
-                                let _ = spawn_agent(
-                                    dispatcher,
-                                    "test-agent",
-                                    "test goal",
-                                    &[],
-                                )
-                                .await;
+                                let _ =
+                                    spawn_agent(dispatcher, "test-agent", "test goal", &[]).await;
                             }
                         }
                         KeyCode::Char('f') => {

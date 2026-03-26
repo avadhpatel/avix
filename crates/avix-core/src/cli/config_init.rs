@@ -124,6 +124,7 @@ identities:
         .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
     std::fs::create_dir_all(root.join("secrets"))
         .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+    std::fs::create_dir_all("/run/avix").map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
     Ok(ConfigInitResult { api_key: raw_key })
 }

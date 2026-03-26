@@ -57,11 +57,7 @@ pub async fn send_signal(
 }
 
 /// Send SIGPIPE with a text payload.
-pub async fn pipe_text(
-    dispatcher: &Dispatcher,
-    pid: u64,
-    text: &str,
-) -> Result<(), ClientError> {
+pub async fn pipe_text(dispatcher: &Dispatcher, pid: u64, text: &str) -> Result<(), ClientError> {
     send_signal(
         dispatcher,
         pid,
@@ -210,7 +206,7 @@ mod tests {
     // helper (which takes `&Dispatcher`), we test the command logic directly
     // by verifying the Cmd construction + reply parsing inline.
 
-// Moved to spawn_agent.rs
+    // Moved to spawn_agent.rs
 
     #[tokio::test]
     async fn resolve_hil_sends_sigresume() {

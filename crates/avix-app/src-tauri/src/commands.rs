@@ -2,10 +2,10 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use avix_client_core::atp::types::HilOutcome;
+use avix_client_core::commands::spawn_agent::spawn_agent as core_spawn_agent;
 use avix_client_core::commands::{
     list_agents as core_list_agents, resolve_hil as core_resolve_hil,
 };
-use avix_client_core::commands::spawn_agent::spawn_agent as core_spawn_agent;
 use avix_client_core::state::SharedState;
 
 #[derive(Serialize, Deserialize)]
@@ -22,14 +22,7 @@ pub async fn spawn_agent(
     let s = state.read().await;
     if let Some(dispatcher) = &s.dispatcher {
         if let Some(_session) = s.connection_status.session_id() {
-            match core_spawn_agent(
-                dispatcher,
-                &request.name,
-                &request.description,
-                &[],
-            )
-            .await
-            {
+            match core_spawn_agent(dispatcher, &request.name, &request.description, &[]).await {
                 Ok(pid) => Ok(pid.to_string()),
                 Err(e) => Err(format!("Failed to spawn agent: {:?}", e)),
             }

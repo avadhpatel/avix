@@ -24,7 +24,7 @@ use crate::gateway::atp::frame::{AtpEvent, AtpFrame, AtpReply};
 use crate::gateway::atp::types::AtpEventKind;
 use crate::gateway::config::GatewayConfig;
 use crate::gateway::event_bus::{AtpEventBus, EventFilter};
-use crate::gateway::handlers::{dispatch, HandlerCtx, LiveIpcRouter, NullIpcRouter};
+use crate::gateway::handlers::{dispatch, HandlerCtx, LiveIpcRouter, TestIpcRouter};
 use crate::gateway::replay::ReplayGuard;
 use crate::gateway::validator::validate_cmd;
 use crate::ipc::IpcClient;
@@ -96,7 +96,7 @@ impl GatewayServer {
                 .map(|path| -> Arc<dyn crate::gateway::handlers::IpcRouter> {
                     Arc::new(LiveIpcRouter::new(IpcClient::new(path)))
                 })
-                .unwrap_or_else(|| Arc::new(NullIpcRouter))
+                .unwrap_or_else(|| Arc::new(TestIpcRouter::new(Arc::clone(&self.event_bus))))
         };
 
         let handler_ctx = Arc::new(HandlerCtx {
