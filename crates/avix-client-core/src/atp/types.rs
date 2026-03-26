@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use avix_core::gateway::atp::error::AtpError;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cmd {
     #[serde(rename = "type")]
@@ -44,6 +46,7 @@ pub struct Reply {
     pub code: Option<String>,
     pub message: Option<String>,
     pub body: Option<Value>,
+    pub error: Option<AtpError>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

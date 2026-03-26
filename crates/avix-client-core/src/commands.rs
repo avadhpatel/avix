@@ -10,20 +10,27 @@ use crate::error::ClientError;
 /// On a non-ok reply, returns `ClientError::Atp`.
 async fn dispatch(
     dispatcher: &Dispatcher,
-    token: &str,
     domain: &str,
     op: &str,
     body: Value,
 ) -> Result<Option<Value>, ClientError> {
-    let cmd = Cmd::new(domain, op, token, body);
+    let mut cmd = Cmd::new(domain, op, "", body);
+    cmd.token = dispatcher.token.clone();
     let reply = dispatcher.call(&cmd).await?;
     if reply.ok {
         Ok(reply.body)
     } else {
-        Err(ClientError::Atp {
-            code: reply.code.unwrap_or_else(|| "EUNKNOWN".into()),
-            message: reply.message.unwrap_or_else(|| "unknown error".into()),
-        })
+        if let Some(err) = &reply.error {
+            Err(ClientError::Atp {
+                code: format!("{:?}", err.code).to_uppercase(),
+                message: err.message.clone(),
+            })
+        } else {
+            Err(ClientError::Atp {
+                code: reply.code.unwrap_or_else(|| "EUNKNOWN".into()),
+                message: reply.message.unwrap_or_else(|| "unknown error".into()),
+            })
+        }
     }
 }
 
@@ -32,17 +39,16 @@ async fn dispatch(
 /// Spawn a new agent. Returns the assigned PID.
 pub async fn spawn_agent(
     dispatcher: &Dispatcher,
-    token: &str,
     agent: &str,
     goal: &str,
     capabilities: &[&str],
 ) -> Result<u64, ClientError> {
     let body = serde_json::json!({
-        "agent": agent,
+        "name": agent,
         "goal": goal,
         "capabilities": capabilities,
     });
-    let reply_body = dispatch(dispatcher, token, "proc", "spawn", body)
+    let reply_body = dispatch(dispatcher, "proc", "spawn", body)
         .await?
         .ok_or_else(|| ClientError::Other(anyhow::anyhow!("proc/spawn returned no body")))?;
     reply_body["pid"]
@@ -53,7 +59,6 @@ pub async fn spawn_agent(
 /// Send an arbitrary signal to an agent.
 pub async fn send_signal(
     dispatcher: &Dispatcher,
-    token: &str,
     pid: u64,
     signal: &str,
     payload: Option<Value>,
@@ -63,20 +68,18 @@ pub async fn send_signal(
         "signal": signal,
         "payload": payload.unwrap_or(Value::Null),
     });
-    dispatch(dispatcher, token, "signal", "send", body).await?;
+    dispatch(dispatcher, "signal", "send", body).await?;
     Ok(())
 }
 
 /// Send SIGPIPE with a text payload.
 pub async fn pipe_text(
     dispatcher: &Dispatcher,
-    token: &str,
     pid: u64,
     text: &str,
 ) -> Result<(), ClientError> {
     send_signal(
         dispatcher,
-        token,
         pid,
         "SIGPIPE",
         Some(serde_json::json!({ "text": text })),
@@ -90,7 +93,6 @@ pub async fn pipe_text(
 /// `approved` flag, and optional human note.
 pub async fn resolve_hil(
     dispatcher: &Dispatcher,
-    token: &str,
     pid: u64,
     hil_id: &str,
     approval_token: &str,
@@ -99,7 +101,6 @@ pub async fn resolve_hil(
 ) -> Result<(), ClientError> {
     send_signal(
         dispatcher,
-        token,
         pid,
         "SIGRESUME",
         Some(serde_json::json!({
@@ -113,13 +114,13 @@ pub async fn resolve_hil(
 }
 
 /// Send SIGKILL to an agent.
-pub async fn kill_agent(dispatcher: &Dispatcher, token: &str, pid: u64) -> Result<(), ClientError> {
-    send_signal(dispatcher, token, pid, "SIGKILL", None).await
+pub async fn kill_agent(dispatcher: &Dispatcher, pid: u64) -> Result<(), ClientError> {
+    send_signal(dispatcher, pid, "SIGKILL", None).await
 }
 
 /// List active processes. Returns the raw body array from the server.
-pub async fn list_agents(dispatcher: &Dispatcher, token: &str) -> Result<Vec<Value>, ClientError> {
-    let body = dispatch(dispatcher, token, "proc", "list", serde_json::json!({})).await?;
+pub async fn list_agents(dispatcher: &Dispatcher) -> Result<Vec<Value>, ClientError> {
+    let body = dispatch(dispatcher, "proc", "list", serde_json::json!({})).await?;
     match body {
         Some(Value::Array(arr)) => Ok(arr),
         Some(other) => Err(ClientError::Other(anyhow::anyhow!(
@@ -227,7 +228,7 @@ mod tests {
             "spawn",
             "tok",
             serde_json::json!({
-                "agent": "researcher",
+                "name": "researcher",
                 "goal": "test",
                 "capabilities": ["fs/read"],
             }),

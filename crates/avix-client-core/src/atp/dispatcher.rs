@@ -30,6 +30,7 @@ pub struct Dispatcher {
     inner: Arc<DispatcherInner>,
     sink_mutex: Arc<Mutex<WsSink>>,
     event_rx: broadcast::Receiver<Event>,
+    pub token: String,
     _reader_handle: JoinHandle<()>,
 }
 
@@ -44,6 +45,7 @@ impl Dispatcher {
             session_id,
         });
 
+        let token = client.session.token.clone();
         let sink_mutex = Arc::new(Mutex::new(client.sink));
         let mut reader_stream = client.stream;
         let reader_inner = Arc::clone(&inner);
@@ -88,6 +90,7 @@ impl Dispatcher {
             inner,
             sink_mutex,
             event_rx,
+            token,
             _reader_handle: handle,
         }
     }

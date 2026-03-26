@@ -236,7 +236,7 @@ async fn dispatch_parsed_command(
             };
             let _ = action_tx.send(Action::LogEvent(log_event)).await;
             if let Some(dispatcher) = &shared_state.read().await.dispatcher {
-                let _ = spawn_agent(dispatcher, &client_config.credential, &name, &goal, &[]).await;
+                let _ = spawn_agent(dispatcher, &name, &goal, &[]).await;
             }
         }
         ParsedCommand::Kill { pid } => {
@@ -247,7 +247,7 @@ async fn dispatch_parsed_command(
             };
             let _ = action_tx.send(Action::LogEvent(log_event)).await;
             if let Some(dispatcher) = &shared_state.read().await.dispatcher {
-                if let Err(e) = kill_agent(dispatcher, &client_config.credential, pid).await {
+                if let Err(e) = kill_agent(dispatcher, pid).await {
                     let notif = Notification::from_sys_alert(
                         "error",
                         &format!("Kill pid {} failed: {}", pid, e),
@@ -326,7 +326,7 @@ async fn update_state_from_shared(
     if state.connected {
         if let Some(dispatcher) = &s.dispatcher {
             // Fetch agents
-            if let Ok(agents) = list_agents(dispatcher, &config.credential).await {
+            if let Ok(agents) = list_agents(dispatcher).await {
                 // Convert to ActiveAgent
                 let active_agents: Vec<_> = agents
                     .into_iter()
@@ -439,7 +439,6 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                             if let Some(dispatcher) = &shared_state.read().await.dispatcher {
                                 let _ = resolve_hil(
                                     dispatcher,
-                                    &client_config.credential,
                                     hil.pid,
                                     &hil.hil_id,
                                     &hil.approval_token,
@@ -454,7 +453,6 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                             if let Some(dispatcher) = &shared_state.read().await.dispatcher {
                                 let _ = resolve_hil(
                                     dispatcher,
-                                    &client_config.credential,
                                     hil.pid,
                                     &hil.hil_id,
                                     &hil.approval_token,
@@ -485,7 +483,6 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                             if let Some(dispatcher) = &shared_state.read().await.dispatcher {
                                 let _ = spawn_agent(
                                     dispatcher,
-                                    &client_config.credential,
                                     &form.name,
                                     &form.goal,
                                     &[],
@@ -696,7 +693,6 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                             if let Some(dispatcher) = &shared_state.read().await.dispatcher {
                                 let _ = spawn_agent(
                                     dispatcher,
-                                    &client_config.credential,
                                     "test-agent",
                                     "test goal",
                                     &[],
