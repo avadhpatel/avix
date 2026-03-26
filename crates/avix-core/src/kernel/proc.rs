@@ -60,7 +60,7 @@ impl ProcHandler {
     /// Spawn a new agent: allocate PID, mint CapToken, write /proc/ files, persist to agents.yaml, fork/exec RuntimeExecutor.
     /// Returns the allocated PID.
     /// Links: docs/dev_plans/PROJECT-SPAWN-001-dev-plan.md#detailed-implementation-guidance
-    pub async fn spawn(&self, name: &str, goal: &str, session_id: &str) -> Result<u32, AvixError> {
+    pub async fn spawn(&self, name: &str, goal: &str, session_id: &str, caller_identity: &str) -> Result<u32, AvixError> {
         info!(name, goal, session_id, "spawning agent");
 
         // Allocate PID (simple increment for now)
@@ -87,10 +87,35 @@ impl ProcHandler {
         self.persist_agent_record(pid, name, goal, session_id).await?;
         info!(pid, "persisted agent record to agents.yaml");
 
-        // TODO: Write /proc/<pid>/status.yaml and resolved.yaml
-        // TODO: Fork/exec avix-re (RuntimeExecutor)
+        // Write /proc/<pid>/status.yaml and resolved.yaml
+        // TODO: Implement init_proc_files here or in RuntimeExecutor
 
-        // For now, mark as running
+        // Fork/exec avix-re (RuntimeExecutor)
+        use std::process::Stdio;
+        use tokio::process::Command;
+
+        let token_json = serde_json::to_string(&token)?;
+        let mut cmd = Command::new("./target/debug/avix-re");
+        cmd.env("AVIX_PID", pid.to_string())
+            .env("AVIX_GOAL", goal)
+            .env("AVIX_TOKEN", token_json)
+            .env("AVIX_SESSION_ID", session_id)
+            .env("AVIX_AGENT_NAME", name)
+            .env("AVIX_SPAWNED_BY", "kernel") // TODO: get from context
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Spawn the process
+        let child = cmd.spawn().map_err(|e| AvixError::Io(format!("Failed to spawn avix-re: {}", e)))?;
+
+        // TODO: Store the child handle to manage it (kill, etc.)
+        // For now, detach it
+        tokio::spawn(async move {
+            let _ = child.wait().await;
+            // TODO: On exit, send agent.exit event, remove from agents.yaml
+        });
+
+        // Mark as running
         self.process_table.set_status(Pid::new(pid), ProcessStatus::Running).await?;
 
         Ok(pid)

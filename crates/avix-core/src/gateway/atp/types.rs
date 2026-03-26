@@ -28,6 +28,8 @@ pub enum AtpEventKind {
     SessionClosing,
     #[serde(rename = "token.expiring")]
     TokenExpiring,
+    #[serde(rename = "agent.spawned")]
+    AgentSpawned,
     #[serde(rename = "agent.output")]
     AgentOutput,
     #[serde(rename = "agent.status")]
@@ -118,6 +120,10 @@ mod tests {
             "\"session.ready\""
         );
         assert_eq!(
+            serde_json::to_string(&AtpEventKind::AgentSpawned).unwrap(),
+            "\"agent.spawned\""
+        );
+        assert_eq!(
             serde_json::to_string(&AtpEventKind::AgentOutput).unwrap(),
             "\"agent.output\""
         );
@@ -145,6 +151,7 @@ mod tests {
             AtpEventKind::SessionReady,
             AtpEventKind::SessionClosing,
             AtpEventKind::TokenExpiring,
+            AtpEventKind::AgentSpawned,
             AtpEventKind::AgentOutput,
             AtpEventKind::AgentStatus,
             AtpEventKind::AgentToolCall,

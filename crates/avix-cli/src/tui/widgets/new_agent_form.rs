@@ -45,13 +45,19 @@ impl NewAgentFormWidget {
             .block(goal_block)
             .style(goal_style);
 
+        let error_text = form.error.as_deref().unwrap_or("");
+        let error_para = Paragraph::new(error_text)
+            .style(Style::default().fg(Color::Red))
+            .alignment(Alignment::Center);
+
         let hint = Paragraph::new("Press Enter to submit, Tab to switch fields")
             .alignment(Alignment::Center);
 
         vec![
             (chunks[0], name_para),
             (chunks[1], goal_para),
-            (chunks[2], hint),
+            (chunks[2], error_para),
+            (chunks[3], hint),
         ]
     }
 }
@@ -68,12 +74,13 @@ mod tests {
             name: "test-agent".into(),
             goal: "test goal".into(),
             focused_field: 0,
+            error: None,
         };
 
         let area = Rect::new(0, 0, 50, 10);
         let widgets = widget.render(&form, area);
 
-        assert_eq!(widgets.len(), 3);
+        assert_eq!(widgets.len(), 4);
     }
 
     #[test]
@@ -82,10 +89,12 @@ mod tests {
             name: "name".into(),
             goal: "goal".into(),
             focused_field: 0,
+            error: None,
         };
         let form2 = NewAgentFormState {
             name: "name".into(),
             goal: "goal".into(),
+            error: None,
             focused_field: 1,
         };
 

@@ -480,11 +480,37 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                         }
                         KeyCode::Enter => {
                             debug!("Key event: submit new agent form");
-                            // Submit form
-                            if let Some(dispatcher) = &shared_state.read().await.dispatcher {
-                                let _ = spawn_agent(dispatcher, &form.name, &form.goal, &[]).await;
+                            // Validate form
+                            let mut new_form = form.clone();
+                            if form.name.trim().is_empty() {
+                                new_form.error = Some("Agent name cannot be empty".into());
+                            } else if form.goal.trim().is_empty() {
+                                new_form.error = Some("Agent goal cannot be empty".into());
+                            } else {
+                                // Submit form
+                                if let Some(dispatcher) = if let Some(dispatcher) = // Submit formshared_state.read().await.dispatcher {shared_state.read().await.dispatcher {
+                                    match spawn_agent(dispatcher, // Submit formform.name, // Submit formform.goal, // Submit form[]).await {
+                                        Ok(pid) => {
+                                            debug!("Agent spawned successfully: pid={}", pid);
+                                            // Add success notification
+                                            let notif = Notification::from_sys_alert(
+                                                "info",
+                                                // Submit formformat!("Agent \{} spawned with PID \{\}", form.name, pid),
+                                            );
+                                            shared_state.write().await.notifications.add(notif).await;
+                                            state.reducer(Action::SetNewAgentForm(None));
+                                        }
+                                        Err(e) => {
+                                            new_form.error = Some(format!("Failed to spawn agent: \{\}", e));
+                                        }
+                                    }
+                                } else {
+                                    new_form.error = Some("No connection to server".into());
+                                }
                             }
-                            state.reducer(Action::SetNewAgentForm(None));
+                            if new_form.error.is_some() {
+                                state.reducer(Action::SetNewAgentForm(Some(new_form)));
+                            }
                         }
                         KeyCode::Esc => {
                             state.reducer(Action::SetNewAgentForm(None));

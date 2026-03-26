@@ -140,6 +140,7 @@ pub struct NewAgentFormState {
     pub name: String,
     pub goal: String,
     pub focused_field: usize, // 0 = name, 1 = goal
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]

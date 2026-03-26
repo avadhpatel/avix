@@ -477,3 +477,54 @@ async fn test_basic_reconnect() -> Result<()> {
     info!("Test basic reconnect passed");
     Ok(())
 }
+
+/// Test agent spawn lifecycle: spawn agent → list → kill → verify.
+/// Covers PROJECT-SPAWN-001 G8: E2E tests (spawn→list→kill→restart verify).
+/// Links: docs/dev_plans/PROJECT-SPAWN-001-dev-plan.md
+#[tokio::test]
+async fn test_agent_spawn_lifecycle() -> Result<()> {
+    let _span = span!(Level::INFO, "test_agent_spawn_lifecycle").entered();
+    // Spawn server
+    let (mut server, port, api_key) = spawn_debug_server().await?;
+    // Login
+    let token = login_http(port, &api_key).await?;
+    // Connect WS
+    let (mut write, mut read) = ws_connect(&token, port).await?;
+    // Subscribe to all events
+    send_subscribe(&mut write, vec!["*"]).await?;
+    // Spawn an agent
+    let resp = send_rpc(
+        &mut write,
+        &mut read,
+        "proc.spawn",
+        json!({"agent": "test-agent", "goal": "Say hello world"}),
+    )
+    .await?;
+    assert!(resp["result"].is_object());
+    let pid = resp["result"]["id"].as_u64().unwrap() as u32;
+    // Receive agent.spawned event
+    let event = recv_event(&mut read).await?;
+    assert_eq!(event["type"], "agent.spawned");
+    assert_eq!(event["pid"], pid);
+    // Check proc.list includes the agent
+    let resp = send_rpc(&mut write, &mut read, "proc.list", json!({})).await?;
+    let list = resp["result"].as_array().unwrap();
+    assert!(list.iter().any(|a| a["id"] == pid));
+    let agent = list.iter().find(|a| a["id"] == pid).unwrap();
+    assert_eq!(agent["name"], "test-agent");
+    assert_eq!(agent["goal"], "Say hello world");
+    // Kill the agent
+    send_rpc(&mut write, &mut read, "proc.kill", json!({"id": pid})).await?;
+    // Receive agent.exit event
+    let event = recv_event(&mut read).await?;
+    assert_eq!(event["type"], "agent.exit");
+    assert_eq!(event["pid"], pid);
+    // Check proc.list is empty
+    let resp = send_rpc(&mut write, &mut read, "proc.list", json!({})).await?;
+    let list = resp["result"].as_array().unwrap();
+    assert!(list.is_empty());
+    // Kill server
+    server.kill().await?;
+    info!("Test agent spawn lifecycle passed");
+    Ok(())
+}
