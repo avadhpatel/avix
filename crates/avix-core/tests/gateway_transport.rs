@@ -358,7 +358,7 @@ async fn guest_role_proc_spawn_returns_eperm() {
 }
 
 #[tokio::test]
-async fn valid_proc_list_returns_eunavail() {
+async fn valid_proc_list_returns_ok() {
     let srv = start_server().await;
     let (token, _session_id) = login_ok(&srv.http, srv.user_port, "alice", "hunter2").await;
     let mut ws = connect_ws(srv.user_port, &token).await;
@@ -366,11 +366,11 @@ async fn valid_proc_list_returns_eunavail() {
     // Consume session.ready
     let _ = read_text(&mut ws).await;
 
-    let cmd = make_cmd_frame(&token, "eunavail-001", "proc", "list");
+    let cmd = make_cmd_frame(&token, "proc-list-001", "proc", "list");
     ws.send(TungsteniteMessage::Text(cmd)).await.unwrap();
 
     let reply = read_text(&mut ws).await;
-    assert_eq!(reply["id"].as_str().unwrap(), "eunavail-001");
-    assert!(!reply["ok"].as_bool().unwrap());
-    assert_eq!(reply["error"]["code"].as_str().unwrap(), "EUNAVAIL");
+    assert_eq!(reply["id"].as_str().unwrap(), "proc-list-001");
+    assert!(reply["ok"].as_bool().unwrap());
+    assert_eq!(reply["body"], json!([]));
 }
