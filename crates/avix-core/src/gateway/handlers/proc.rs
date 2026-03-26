@@ -3,21 +3,29 @@ use crate::gateway::validator::ValidatedCmd;
 
 use super::{ipc_forward, unknown_op, HandlerCtx};
 
+/// Handle ATP proc domain commands by forwarding to kernel IPC.
+/// Links: docs/spec/avix-terminal-protocol.md#6-2-proc-agent-lifecycle
 pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
     let id = cmd.cmd.id.clone();
     let op = cmd.cmd.op.as_str();
 
+    tracing::debug!(op, id = %id, "handling proc command");
     match op {
         "spawn" | "kill" | "list" | "stat" | "pause" | "resume" | "wait" | "setcap" => {
+            let ipc_method = format!("kernel/proc/{op}");
+            tracing::info!(op, ipc_method = %ipc_method, "forwarding to kernel IPC");
             ipc_forward(
                 &id,
-                &format!("kernel/proc/{op}"),
+                &ipc_method,
                 cmd.cmd.body,
                 ctx.ipc.as_ref(),
             )
             .await
         }
-        op => unknown_op(id, op),
+        op => {
+            tracing::warn!(op, "unknown proc op");
+            unknown_op(id, op)
+        }
     }
 }
 

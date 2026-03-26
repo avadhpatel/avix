@@ -4,6 +4,8 @@ use crate::atp::dispatcher::Dispatcher;
 use crate::atp::types::Cmd;
 use crate::error::ClientError;
 
+pub mod spawn_agent;
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 /// Build and dispatch a command, returning its reply body on success.
@@ -36,25 +38,7 @@ async fn dispatch(
 
 // ── public commands ───────────────────────────────────────────────────────────
 
-/// Spawn a new agent. Returns the assigned PID.
-pub async fn spawn_agent(
-    dispatcher: &Dispatcher,
-    agent: &str,
-    goal: &str,
-    capabilities: &[&str],
-) -> Result<u64, ClientError> {
-    let body = serde_json::json!({
-        "name": agent,
-        "goal": goal,
-        "capabilities": capabilities,
-    });
-    let reply_body = dispatch(dispatcher, "proc", "spawn", body)
-        .await?
-        .ok_or_else(|| ClientError::Other(anyhow::anyhow!("proc/spawn returned no body")))?;
-    reply_body["pid"]
-        .as_u64()
-        .ok_or_else(|| ClientError::Other(anyhow::anyhow!("proc/spawn reply missing `pid`")))
-}
+// Moved to spawn_agent.rs
 
 /// Send an arbitrary signal to an agent.
 pub async fn send_signal(
@@ -200,10 +184,17 @@ mod tests {
             code: None,
             message: None,
             body: Some(body),
+            error: None,
         }
     }
 
     fn err_reply(code: &str, message: &str) -> Reply {
+        use avix_core::gateway::atp::error::{AtpError, AtpErrorCode};
+        let error_code = match code {
+            "EPERM" => AtpErrorCode::Eperm,
+            "EUNKNOWN" => AtpErrorCode::Einternal,
+            _ => AtpErrorCode::Einternal,
+        };
         Reply {
             frame_type: "reply".into(),
             id: "test-id".into(),
@@ -211,6 +202,7 @@ mod tests {
             code: Some(code.into()),
             message: Some(message.into()),
             body: None,
+            error: Some(AtpError::new(error_code, message)),
         }
     }
 
@@ -218,47 +210,7 @@ mod tests {
     // helper (which takes `&Dispatcher`), we test the command logic directly
     // by verifying the Cmd construction + reply parsing inline.
 
-    #[tokio::test]
-    async fn spawn_agent_extracts_pid_from_reply() {
-        let fake = FakeDispatcher::new();
-        fake.set_reply("proc/spawn", ok_reply(serde_json::json!({"pid": 42})));
-
-        let cmd = Cmd::new(
-            "proc",
-            "spawn",
-            "tok",
-            serde_json::json!({
-                "name": "researcher",
-                "goal": "test",
-                "capabilities": ["fs/read"],
-            }),
-        );
-        let reply = fake.call(cmd).await.unwrap();
-
-        // Replicate what spawn_agent does with the reply.
-        let pid = reply.body.unwrap()["pid"].as_u64().unwrap();
-        assert_eq!(pid, 42);
-    }
-
-    #[tokio::test]
-    async fn spawn_agent_propagates_eperm() {
-        let fake = FakeDispatcher::new();
-        fake.set_reply("proc/spawn", err_reply("EPERM", "not allowed"));
-
-        let cmd = Cmd::new("proc", "spawn", "tok", serde_json::json!({}));
-        let reply = fake.call(cmd).await.unwrap();
-
-        // Replicate dispatch error path.
-        let result: Result<u64, ClientError> = if reply.ok {
-            Ok(reply.body.unwrap()["pid"].as_u64().unwrap())
-        } else {
-            Err(ClientError::Atp {
-                code: reply.code.unwrap_or_default(),
-                message: reply.message.unwrap_or_default(),
-            })
-        };
-        assert!(matches!(result, Err(ClientError::Atp { code, .. }) if code == "EPERM"));
-    }
+// Moved to spawn_agent.rs
 
     #[tokio::test]
     async fn resolve_hil_sends_sigresume() {
@@ -348,6 +300,7 @@ mod tests {
                 code: None,
                 message: None,
                 body: None,
+                error: None,
             },
         );
 
