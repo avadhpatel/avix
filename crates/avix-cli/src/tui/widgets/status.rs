@@ -33,12 +33,21 @@ impl StatusWidget {
         let notifs_status = format!("Notifs: {}", state.notifications_count);
         let hil_status = format!("HIL: {}", state.hil_pending);
 
-        // For uptime, we could track start time, but for now, placeholder
-        let uptime_status = "Uptime: --:--:--"; // TODO: implement uptime tracking
+        let elapsed = state.startup_time.elapsed();
+        let total_secs = elapsed.as_secs();
+        let mins = total_secs / 60;
+        let secs = total_secs % 60;
+        let uptime_status = format!("Uptime: {:02}:{:02}", mins, secs);
+
+        let hint = if !state.command_mode {
+            " /cmd :help |"
+        } else {
+            ""
+        };
 
         let status_text = format!(
-            "{} | {} | {} | {} | {}",
-            connection_status, agents_status, notifs_status, hil_status, uptime_status
+            "{} | {} | {} | {} |{}{}",
+            connection_status, agents_status, notifs_status, hil_status, uptime_status, hint
         );
 
         Paragraph::new(status_text)

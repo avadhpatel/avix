@@ -75,7 +75,7 @@ pub enum ParsedCommand {
     Invalid(String),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TuiState {
     pub connected: bool,
     pub agents: Vec<ActiveAgent>,
@@ -101,6 +101,37 @@ pub struct TuiState {
     pub command_bar_widget: CommandBarWidget,
     pub event_log_widget: EventLogWidget,
     pub help_modal_widget: HelpModalWidget,
+    pub startup_time: Instant,
+}
+
+impl Default for TuiState {
+    fn default() -> Self {
+        Self {
+            connected: false,
+            agents: Vec::new(),
+            notifications_count: 0,
+            hil_pending: 0,
+            agent_output_buffers: HashMap::new(),
+            pending_hil: None,
+            hil_started_at: None,
+            notifications_popup_open: false,
+            new_agent_form: None,
+            notifications: Vec::new(),
+            agent_list_widget: AgentListWidget::default(),
+            notification_bar_widget: NotificationBarWidget::default(),
+            command_mode: false,
+            command_input: None,
+            command_history: Vec::new(),
+            event_log: EventLog::default(),
+            log_visible: false,
+            help_modal_open: false,
+            status_widget: StatusWidget,
+            command_bar_widget: CommandBarWidget,
+            event_log_widget: EventLogWidget,
+            help_modal_widget: HelpModalWidget,
+            startup_time: Instant::now(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -331,10 +362,11 @@ mod tests {
             event_log: EventLog::default(),
             log_visible: true,
             help_modal_open: true,
-            status_widget: StatusWidget::default(),
-            command_bar_widget: CommandBarWidget::default(),
-            event_log_widget: EventLogWidget::default(),
-            help_modal_widget: HelpModalWidget::default(),
+            status_widget: StatusWidget,
+            command_bar_widget: CommandBarWidget,
+            event_log_widget: EventLogWidget,
+            help_modal_widget: HelpModalWidget,
+            startup_time: Instant::now(),
         };
         state.reducer(Action::Disconnect);
         assert!(!state.connected);

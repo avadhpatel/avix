@@ -112,6 +112,11 @@ pub async fn resolve_hil(
     .await
 }
 
+/// Send SIGKILL to an agent.
+pub async fn kill_agent(dispatcher: &Dispatcher, token: &str, pid: u64) -> Result<(), ClientError> {
+    send_signal(dispatcher, token, pid, "SIGKILL", None).await
+}
+
 /// List active processes. Returns the raw body array from the server.
 pub async fn list_agents(dispatcher: &Dispatcher, token: &str) -> Result<Vec<Value>, ClientError> {
     let body = dispatch(dispatcher, token, "proc", "list", serde_json::json!({})).await?;
@@ -306,6 +311,28 @@ mod tests {
         let cmds = fake.captured().await;
         assert_eq!(cmds[0].body["signal"], "SIGPIPE");
         assert_eq!(cmds[0].body["payload"]["text"], "hello world");
+    }
+
+    #[tokio::test]
+    async fn kill_agent_sends_sigkill() {
+        let fake = FakeDispatcher::new();
+        fake.set_reply("signal/send", ok_reply(serde_json::json!({})));
+
+        let cmd = Cmd::new(
+            "signal",
+            "send",
+            "tok",
+            serde_json::json!({
+                "pid": 123u64,
+                "signal": "SIGKILL",
+                "payload": null,
+            }),
+        );
+        fake.call(cmd).await.unwrap();
+
+        let cmds = fake.captured().await;
+        assert_eq!(cmds[0].body["signal"], "SIGKILL");
+        assert_eq!(cmds[0].body["pid"], 123);
     }
 
     #[tokio::test]

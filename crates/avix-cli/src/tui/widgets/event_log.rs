@@ -106,7 +106,7 @@ mod tests {
             timestamp: Instant::now(),
         });
         let widget = EventLogWidget::new();
-        let list = widget.render(&log, Rect::new(0, 0, 20, 24)); // Small width
-                                                                 // TODO: check truncation
+        let _list = widget.render(&log, Rect::new(0, 0, 20, 24)); // Small width
+                                                                  // TODO: check truncation
     }
 }

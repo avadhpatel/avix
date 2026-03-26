@@ -16,7 +16,7 @@ use tracing::{debug, info, warn};
 
 use avix_client_core::atp::types::{Event as AtpEvent, EventBody, EventKind};
 use avix_client_core::atp::{AtpClient, Dispatcher};
-use avix_client_core::commands::{list_agents, resolve_hil, spawn_agent};
+use avix_client_core::commands::{kill_agent, list_agents, resolve_hil, spawn_agent};
 use avix_client_core::config::ClientConfig;
 use avix_client_core::notification::{HilState, Notification, NotificationKind, NotificationStore};
 use avix_client_core::persistence;
@@ -240,13 +240,22 @@ async fn dispatch_parsed_command(
             }
         }
         ParsedCommand::Kill { pid } => {
-            // TODO: implement kill agent command
-            let notif = Notification::from_sys_alert(
-                "info",
-                &format!("Kill pid {} not implemented yet", pid),
-            );
-            let notifications = &shared_state.read().await.notifications;
-            notifications.add(notif).await;
+            let cmd_str = format!("kill {}", pid);
+            let log_event = TuiEvent::SentCommand {
+                cmd: cmd_str,
+                timestamp: std::time::Instant::now(),
+            };
+            let _ = action_tx.send(Action::LogEvent(log_event)).await;
+            if let Some(dispatcher) = &shared_state.read().await.dispatcher {
+                if let Err(e) = kill_agent(dispatcher, &client_config.credential, pid).await {
+                    let notif = Notification::from_sys_alert(
+                        "error",
+                        &format!("Kill pid {} failed: {}", pid, e),
+                    );
+                    let notifications = &shared_state.read().await.notifications;
+                    notifications.add(notif).await;
+                }
+            }
         }
         ParsedCommand::Help => {
             let log_event = TuiEvent::SentCommand {
