@@ -16,7 +16,8 @@ use tracing::{debug, info, warn};
 
 use avix_client_core::atp::types::{Event as AtpEvent, EventBody, EventKind};
 use avix_client_core::atp::{AtpClient, Dispatcher};
-use avix_client_core::commands::{kill_agent, list_agents, resolve_hil, spawn_agent};
+use avix_client_core::commands::{kill_agent, list_agents, resolve_hil};
+use avix_client_core::commands::spawn_agent::spawn_agent;
 use avix_client_core::config::ClientConfig;
 use avix_client_core::notification::{HilState, Notification, NotificationKind, NotificationStore};
 use avix_client_core::persistence;
@@ -306,7 +307,7 @@ async fn dispatch_parsed_command(
 async fn update_state_from_shared(
     state: &mut TuiState,
     shared: &SharedState,
-    config: &ClientConfig,
+    _config: &ClientConfig,
 ) {
     #[derive(Deserialize)]
     struct AgentInfo {
@@ -550,12 +551,9 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                 } else if state.help_modal_open {
                     // Help modal mode: handle Esc to close modal
                     // See [TUI Key Bindings Reference](docs/architecture/tui.md#key-bindings).
-                    match key.code {
-                        KeyCode::Esc => {
-                            debug!("Key event: close help modal");
-                            state.reducer(Action::CloseHelpModal);
-                        }
-                        _ => {}
+                    if key.code == KeyCode::Esc {
+                        debug!("Key event: close help modal");
+                        state.reducer(Action::CloseHelpModal);
                     }
                 } else if state.command_mode {
                     // Command mode

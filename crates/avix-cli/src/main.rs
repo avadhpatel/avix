@@ -8,7 +8,8 @@ use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt};
 
 use avix_client_core::atp::{AtpClient, Dispatcher};
-use avix_client_core::commands::{kill_agent, list_agents, resolve_hil, spawn_agent};
+use avix_client_core::commands::{kill_agent, list_agents, resolve_hil};
+use avix_client_core::commands::spawn_agent::spawn_agent;
 use avix_client_core::config::ClientConfig;
 use avix_client_core::persistence;
 
@@ -504,7 +505,7 @@ async fn main() -> Result<()> {
                 capabilities,
             } => {
                 let dispatcher = connect_config().await?;
-                let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+                let _config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
                 let pid = spawn_agent(
                     &dispatcher,
                     &name,
@@ -520,7 +521,7 @@ async fn main() -> Result<()> {
             }
             AgentCmd::List => {
                 let dispatcher = connect_config().await?;
-                let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+                let _config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
                 let agents = list_agents(&dispatcher).await?;
                 emit(
                     cli.json,
@@ -552,7 +553,7 @@ async fn main() -> Result<()> {
                 note,
             } => {
                 let dispatcher = connect_config().await?;
-                let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+                let _config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
                 resolve_hil(
                     &dispatcher,
                     pid,
@@ -575,7 +576,7 @@ async fn main() -> Result<()> {
                 note,
             } => {
                 let dispatcher = connect_config().await?;
-                let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+                let _config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
                 resolve_hil(
                     &dispatcher,
                     pid,

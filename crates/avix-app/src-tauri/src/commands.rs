@@ -4,8 +4,8 @@ use tauri::State;
 use avix_client_core::atp::types::HilOutcome;
 use avix_client_core::commands::{
     list_agents as core_list_agents, resolve_hil as core_resolve_hil,
-    spawn_agent as core_spawn_agent,
 };
+use avix_client_core::commands::spawn_agent::spawn_agent as core_spawn_agent;
 use avix_client_core::state::SharedState;
 
 #[derive(Serialize, Deserialize)]
@@ -21,10 +21,9 @@ pub async fn spawn_agent(
 ) -> Result<String, String> {
     let s = state.read().await;
     if let Some(dispatcher) = &s.dispatcher {
-        if let Some(session) = s.connection_status.session_id() {
+        if let Some(_session) = s.connection_status.session_id() {
             match core_spawn_agent(
                 dispatcher,
-                session,
                 &request.name,
                 &request.description,
                 &[],
@@ -50,7 +49,7 @@ pub async fn resolve_hil(
 ) -> Result<(), String> {
     let s = state.read().await;
     if let Some(dispatcher) = &s.dispatcher {
-        if let Some(session) = s.connection_status.session_id() {
+        if let Some(_session) = s.connection_status.session_id() {
             let (pid, token) = {
                 let pending = s.pending_hils.read().await;
                 pending.get(&id).cloned()
@@ -61,7 +60,7 @@ pub async fn resolve_hil(
             } else {
                 HilOutcome::Denied
             };
-            match core_resolve_hil(dispatcher, session, pid, &id, &token, approve, None).await {
+            match core_resolve_hil(dispatcher, pid, &id, &token, approve, None).await {
                 Ok(_) => {
                     // Remove from pending
                     let mut pending = s.pending_hils.write().await;
@@ -84,8 +83,8 @@ pub async fn resolve_hil(
 pub async fn list_agents(state: State<'_, SharedState>) -> Result<String, String> {
     let s = state.read().await;
     if let Some(dispatcher) = &s.dispatcher {
-        if let Some(session) = s.connection_status.session_id() {
-            match core_list_agents(dispatcher, session).await {
+        if let Some(_session) = s.connection_status.session_id() {
+            match core_list_agents(dispatcher).await {
                 Ok(agents) => serde_json::to_string(&agents).map_err(|e| e.to_string()),
                 Err(e) => Err(format!("Failed to list agents: {:?}", e)),
             }
