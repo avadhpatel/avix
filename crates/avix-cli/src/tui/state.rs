@@ -1,12 +1,79 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
+use avix_client_core::atp::types::EventKind;
 use avix_client_core::notification::{HilState, Notification};
 use avix_client_core::state::ActiveAgent;
 
 use crate::tui::widgets::agent_list::AgentListWidget;
 use crate::tui::widgets::agent_output::AgentOutputBuffer;
+use crate::tui::widgets::command_bar::CommandBarWidget;
+use crate::tui::widgets::event_log::EventLogWidget;
+use crate::tui::widgets::help_modal::HelpModalWidget;
 use crate::tui::widgets::notification_bar::NotificationBarWidget;
+use crate::tui::widgets::status::StatusWidget;
+
+#[derive(Debug, Clone, Default)]
+pub struct CommandInputState {
+    pub input: String,
+    pub cursor_pos: usize,
+    pub history_index: usize,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub enum TuiEvent {
+    SentCommand {
+        cmd: String,
+        #[allow(dead_code)]
+        timestamp: Instant,
+    },
+    ReceivedAtp {
+        kind: EventKind,
+        pid: Option<u64>,
+        summary: String,
+        #[allow(dead_code)]
+        timestamp: Instant,
+    },
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EventLog {
+    events: VecDeque<TuiEvent>,
+}
+
+impl EventLog {
+    pub fn push(&mut self, event: TuiEvent) {
+        self.events.push_back(event);
+        if self.events.len() > 10 {
+            self.events.pop_front();
+        }
+    }
+
+    pub fn events(&self) -> &VecDeque<TuiEvent> {
+        &self.events
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+pub enum ParsedCommand {
+    Quit,
+    Connect,
+    Spawn {
+        name: String,
+        goal: String,
+    },
+    Kill {
+        pid: u64,
+    },
+    Help,
+    ToggleLogs,
+    ToggleNotifications,
+    ToggleNewAgentForm,
+    #[allow(dead_code)]
+    Invalid(String),
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct TuiState {
@@ -22,6 +89,18 @@ pub struct TuiState {
     pub notifications: Vec<Notification>,
     pub agent_list_widget: AgentListWidget,
     pub notification_bar_widget: NotificationBarWidget,
+    // New fields for command input and logging
+    pub command_mode: bool,
+    pub command_input: Option<CommandInputState>,
+    pub command_history: Vec<String>,
+    pub event_log: EventLog,
+    pub log_visible: bool,
+    pub help_modal_open: bool,
+    // New widget instances
+    pub status_widget: StatusWidget,
+    pub command_bar_widget: CommandBarWidget,
+    pub event_log_widget: EventLogWidget,
+    pub help_modal_widget: HelpModalWidget,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +108,16 @@ pub struct NewAgentFormState {
     pub name: String,
     pub goal: String,
     pub focused_field: usize, // 0 = name, 1 = goal
+}
+
+#[derive(Debug, Clone)]
+pub enum InputDelta {
+    Char(char),
+    Backspace,
+    Left,
+    Right,
+    HistoryUp,
+    HistoryDown,
 }
 
 #[allow(dead_code)]
@@ -42,6 +131,14 @@ pub enum Action {
     SetPendingHil(Option<HilState>),
     ToggleNotificationsPopup,
     SetNewAgentForm(Option<NewAgentFormState>),
+    // New actions for command input and logging
+    EnterCommandMode,
+    ExitCommandMode,
+    UpdateCommandInput(InputDelta),
+    SubmitCommand(String),
+    LogEvent(TuiEvent),
+    ToggleLogs,
+    ToggleHelpModal,
 }
 
 impl TuiState {
@@ -57,6 +154,12 @@ impl TuiState {
                 self.hil_started_at = None;
                 self.notifications_popup_open = false;
                 self.new_agent_form = None;
+                self.command_mode = false;
+                self.command_input = None;
+                self.command_history.clear();
+                self.event_log = EventLog::default();
+                self.log_visible = false;
+                self.help_modal_open = false;
             }
             Action::UpdateAgents(agents) => self.agents = agents,
             Action::UpdateNotifications(count) => self.notifications_count = count,
@@ -76,6 +179,78 @@ impl TuiState {
                 self.notifications_popup_open = !self.notifications_popup_open
             }
             Action::SetNewAgentForm(form) => self.new_agent_form = form,
+            Action::EnterCommandMode => {
+                self.command_mode = true;
+                self.command_input = Some(CommandInputState {
+                    input: String::new(),
+                    cursor_pos: 0,
+                    history_index: self.command_history.len(),
+                });
+            }
+            Action::ExitCommandMode => {
+                self.command_mode = false;
+                self.command_input = None;
+            }
+            Action::UpdateCommandInput(delta) => {
+                if let Some(input_state) = &mut self.command_input {
+                    match delta {
+                        InputDelta::Char(c) => {
+                            input_state.input.insert(input_state.cursor_pos, c);
+                            input_state.cursor_pos += 1;
+                        }
+                        InputDelta::Backspace => {
+                            if input_state.cursor_pos > 0 {
+                                input_state.cursor_pos -= 1;
+                                input_state.input.remove(input_state.cursor_pos);
+                            }
+                        }
+                        InputDelta::Left => {
+                            if input_state.cursor_pos > 0 {
+                                input_state.cursor_pos -= 1;
+                            }
+                        }
+                        InputDelta::Right => {
+                            if input_state.cursor_pos < input_state.input.len() {
+                                input_state.cursor_pos += 1;
+                            }
+                        }
+                        InputDelta::HistoryUp => {
+                            if input_state.history_index > 0 {
+                                input_state.history_index -= 1;
+                                input_state.input =
+                                    self.command_history[input_state.history_index].clone();
+                                input_state.cursor_pos = input_state.input.len();
+                            }
+                        }
+                        InputDelta::HistoryDown => {
+                            if input_state.history_index < self.command_history.len() {
+                                input_state.history_index += 1;
+                                if input_state.history_index == self.command_history.len() {
+                                    input_state.input.clear();
+                                } else {
+                                    input_state.input =
+                                        self.command_history[input_state.history_index].clone();
+                                }
+                                input_state.cursor_pos = input_state.input.len();
+                            }
+                        }
+                    }
+                }
+            }
+            Action::SubmitCommand(cmd) => {
+                self.command_history.push(cmd);
+                self.command_mode = false;
+                self.command_input = None;
+            }
+            Action::LogEvent(event) => {
+                self.event_log.push(event);
+            }
+            Action::ToggleLogs => {
+                self.log_visible = !self.log_visible;
+            }
+            Action::ToggleHelpModal => {
+                self.help_modal_open = !self.help_modal_open;
+            }
         }
     }
 }
@@ -100,6 +275,11 @@ mod tests {
         assert!(state.notifications.is_empty());
         assert_eq!(state.agent_list_widget.selected_index, 0);
         assert_eq!(state.notification_bar_widget.selected_index, 0);
+        assert!(!state.command_mode);
+        assert!(state.command_input.is_none());
+        assert!(state.command_history.is_empty());
+        assert_eq!(state.event_log.events().len(), 0);
+        assert!(!state.log_visible);
     }
 
     #[test]
@@ -141,6 +321,20 @@ mod tests {
             notifications: vec![],
             agent_list_widget: AgentListWidget::default(),
             notification_bar_widget: NotificationBarWidget::default(),
+            command_mode: true,
+            command_input: Some(CommandInputState {
+                input: "test".into(),
+                cursor_pos: 4,
+                history_index: 1,
+            }),
+            command_history: vec!["prev".into()],
+            event_log: EventLog::default(),
+            log_visible: true,
+            help_modal_open: true,
+            status_widget: StatusWidget::default(),
+            command_bar_widget: CommandBarWidget::default(),
+            event_log_widget: EventLogWidget::default(),
+            help_modal_widget: HelpModalWidget::default(),
         };
         state.reducer(Action::Disconnect);
         assert!(!state.connected);
@@ -156,6 +350,12 @@ mod tests {
                                                  // widgets reset to default
         assert_eq!(state.agent_list_widget.selected_index, 0);
         assert_eq!(state.notification_bar_widget.selected_index, 0);
+        assert!(!state.command_mode);
+        assert!(state.command_input.is_none());
+        assert!(state.command_history.is_empty());
+        assert_eq!(state.event_log.events().len(), 0);
+        assert!(!state.log_visible);
+        assert!(!state.help_modal_open);
     }
 
     #[test]
@@ -233,5 +433,110 @@ mod tests {
         };
         state.reducer(Action::SetNewAgentForm(Some(form.clone())));
         assert_eq!(state.new_agent_form, Some(form));
+    }
+
+    #[test]
+    fn enter_command_mode_sets_mode_and_input() {
+        let mut state = TuiState::default();
+        state.reducer(Action::EnterCommandMode);
+        assert!(state.command_mode);
+        assert!(state.command_input.is_some());
+        let input = state.command_input.as_ref().unwrap();
+        assert_eq!(input.input, "");
+        assert_eq!(input.cursor_pos, 0);
+        assert_eq!(input.history_index, 0);
+    }
+
+    #[test]
+    fn exit_command_mode_clears_mode_and_input() {
+        let mut state = TuiState::default();
+        state.reducer(Action::EnterCommandMode);
+        assert!(state.command_mode);
+        state.reducer(Action::ExitCommandMode);
+        assert!(!state.command_mode);
+        assert!(state.command_input.is_none());
+    }
+
+    #[test]
+    fn update_command_input_char_inserts_at_cursor() {
+        let mut state = TuiState::default();
+        state.reducer(Action::EnterCommandMode);
+        state.reducer(Action::UpdateCommandInput(InputDelta::Char('h')));
+        state.reducer(Action::UpdateCommandInput(InputDelta::Char('i')));
+        let input = state.command_input.as_ref().unwrap();
+        assert_eq!(input.input, "hi");
+        assert_eq!(input.cursor_pos, 2);
+    }
+
+    #[test]
+    fn update_command_input_backspace_removes_at_cursor() {
+        let mut state = TuiState::default();
+        state.reducer(Action::EnterCommandMode);
+        state.reducer(Action::UpdateCommandInput(InputDelta::Char('h')));
+        state.reducer(Action::UpdateCommandInput(InputDelta::Char('i')));
+        state.reducer(Action::UpdateCommandInput(InputDelta::Left));
+        state.reducer(Action::UpdateCommandInput(InputDelta::Backspace));
+        let input = state.command_input.as_ref().unwrap();
+        assert_eq!(input.input, "i");
+        assert_eq!(input.cursor_pos, 0);
+    }
+
+    #[test]
+    fn update_command_input_left_right_moves_cursor() {
+        let mut state = TuiState::default();
+        state.reducer(Action::EnterCommandMode);
+        state.reducer(Action::UpdateCommandInput(InputDelta::Char('a')));
+        state.reducer(Action::UpdateCommandInput(InputDelta::Char('b')));
+        assert_eq!(state.command_input.as_ref().unwrap().cursor_pos, 2);
+        state.reducer(Action::UpdateCommandInput(InputDelta::Left));
+        assert_eq!(state.command_input.as_ref().unwrap().cursor_pos, 1);
+        state.reducer(Action::UpdateCommandInput(InputDelta::Right));
+        assert_eq!(state.command_input.as_ref().unwrap().cursor_pos, 2);
+    }
+
+    #[test]
+    fn submit_command_adds_to_history_and_exits_mode() {
+        let mut state = TuiState::default();
+        state.reducer(Action::EnterCommandMode);
+        state.reducer(Action::UpdateCommandInput(InputDelta::Char('t')));
+        state.reducer(Action::UpdateCommandInput(InputDelta::Char('e')));
+        state.reducer(Action::UpdateCommandInput(InputDelta::Char('s')));
+        state.reducer(Action::UpdateCommandInput(InputDelta::Char('t')));
+        state.reducer(Action::SubmitCommand("test".into()));
+        assert!(!state.command_mode);
+        assert!(state.command_input.is_none());
+        assert_eq!(state.command_history, vec!["test"]);
+        // History should be available when entering command mode again
+        state.reducer(Action::EnterCommandMode);
+        let input = state.command_input.as_ref().unwrap();
+        assert_eq!(input.history_index, 1);
+    }
+
+    #[test]
+    fn log_event_adds_to_log_and_caps_at_10() {
+        let mut state = TuiState::default();
+        for i in 0..12 {
+            let event = TuiEvent::SentCommand {
+                cmd: format!("cmd{}", i),
+                timestamp: Instant::now(),
+            };
+            state.reducer(Action::LogEvent(event));
+        }
+        assert_eq!(state.event_log.events().len(), 10);
+        if let TuiEvent::SentCommand { cmd, .. } = &state.event_log.events()[0] {
+            assert_eq!(cmd, "cmd2");
+        } else {
+            panic!("Expected SentCommand");
+        }
+    }
+
+    #[test]
+    fn toggle_logs_toggles_visibility() {
+        let mut state = TuiState::default();
+        assert!(!state.log_visible);
+        state.reducer(Action::ToggleLogs);
+        assert!(state.log_visible);
+        state.reducer(Action::ToggleLogs);
+        assert!(!state.log_visible);
     }
 }

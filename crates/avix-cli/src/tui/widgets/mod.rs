@@ -1,5 +1,9 @@
 pub mod agent_list;
 pub mod agent_output;
+pub mod command_bar;
+pub mod event_log;
+pub mod help_modal;
 pub mod hil_modal;
 pub mod new_agent_form;
 pub mod notification_bar;
+pub mod status;

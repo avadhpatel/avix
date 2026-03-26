@@ -4,8 +4,8 @@ use tokio::sync::RwLock;
 use tracing::debug;
 use tracing::warn;
 
-use crate::atp::{AtpClient, Dispatcher, EventEmitter};
 use crate::atp::types::AgentStatus;
+use crate::atp::{AtpClient, Dispatcher, EventEmitter};
 use crate::config::ClientConfig;
 use crate::error::ClientError;
 use crate::notification::NotificationStore;
@@ -98,10 +98,16 @@ impl AppState {
             let agents_len = 0; // no agents loaded yet
             let notifs_count = self.notifications.unread_count().await;
             let hil_pending = 0; // no hil loaded yet
-            debug!("State update agents={} notifs={} hil={}", agents_len, notifs_count, hil_pending);
+            debug!(
+                "State update agents={} notifs={} hil={}",
+                agents_len, notifs_count, hil_pending
+            );
         }
 
-        debug!("State init: connecting to ATP server {}", self.config.server_url);
+        debug!(
+            "State init: connecting to ATP server {}",
+            self.config.server_url
+        );
 
         self.connection_status = ConnectionStatus::Connecting;
 

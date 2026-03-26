@@ -14,7 +14,7 @@ pub fn app_data_dir() -> PathBuf {
             warn!("Unable to determine config directory");
             panic!("Unable to determine config directory");
         },
-        |p| p.join("avix")
+        |p| p.join("avix"),
     );
     debug!("app_data_dir={:?}", dir);
     dir
@@ -34,7 +34,11 @@ where
         ClientError::Other(e.into())
     })?;
     serde_json::from_str(&content).map_err(|e| {
-        warn!("Failed to deserialize JSON from file {}: {}", path.display(), e);
+        warn!(
+            "Failed to deserialize JSON from file {}: {}",
+            path.display(),
+            e
+        );
         ClientError::Json(e)
     })
 }
@@ -45,7 +49,11 @@ where
 {
     let tmp_path = path.with_extension("tmp");
     let json = serde_json::to_string_pretty(value).map_err(|e| {
-        warn!("Failed to serialize value to JSON for {}: {}", path.display(), e);
+        warn!(
+            "Failed to serialize value to JSON for {}: {}",
+            path.display(),
+            e
+        );
         ClientError::Json(e)
     })?;
     debug!("write {:?} {}B", path, json.len());
@@ -54,7 +62,12 @@ where
         ClientError::Other(e.into())
     })?;
     fs::rename(&tmp_path, path).map_err(|e| {
-        warn!("Failed to rename {} to {}: {}", tmp_path.display(), path.display(), e);
+        warn!(
+            "Failed to rename {} to {}: {}",
+            tmp_path.display(),
+            path.display(),
+            e
+        );
         ClientError::Other(e.into())
     })
 }

@@ -23,7 +23,7 @@ use avix_client_core::persistence;
 use avix_client_core::server::ServerHandle;
 use avix_client_core::state::{new_shared, SharedState};
 
-use super::state::{Action, NewAgentFormState, TuiState};
+use super::state::{Action, InputDelta, NewAgentFormState, TuiEvent, TuiState};
 use super::widgets::hil_modal::render_hil_modal;
 use super::widgets::new_agent_form::NewAgentFormWidget;
 
@@ -39,6 +39,33 @@ async fn dispatch_event(
     action_tx: &tokio::sync::mpsc::Sender<Action>,
 ) {
     debug!("Dispatching event: {:?}", event.kind);
+
+    // Log the received event
+    let summary = match &event.body {
+        EventBody::AgentOutput(body) => format!("AgentOutput pid={}", body.pid),
+        EventBody::AgentStatus(body) => {
+            format!("AgentStatus pid={} status={:?}", body.pid, body.status)
+        }
+        EventBody::AgentExit(body) => format!("AgentExit pid={}", body.pid),
+        EventBody::HilRequest(body) => format!("HilRequest pid={}", body.pid),
+        EventBody::HilResolved(body) => format!("HilResolved hil_id={}", body.hil_id),
+        EventBody::SysAlert(body) => format!("SysAlert: {}", body.message),
+        _ => format!("{:?}", event.kind),
+    };
+    let log_event = TuiEvent::ReceivedAtp {
+        kind: event.kind.clone(),
+        pid: match &event.body {
+            EventBody::AgentOutput(body) => Some(body.pid),
+            EventBody::AgentStatus(body) => Some(body.pid),
+            EventBody::AgentExit(body) => Some(body.pid),
+            EventBody::HilRequest(body) => Some(body.pid),
+            _ => None,
+        },
+        summary,
+        timestamp: std::time::Instant::now(),
+    };
+    let _ = action_tx.send(Action::LogEvent(log_event)).await;
+
     match event.kind {
         EventKind::AgentOutput => {
             if let EventBody::AgentOutput(body) = event.body {
@@ -115,9 +142,163 @@ async fn dispatch_event(
     }
 }
 
+async fn dispatch_parsed_command(
+    cmd: super::state::ParsedCommand,
+    shared_state: &SharedState,
+    client_config: &ClientConfig,
+    action_tx: &tokio::sync::mpsc::Sender<Action>,
+    current_tui_state: &TuiState,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use super::state::ParsedCommand;
+    match cmd {
+        ParsedCommand::Quit => {
+            // Quit is handled at the app level, but we can send a notification
+            let notif = Notification::from_sys_alert("info", "Quit command received");
+            let notifications = &shared_state.read().await.notifications;
+            notifications.add(notif).await;
+        }
+        ParsedCommand::Connect => {
+            let log_event = TuiEvent::SentCommand {
+                cmd: "connect".to_string(),
+                timestamp: std::time::Instant::now(),
+            };
+            let _ = action_tx.send(Action::LogEvent(log_event)).await;
+            if !matches!(
+                shared_state.read().await.connection_status,
+                avix_client_core::state::ConnectionStatus::Connected { .. }
+            ) {
+                if let Err(e) = ServerHandle::ensure_running(client_config).await {
+                    let notif = Notification::from_sys_alert(
+                        "error",
+                        &format!("Local server failed to start: {}", e),
+                    );
+                    let notifications = &shared_state.read().await.notifications;
+                    notifications.add(notif).await;
+                } else {
+                    match AtpClient::connect(client_config.clone()).await {
+                        Ok(client) => {
+                            let dispatcher = Arc::new(Dispatcher::new(client));
+                            {
+                                let mut s = shared_state.write().await;
+                                s.connection_status =
+                                    avix_client_core::state::ConnectionStatus::Connected {
+                                        session_id: "tui-session".into(),
+                                    };
+                                let mut rx = dispatcher.events();
+                                let state_c = Arc::clone(shared_state);
+                                let notifications = Arc::clone(&s.notifications);
+                                let action_tx_c = action_tx.clone();
+                                tokio::spawn(async move {
+                                    loop {
+                                        match rx.recv().await {
+                                            Ok(event) => {
+                                                dispatch_event(
+                                                    &state_c,
+                                                    &notifications,
+                                                    event,
+                                                    &action_tx_c,
+                                                )
+                                                .await;
+                                            }
+                                            Err(
+                                                tokio::sync::broadcast::error::RecvError::Lagged(n),
+                                            ) => {
+                                                warn!("Event receiver lagged by {} messages", n);
+                                            }
+                                            Err(_) => {
+                                                warn!("ATP event stream closed");
+                                                break;
+                                            }
+                                        }
+                                    }
+                                });
+                                s.dispatcher = Some(dispatcher);
+                            }
+                            action_tx.send(Action::Connect).await?;
+                        }
+                        Err(e) => {
+                            let notif = Notification::from_sys_alert(
+                                "error",
+                                &format!("Connection failed: {}", e),
+                            );
+                            let notifications = &shared_state.read().await.notifications;
+                            notifications.add(notif).await;
+                        }
+                    }
+                }
+            }
+        }
+        ParsedCommand::Spawn { name, goal } => {
+            let cmd_str = format!("spawn {} \"{}\"", name, goal);
+            let log_event = TuiEvent::SentCommand {
+                cmd: cmd_str,
+                timestamp: std::time::Instant::now(),
+            };
+            let _ = action_tx.send(Action::LogEvent(log_event)).await;
+            if let Some(dispatcher) = &shared_state.read().await.dispatcher {
+                let _ = spawn_agent(dispatcher, &client_config.credential, &name, &goal, &[]).await;
+            }
+        }
+        ParsedCommand::Kill { pid } => {
+            // TODO: implement kill agent command
+            let notif = Notification::from_sys_alert(
+                "info",
+                &format!("Kill pid {} not implemented yet", pid),
+            );
+            let notifications = &shared_state.read().await.notifications;
+            notifications.add(notif).await;
+        }
+        ParsedCommand::Help => {
+            let log_event = TuiEvent::SentCommand {
+                cmd: "help".to_string(),
+                timestamp: std::time::Instant::now(),
+            };
+            let _ = action_tx.send(Action::LogEvent(log_event)).await;
+            action_tx.send(Action::ToggleHelpModal).await?;
+        }
+        ParsedCommand::ToggleLogs => {
+            let log_event = TuiEvent::SentCommand {
+                cmd: "logs".to_string(),
+                timestamp: std::time::Instant::now(),
+            };
+            let _ = action_tx.send(Action::LogEvent(log_event)).await;
+            action_tx.send(Action::ToggleLogs).await?;
+        }
+        ParsedCommand::ToggleNotifications => {
+            let log_event = TuiEvent::SentCommand {
+                cmd: "notifs".to_string(),
+                timestamp: std::time::Instant::now(),
+            };
+            let _ = action_tx.send(Action::LogEvent(log_event)).await;
+            action_tx.send(Action::ToggleNotificationsPopup).await?;
+        }
+        ParsedCommand::ToggleNewAgentForm => {
+            let log_event = TuiEvent::SentCommand {
+                cmd: "new-agent-form".to_string(),
+                timestamp: std::time::Instant::now(),
+            };
+            let _ = action_tx.send(Action::LogEvent(log_event)).await;
+            let new_form = if current_tui_state.new_agent_form.is_some() {
+                None
+            } else {
+                Some(NewAgentFormState {
+                    name: String::new(),
+                    goal: String::new(),
+                    focused_field: 0,
+                })
+            };
+            action_tx.send(Action::SetNewAgentForm(new_form)).await?;
+        }
+        ParsedCommand::Invalid(_) => {} // Already handled in caller
+    }
+    Ok(())
+}
 
-
-async fn update_state_from_shared(state: &mut TuiState, shared: &SharedState, config: &ClientConfig) {
+async fn update_state_from_shared(
+    state: &mut TuiState,
+    shared: &SharedState,
+    config: &ClientConfig,
+) {
     #[derive(Deserialize)]
     struct AgentInfo {
         pid: u64,
@@ -204,7 +385,10 @@ fn restore_terminal(terminal: &mut Tui) -> Result<()> {
 async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
     let mut state = TuiState::default();
     let client_config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
-    debug!("TUI config: url={} identity={}", client_config.server_url, client_config.identity);
+    debug!(
+        "TUI config: url={} identity={}",
+        client_config.server_url, client_config.identity
+    );
     let shared_state = new_shared(client_config.clone());
     let (action_tx, mut action_rx) = mpsc::channel(100);
 
@@ -290,9 +474,14 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                             debug!("Key event: submit new agent form");
                             // Submit form
                             if let Some(dispatcher) = &shared_state.read().await.dispatcher {
-                                let _ =
-                                    spawn_agent(dispatcher, &client_config.credential, &form.name, &form.goal, &[])
-                                        .await;
+                                let _ = spawn_agent(
+                                    dispatcher,
+                                    &client_config.credential,
+                                    &form.name,
+                                    &form.goal,
+                                    &[],
+                                )
+                                .await;
                             }
                             state.reducer(Action::SetNewAgentForm(None));
                         }
@@ -352,18 +541,75 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                         }
                         _ => {}
                     }
+                } else if state.command_mode {
+                    // Command mode
+                    match key.code {
+                        KeyCode::Esc => {
+                            state.reducer(Action::ExitCommandMode);
+                        }
+                        KeyCode::Enter => {
+                            if let Some(input) = &state.command_input {
+                                let cmd = input.input.clone();
+                                state.reducer(Action::SubmitCommand(cmd.clone()));
+                                // Parse and dispatch
+                                match super::parser::parse(&format!(":{}", cmd)) {
+                                    Ok(parsed) => {
+                                        let _ = dispatch_parsed_command(
+                                            parsed,
+                                            &shared_state,
+                                            &client_config,
+                                            &action_tx,
+                                            &state,
+                                        )
+                                        .await;
+                                    }
+                                    Err(e) => {
+                                        let notif = Notification::from_sys_alert("error", &e);
+                                        let notifications =
+                                            &shared_state.read().await.notifications;
+                                        let _ = notifications.add(notif).await;
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            state.reducer(Action::UpdateCommandInput(InputDelta::Char(c)));
+                        }
+                        KeyCode::Backspace => {
+                            state.reducer(Action::UpdateCommandInput(InputDelta::Backspace));
+                        }
+                        KeyCode::Left => {
+                            state.reducer(Action::UpdateCommandInput(InputDelta::Left));
+                        }
+                        KeyCode::Right => {
+                            state.reducer(Action::UpdateCommandInput(InputDelta::Right));
+                        }
+                        KeyCode::Up => {
+                            state.reducer(Action::UpdateCommandInput(InputDelta::HistoryUp));
+                        }
+                        KeyCode::Down => {
+                            state.reducer(Action::UpdateCommandInput(InputDelta::HistoryDown));
+                        }
+                        _ => {}
+                    }
                 } else {
                     // Normal mode
                     match key.code {
+                        KeyCode::Char('/') => {
+                            state.reducer(Action::EnterCommandMode);
+                        }
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('c') => {
                             if !state.connected {
                                 // Ensure server is running
                                 if let Err(e) = ServerHandle::ensure_running(&client_config).await {
                                     warn!("Failed to ensure local server running: {}", e);
-                                    let notif = Notification::from_sys_alert("error", &format!("Local server failed to start: {}", e));
+                                    let notif = Notification::from_sys_alert(
+                                        "error",
+                                        &format!("Local server failed to start: {}", e),
+                                    );
                                     let notifications = &shared_state.read().await.notifications;
-let _ = notifications.add(notif).await;
+                                    let _ = notifications.add(notif).await;
                                 }
                                 debug!("Connecting to WS {}", client_config.server_url);
                                 match AtpClient::connect(client_config.clone()).await {
@@ -416,7 +662,12 @@ let _ = notifications.add(notif).await;
                                             "error",
                                             &format!("Connection failed: {e}"),
                                         );
-                                        let _ = shared_state.read().await.notifications.add(notif).await;
+                                        let _ = shared_state
+                                            .read()
+                                            .await
+                                            .notifications
+                                            .add(notif)
+                                            .await;
                                     }
                                 }
                             }
@@ -501,60 +752,95 @@ fn ui(f: &mut ratatui::Frame, state: &TuiState) {
         return;
     }
 
+    // If help modal open, render it
+    if state.help_modal_open {
+        let size = f.size();
+        let modal_area = Rect {
+            x: size.width / 8,
+            y: size.height / 8,
+            width: (size.width * 6) / 8,
+            height: (size.height * 6) / 8,
+        };
+        let list = state.help_modal_widget.render(modal_area);
+        f.render_widget(list, modal_area);
+        return;
+    }
+
     let size = f.size();
 
+    let command_bar_height = if state.command_mode { 2 } else { 0 };
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // status bar
-            Constraint::Length(10), // agents list
-            Constraint::Min(1),     // output pane
-            Constraint::Length(1),  // notification bar
+            Constraint::Length(3),                  // status bar
+            Constraint::Percentage(20),             // agents list
+            Constraint::Min(10),                    // main area (log | output)
+            Constraint::Length(command_bar_height), // command bar
+            Constraint::Length(1),                  // notification bar
         ])
         .split(size);
 
+    let main_area = Layout::horizontal([
+        Constraint::Percentage(if state.log_visible { 30 } else { 0 }), // log
+        Constraint::Percentage(100),                                    // output
+    ])
+    .split(layout[2]);
+
     // Status bar
-    let status = if state.connected {
-        "Connected"
-    } else {
-        "Disconnected"
-    };
-    let status_bar =
-        Paragraph::new(status).style(Style::default().fg(Color::White).bg(Color::Blue));
+    let status_bar = state.status_widget.render(state);
     f.render_widget(status_bar, layout[0]);
 
     // Agents list
     let agents_list = state.agent_list_widget.render(&state.agents, layout[1]);
     f.render_widget(agents_list, layout[1]);
 
+    // Event log (if visible)
+    if state.log_visible {
+        let event_log = state
+            .event_log_widget
+            .render(&state.event_log, main_area[0]);
+        f.render_widget(event_log, main_area[0]);
+    }
+
     // Agent output pane
+    let output_area = if state.log_visible {
+        main_area[1]
+    } else {
+        layout[2]
+    };
     if let Some(selected_pid) = state
         .agents
         .get(state.agent_list_widget.selected_index)
         .map(|a| a.pid)
     {
         if let Some(buf) = state.agent_output_buffers.get(&selected_pid) {
-            let output_para = buf.render(selected_pid, layout[2]);
-            f.render_widget(output_para, layout[2]);
+            let output_para = buf.render(selected_pid, output_area);
+            f.render_widget(output_para, output_area);
         } else {
             let empty = Paragraph::new("No output yet").block(
                 Block::default()
                     .borders(Borders::ALL)
                     .title(format!("Agent {} Output", selected_pid)),
             );
-            f.render_widget(empty, layout[2]);
+            f.render_widget(empty, output_area);
         }
     } else {
         let no_selection = Paragraph::new("No agent selected")
             .block(Block::default().borders(Borders::ALL).title("Agent Output"));
-        f.render_widget(no_selection, layout[2]);
+        f.render_widget(no_selection, output_area);
+    }
+
+    // Command bar (if in command mode)
+    if state.command_mode {
+        let command_bar = state.command_bar_widget.render(state);
+        f.render_widget(command_bar, layout[3]);
     }
 
     // Notifications bar
     let notifs_bar = state
         .notification_bar_widget
         .render_bar(state.notifications_count);
-    f.render_widget(notifs_bar, layout[3]);
+    f.render_widget(notifs_bar, layout[4]);
 }
 
 impl TuiState {

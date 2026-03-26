@@ -2,7 +2,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State, ConnectInfo};
+use axum::extract::{
+    ws::{Message, WebSocket, WebSocketUpgrade},
+    ConnectInfo, State,
+};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -63,8 +66,12 @@ impl GatewayServer {
         let user_addr = self.config.user_addr;
         let admin_addr = self.config.admin_addr;
 
-        let user_bound = Arc::clone(&self).bind_and_run(user_addr, false, test_mode).await?;
-        let admin_bound = Arc::clone(&self).bind_and_run(admin_addr, true, test_mode).await?;
+        let user_bound = Arc::clone(&self)
+            .bind_and_run(user_addr, false, test_mode)
+            .await?;
+        let admin_bound = Arc::clone(&self)
+            .bind_and_run(admin_addr, true, test_mode)
+            .await?;
 
         Ok((user_bound, admin_bound))
     }
@@ -78,7 +85,9 @@ impl GatewayServer {
     ) -> anyhow::Result<SocketAddr> {
         // Build IPC router: use test router if test_mode, else configured socket, fall back to env var, then null.
         let ipc: Arc<dyn crate::gateway::handlers::IpcRouter> = if test_mode {
-            Arc::new(crate::gateway::handlers::TestIpcRouter::new(Arc::clone(&self.event_bus)))
+            Arc::new(crate::gateway::handlers::TestIpcRouter::new(Arc::clone(
+                &self.event_bus,
+            )))
         } else {
             self.config
                 .kernel_sock
@@ -157,13 +166,18 @@ impl GatewayServer {
                         AtpEventKind::SysService,
                         AtpEventKind::SysAlert,
                     ] {
-                        let (min_role, owner_scoped) = crate::gateway::event_bus::event_scope(&kind);
+                        let (min_role, owner_scoped) =
+                            crate::gateway::event_bus::event_scope(&kind);
                         let event = crate::gateway::atp::frame::AtpEvent::new(
                             kind,
                             "test-emitter",
                             serde_json::json!({ "test": true }),
                         );
-                        event_bus.publish(event, owner_scoped.then(|| "test-session".to_string()), min_role);
+                        event_bus.publish(
+                            event,
+                            owner_scoped.then(|| "test-session".to_string()),
+                            min_role,
+                        );
                     }
                     tracing::debug!("emitted all event kinds for testing");
                 }
@@ -212,7 +226,7 @@ async fn handle_login(
                 Err(_) => {
                     error!(remote_addr = %addr, identity = %session.identity_name, "ATP token issue failed after login success");
                     StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                },
+                }
             }
         }
         Err(_) => {
@@ -221,7 +235,7 @@ async fn handle_login(
                 StatusCode::UNAUTHORIZED,
                 Json(json!({"error": "EAUTH", "message": "invalid credential"})),
             )
-            .into_response()
+                .into_response()
         }
     }
 }
@@ -433,7 +447,7 @@ async fn writer_task(mut sender: SplitSink<WebSocket, Message>, mut rx: mpsc::Re
             WsOutMsg::Text(t) => {
                 trace!(frame_len = t.len(), frame = %t, "outgoing ATP frame");
                 Message::Text(t)
-            },
+            }
             WsOutMsg::Ping => Message::Ping(vec![]),
         };
         if sender.send(ws_msg).await.is_err() {

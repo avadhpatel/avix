@@ -313,7 +313,12 @@ async fn main() -> Result<()> {
         )
         .with(log_level);
     tracing::subscriber::set_global_default(subscriber)?;
-    tracing::info!("log_dir={} level={:?} filename={}", log_dir.display(), cli.log, log_filename);
+    tracing::info!(
+        "log_dir={} level={:?} filename={}",
+        log_dir.display(),
+        cli.log,
+        log_filename
+    );
 
     match cli.command {
         Cmd::Config { sub } => match sub {
@@ -367,7 +372,11 @@ async fn main() -> Result<()> {
                 }
             }
 
-            ConfigCmd::Server { root, port, test_mode } => {
+            ConfigCmd::Server {
+                root,
+                port,
+                test_mode,
+            } => {
                 let root = expand_home(root);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
                 runtime.start_daemon(port, test_mode).await?;
@@ -467,7 +476,11 @@ async fn main() -> Result<()> {
             println!("--- Done ---");
         }
 
-        Cmd::Server { root, port, test_mode } => {
+        Cmd::Server {
+            root,
+            port,
+            test_mode,
+        } => {
             let root = expand_home(root);
             let runtime = Runtime::bootstrap_with_root(&root).await?;
             runtime.start_daemon(port, test_mode).await?;
@@ -522,7 +535,11 @@ async fn main() -> Result<()> {
                 send_signal(&dispatcher, &config.credential, pid, "SIGKILL", None).await?;
                 emit(cli.json, |_: &()| format!("Killed agent {}", pid), ());
             }
-            AgentCmd::Server { root, port, test_mode } => {
+            AgentCmd::Server {
+                root,
+                port,
+                test_mode,
+            } => {
                 let root = expand_home(root);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
                 runtime.start_daemon(port, test_mode).await?;
@@ -578,7 +595,11 @@ async fn main() -> Result<()> {
                     (),
                 );
             }
-            HilCmd::Server { root, port, test_mode } => {
+            HilCmd::Server {
+                root,
+                port,
+                test_mode,
+            } => {
                 let root = expand_home(root);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
                 runtime.start_daemon(port, test_mode).await?;
@@ -699,9 +720,12 @@ fn build_llm_client(provider: &ProviderConfig, model: &str) -> Result<Box<dyn Ll
 /// Links: docs/dev_plans/ATP-WS-TESTS-PLAN.md#52
 async fn run_atp_shell(server_url: String, token: Option<String>) -> Result<()> {
     use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::{connect_async, tungstenite::{client::IntoClientRequest, Message}};
     use serde_json::Value;
     use std::io::{self, Write};
+    use tokio_tungstenite::{
+        connect_async,
+        tungstenite::{client::IntoClientRequest, Message},
+    };
 
     println!("ATP Shell — connecting to {}", server_url);
 
@@ -718,20 +742,28 @@ async fn run_atp_shell(server_url: String, token: Option<String>) -> Result<()> 
 
     // HTTP login
     let client = reqwest::Client::new();
-    let login_url = server_url.replace("ws://", "http://").replace("wss://", "https://").replace("/atp", "/atp/auth/login");
+    let login_url = server_url
+        .replace("ws://", "http://")
+        .replace("wss://", "https://")
+        .replace("/atp", "/atp/auth/login");
     let resp = client
         .post(&login_url)
         .json(&serde_json::json!({"identity": "test", "credential": credential}))
         .send()
         .await?;
     let body: Value = resp.json().await?;
-    let token = body["token"].as_str().ok_or_else(|| anyhow::anyhow!("Login failed: {:?}", body))?.to_string();
+    let token = body["token"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Login failed: {:?}", body))?
+        .to_string();
 
     println!("Logged in, connecting WS...");
 
     // Connect WS
     let mut request = server_url.into_client_request()?;
-    request.headers_mut().insert("Authorization", format!("Bearer {}", token).parse()?);
+    request
+        .headers_mut()
+        .insert("Authorization", format!("Bearer {}", token).parse()?);
     let (ws_stream, _) = connect_async(request).await?;
     let (mut write, mut read) = ws_stream.split();
 
@@ -792,7 +824,9 @@ async fn run_atp_shell(server_url: String, token: Option<String>) -> Result<()> 
                         println!("Sent: {}", req);
                     }
                     Err(_) => {
-                        eprintln!("Invalid JSON. Try: {{\"method\": \"proc.list\", \"params\": {{}}}}");
+                        eprintln!(
+                            "Invalid JSON. Try: {{\"method\": \"proc.list\", \"params\": {{}}}}"
+                        );
                     }
                 }
             }
@@ -814,5 +848,3 @@ fn expand_home(path: PathBuf) -> PathBuf {
     }
     path
 }
-
-

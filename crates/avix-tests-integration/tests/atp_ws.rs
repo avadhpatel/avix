@@ -8,6 +8,7 @@
 //! - Test Spec: docs/dev_plans/ATP-WS-TEST-SUITE-SPEC-20241025.md
 
 use anyhow::Result;
+use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -15,7 +16,6 @@ use tokio::process::Command;
 use tokio::time::{sleep, timeout};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{info, span, Level};
-use futures_util::{StreamExt, SinkExt};
 
 /// Spawns a debug Avix server on a dynamic port with temp root.
 /// Initializes config with test user, waits for the server to be ready.
@@ -134,16 +134,30 @@ async fn login_http(port: u16, credential: &str) -> Result<String> {
 ///
 /// # WebSocket Connection
 /// Refer to docs/dev_plans/ATP-PROTOCOL-REVIEW-20241025.md for WS upgrade.
-async fn ws_connect(token: &str, port: u16) -> Result<(futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>, futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>)> {
+async fn ws_connect(
+    token: &str,
+    port: u16,
+) -> Result<(
+    futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        Message,
+    >,
+    futures_util::stream::SplitStream<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    >,
+)> {
     let _span = span!(Level::INFO, "ws_connect", port).entered();
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
     let url = format!("ws://localhost:{}/atp", port);
     let mut request = url.into_client_request()?;
-    request.headers_mut().insert(
-        "Authorization",
-        format!("Bearer {}", token).parse()?,
-    );
+    request
+        .headers_mut()
+        .insert("Authorization", format!("Bearer {}", token).parse()?);
 
     let (ws_stream, _) = connect_async(request).await?;
     let (write, read) = ws_stream.split();
@@ -158,8 +172,17 @@ async fn ws_connect(token: &str, port: u16) -> Result<(futures_util::stream::Spl
 /// ATP supports JSON-RPC 2.0 for commands.
 /// Refer to docs/architecture/04-atp.md for RPC details.
 async fn send_rpc(
-    write: &mut futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>,
-    read: &mut futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+    write: &mut futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        Message,
+    >,
+    read: &mut futures_util::stream::SplitStream<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    >,
     method: &str,
     params: Value,
 ) -> Result<Value> {
@@ -192,7 +215,12 @@ async fn send_rpc(
 /// Refer to ATP protocol for subscription details.
 /// Links: docs/dev_plans/ATP-PROTOCOL-REVIEW-20241025.md
 async fn send_subscribe(
-    write: &mut futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>,
+    write: &mut futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        Message,
+    >,
     events: Vec<&str>,
 ) -> Result<()> {
     let _span = span!(Level::INFO, "send_subscribe").entered();
@@ -211,7 +239,11 @@ async fn send_subscribe(
 /// Refer to ATP event format.
 /// Links: docs/architecture/04-atp.md
 async fn recv_event(
-    read: &mut futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+    read: &mut futures_util::stream::SplitStream<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    >,
 ) -> Result<Value> {
     let _span = span!(Level::INFO, "recv_event").entered();
     let msg_opt = timeout(Duration::from_secs(30), read.next()).await?;
@@ -263,13 +295,13 @@ async fn test_errors() -> Result<()> {
         .send()
         .await?;
     assert_eq!(resp.status(), 401); // Assuming it returns 401
-    // Try WS with bad token
+                                    // Try WS with bad token
     let bad_token = "bad";
     let (mut write, mut read) = ws_connect(bad_token, port).await?;
     // Send session.ready, should fail
     let resp = send_rpc(&mut write, &mut read, "session.ready", json!({})).await;
     assert!(resp.is_err()); // Should fail
-    // Kill server
+                            // Kill server
     server.kill().await?;
     info!("Test errors passed");
     Ok(())
@@ -288,9 +320,15 @@ async fn test_events() -> Result<()> {
     // Subscribe to proc events
     send_subscribe(&mut write, vec!["*"]).await?;
     // Send proc.start
-    let resp = send_rpc(&mut write, &mut read, "proc.spawn", json!({"cmd": ["echo", "hello"], "name": "test-proc"})).await?;
+    let resp = send_rpc(
+        &mut write,
+        &mut read,
+        "proc.spawn",
+        json!({"cmd": ["echo", "hello"], "name": "test-proc"}),
+    )
+    .await?;
     assert!(resp["result"].is_object()); // Should return proc info
-    // Receive proc.start event
+                                         // Receive proc.start event
     let event = recv_event(&mut read).await?;
     assert_eq!(event["type"], "proc.start");
     // Kill server
@@ -314,7 +352,13 @@ async fn test_proc_lifecycle() -> Result<()> {
     // Subscribe to all events
     send_subscribe(&mut write, vec!["*"]).await?;
     // Spawn a proc
-    let resp = send_rpc(&mut write, &mut read, "proc.spawn", json!({"cmd": ["echo", "hi"], "name": "test-proc"})).await?;
+    let resp = send_rpc(
+        &mut write,
+        &mut read,
+        "proc.spawn",
+        json!({"cmd": ["echo", "hi"], "name": "test-proc"}),
+    )
+    .await?;
     assert!(resp["result"].is_object());
     let pid = resp["result"]["id"].as_u64().unwrap();
     // Receive proc.start event
@@ -376,7 +420,10 @@ async fn test_full_errors() -> Result<()> {
         let msg = msg?;
         if let Message::Text(text) = msg {
             let resp: Value = serde_json::from_str(&text)?;
-            assert!(resp.get("error").is_some(), "Malformed JSON should return error");
+            assert!(
+                resp.get("error").is_some(),
+                "Malformed JSON should return error"
+            );
         }
     }
     // Kill servers
@@ -401,7 +448,13 @@ async fn test_basic_reconnect() -> Result<()> {
     // Subscribe
     send_subscribe(&mut write, vec!["*"]).await?;
     // Spawn a proc
-    let resp = send_rpc(&mut write, &mut read, "proc.spawn", json!({"cmd": ["sleep", "10"], "name": "persistent-proc"})).await?;
+    let resp = send_rpc(
+        &mut write,
+        &mut read,
+        "proc.spawn",
+        json!({"cmd": ["sleep", "10"], "name": "persistent-proc"}),
+    )
+    .await?;
     let pid = resp["result"]["id"].as_u64().unwrap();
     // Close WS (drop handles)
     drop(write);

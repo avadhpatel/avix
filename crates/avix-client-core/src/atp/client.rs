@@ -210,7 +210,10 @@ mod tests {
         // Should be an error indicating auth failure (Http or Other)
         match err {
             ClientError::Http(_) | ClientError::Other(_) => {}
-            _ => panic!("Expected Http or Other error for auth failure, got {:?}", err),
+            _ => panic!(
+                "Expected Http or Other error for auth failure, got {:?}",
+                err
+            ),
         }
         _m.assert_async().await;
     }

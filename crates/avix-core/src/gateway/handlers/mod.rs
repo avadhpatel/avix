@@ -99,7 +99,7 @@ impl IpcRouter for TestIpcRouter {
         match method {
             "kernel/proc/spawn" => {
                 // Simulate spawning an echo or sleep proc
-                let cmd = params["cmd"].as_array().map(|v| v.clone()).unwrap_or(vec![]);
+                let cmd = params["cmd"].as_array().cloned().unwrap_or(vec![]);
                 let name = params["name"].as_str().unwrap_or("test-proc");
                 let pid = 1000 + rand::random::<u32>() % 1000; // random PID
 
