@@ -550,6 +550,16 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                         }
                         _ => {}
                     }
+                } else if state.help_modal_open {
+                    // Help modal mode: handle Esc to close modal
+                    // See [TUI Key Bindings Reference](docs/architecture/tui.md#key-bindings).
+                    match key.code {
+                        KeyCode::Esc => {
+                            debug!("Key event: close help modal");
+                            state.reducer(Action::CloseHelpModal);
+                        }
+                        _ => {}
+                    }
                 } else if state.command_mode {
                     // Command mode
                     match key.code {

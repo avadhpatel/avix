@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 use avix_client_core::atp::types::EventKind;
+use tracing::debug;
 use avix_client_core::notification::{HilState, Notification};
 use avix_client_core::state::ActiveAgent;
 
@@ -170,6 +171,9 @@ pub enum Action {
     LogEvent(TuiEvent),
     ToggleLogs,
     ToggleHelpModal,
+    /// Close the help modal. Used when pressing Esc in help modal mode.
+    /// See [TUI Key Bindings Reference](docs/architecture/tui.md#key-bindings).
+    CloseHelpModal,
 }
 
 impl TuiState {
@@ -281,6 +285,10 @@ impl TuiState {
             }
             Action::ToggleHelpModal => {
                 self.help_modal_open = !self.help_modal_open;
+            }
+            Action::CloseHelpModal => {
+                debug!("Closing help modal");
+                self.help_modal_open = false;
             }
         }
     }
@@ -570,5 +578,14 @@ mod tests {
         assert!(state.log_visible);
         state.reducer(Action::ToggleLogs);
         assert!(!state.log_visible);
+    }
+
+    #[test]
+    fn close_help_modal_sets_false() {
+        let mut state = TuiState::default();
+        state.reducer(Action::ToggleHelpModal);
+        assert!(state.help_modal_open);
+        state.reducer(Action::CloseHelpModal);
+        assert!(!state.help_modal_open);
     }
 }
