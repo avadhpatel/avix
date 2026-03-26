@@ -9,6 +9,7 @@ use crate::error::AvixError;
 use crate::process::table::ProcessTable;
 use crate::process::entry::{ProcessEntry, ProcessKind, ProcessStatus};
 use crate::types::Pid;
+use crate::types::token::{CapabilityToken, IssuedTo};
 
 /// Persistent record of a spawned agent, stored in /etc/avix/agents.yaml.
 /// Used for daemon restart to re-adopt running agents.
@@ -45,15 +46,17 @@ pub struct ActiveAgent {
 pub struct ProcHandler {
     process_table: Arc<ProcessTable>,
     agents_yaml_path: PathBuf,
+    master_key: Vec<u8>,
 }
 
 impl ProcHandler {
     /// Create a new proc handler with the given process table and agents.yaml path.
     /// The path should be /etc/avix/agents.yaml (root-owned).
-    pub fn new(process_table: Arc<ProcessTable>, agents_yaml_path: PathBuf) -> Self {
+    pub fn new(process_table: Arc<ProcessTable>, agents_yaml_path: PathBuf, master_key: Vec<u8>) -> Self {
         Self {
             process_table,
             agents_yaml_path,
+            master_key,
         }
     }
 
@@ -94,6 +97,24 @@ impl ProcHandler {
         use std::process::Stdio;
         use tokio::process::Command;
 
+        // Mint capability token
+        let issued_to = IssuedTo {
+            pid,
+            agent_name: name.to_string(),
+            spawned_by: caller_identity.to_string(),
+        };
+        let token = CapabilityToken::mint(
+            vec![
+                "fs/read".to_string(),
+                "fs/write".to_string(),
+                "agent/spawn".to_string(),
+                "llm/complete".to_string(),
+            ],
+            Some(issued_to),
+            3600, // 1 hour TTL
+            &self.master_key,
+        );
+
         let token_json = serde_json::to_string(&token)?;
         let mut cmd = Command::new("./target/debug/avix-re");
         cmd.env("AVIX_PID", pid.to_string())
@@ -106,7 +127,7 @@ impl ProcHandler {
             .stderr(Stdio::piped());
 
         // Spawn the process
-        let child = cmd.spawn().map_err(|e| AvixError::Io(format!("Failed to spawn avix-re: {}", e)))?;
+        let mut child = cmd.spawn().map_err(|e| AvixError::Io(format!("Failed to spawn avix-re: {}", e)))?;
 
         // TODO: Store the child handle to manage it (kill, etc.)
         // For now, detach it
@@ -238,22 +259,23 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let yaml_path = dir.path().join("agents.yaml");
         let table = Arc::new(ProcessTable::new());
-        let handler = ProcHandler::new(table.clone(), yaml_path.clone());
+        let master_key = b"test-master-key-32-bytes-padded!".to_vec();
+        let handler = ProcHandler::new(table.clone(), yaml_path.clone(), master_key);
 
-        let pid = handler.spawn("test-agent", "test goal", "sess-1").await.unwrap();
+        let pid = handler.spawn("test_agent", "test_goal", "sess-1", "kernel").await.unwrap();
 
         // Check process table
         let entry = table.get(Pid::new(pid)).await.unwrap();
-        assert_eq!(entry.name, "test-agent");
-        assert_eq!(entry.goal, "test goal");
+        assert_eq!(entry.name, "test_agent");
+        assert_eq!(entry.goal, "test_goal");
         assert_eq!(entry.status, ProcessStatus::Running);
 
         // Check yaml
         let yaml: AgentsYaml = serde_yaml::from_str(&fs::read_to_string(&yaml_path).unwrap()).unwrap();
         assert_eq!(yaml.agents.len(), 1);
         assert_eq!(yaml.agents[0].pid, pid);
-        assert_eq!(yaml.agents[0].name, "test-agent");
-        assert_eq!(yaml.agents[0].goal, "test goal");
+        assert_eq!(yaml.agents[0].name, "test_agent");
+        assert_eq!(yaml.agents[0].goal, "test_goal");
         assert_eq!(yaml.agents[0].session_id, "sess-1");
     }
 
@@ -262,11 +284,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let yaml_path = dir.path().join("agents.yaml");
         let table = Arc::new(ProcessTable::new());
-        let handler = ProcHandler::new(table.clone(), yaml_path);
+        let master_key = b"test-master-key-32-bytes-padded!".to_vec();
+        let handler = ProcHandler::new(table.clone(), yaml_path, master_key);
 
         // Spawn two agents
-        let pid1 = handler.spawn("agent1", "goal1", "sess-1").await.unwrap();
-        let pid2 = handler.spawn("agent2", "goal2", "sess-1").await.unwrap();
+        let pid1 = handler.spawn("agent1", "goal1", "sess-1", "kernel").await.unwrap();
+        let pid2 = handler.spawn("agent2", "goal2", "sess-1", "kernel").await.unwrap();
 
         let active = handler.list().await.unwrap();
         assert_eq!(active.len(), 2);
@@ -287,9 +310,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let yaml_path = dir.path().join("agents.yaml");
         let table = Arc::new(ProcessTable::new());
-        let handler = ProcHandler::new(table, yaml_path.clone());
+        let master_key = b"test-master-key-32-bytes-padded!".to_vec();
+        let handler = ProcHandler::new(table, yaml_path.clone(), master_key);
 
-        let pid = handler.spawn("test", "goal", "sess").await.unwrap();
+        let pid = handler.spawn("test", "goal", "sess", "kernel").await.unwrap();
         assert_eq!(handler.load_agents_yaml().await.unwrap().agents.len(), 1);
 
         handler.remove_agent_record(pid).await.unwrap();

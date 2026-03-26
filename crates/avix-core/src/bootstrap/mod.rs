@@ -147,7 +147,8 @@ impl Runtime {
 
         // Phase 3.5: re-adopt orphaned agents
         let agents_yaml_path = self.root.join("etc/avix/agents.yaml");
-        phase3_re_adopt(self.process_table.clone(), agents_yaml_path).await?;
+        let master_key_bytes = hex::decode(&*self.master_key).map_err(|e| AvixError::ConfigParse(format!("invalid master key: {}", e)))?;
+        phase3_re_adopt(self.process_table.clone(), agents_yaml_path, master_key_bytes).await?;
         self.boot_log.push(BootLogEntry {
             phase: BootPhase(3),
             message: "phase 3.5: re-adopted agents".into(),

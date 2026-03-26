@@ -55,4 +55,13 @@ pub enum AvixError {
 
     #[error("model requirements not met: {reason}")]
     ModelRequirementsNotMet { reason: String },
+
+    #[error("serialization error: {0}")]
+    Serialization(String),
+}
+
+impl From<serde_json::Error> for AvixError {
+    fn from(e: serde_json::Error) -> Self {
+        AvixError::Serialization(e.to_string())
+    }
 }

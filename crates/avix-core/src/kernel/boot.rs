@@ -15,10 +15,11 @@ use crate::types::Pid;
 pub async fn phase3_re_adopt(
     process_table: Arc<ProcessTable>,
     agents_yaml_path: PathBuf,
+    master_key: Vec<u8>,
 ) -> Result<(), AvixError> {
     info!("phase 3: re-adopting orphaned agents");
 
-    let handler = ProcHandler::new(process_table.clone(), agents_yaml_path);
+    let handler = ProcHandler::new(process_table.clone(), agents_yaml_path, master_key);
 
     // Load persisted agents
     let agents_yaml = match handler.load_agents_yaml().await {

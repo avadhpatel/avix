@@ -39,6 +39,7 @@ pub fn event_scope(kind: &AtpEventKind) -> (Role, bool) {
         AtpEventKind::CronFired => (Role::User, true),
         AtpEventKind::SysService => (Role::Admin, false),
         AtpEventKind::SysAlert => (Role::Operator, false),
+        AtpEventKind::AgentSpawned => (Role::User, true),
     }
 }
 
