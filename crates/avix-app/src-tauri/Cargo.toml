@@ -16,7 +16,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 avix-client-core     = { path = "../../avix-client-core" }
-tauri                = { version = "2", features = [] }
+avix-core            = { path = "../../avix-core" }
+tauri                = { version = "2", features = ["test"] }
 tauri-plugin-fs      = "2"
 tauri-plugin-http    = "2"
 tokio.workspace      = true

@@ -16,7 +16,8 @@
 //! Links: docs/dev_plans/PROJECT-SPAWN-001-dev-plan.md#detailed-implementation-guidance
 
 use anyhow::{Context, Result};
-use avix_core::executor::runtime_executor::{RuntimeExecutor, SpawnParams};
+use avix_core::executor::runtime_executor::RuntimeExecutor;
+use avix_core::executor::spawn::SpawnParams;
 use avix_core::llm_client::LlmClient;
 use avix_core::types::token::CapabilityToken;
 use avix_core::types::Pid;
@@ -71,7 +72,7 @@ async fn main() -> Result<()> {
     // Note: In production, this would be done with registry and kernel handles,
     // but for avix-re, we need to set up IPC-based registry.
     // For now, stub
-    let executor = todo!("Create RuntimeExecutor with IPC registry");
+    let executor: RuntimeExecutor = todo!("Create RuntimeExecutor with IPC registry");
 
     // Run the agent loop
     let result = executor.run_with_client(&goal, llm_client.as_ref()).await;

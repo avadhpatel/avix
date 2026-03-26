@@ -295,6 +295,7 @@ async fn dispatch_parsed_command(
                     name: String::new(),
                     goal: String::new(),
                     focused_field: 0,
+                    error: None,
                 })
             };
             action_tx.send(Action::SetNewAgentForm(new_form)).await?;
@@ -488,20 +489,18 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                                 new_form.error = Some("Agent goal cannot be empty".into());
                             } else {
                                 // Submit form
-                                if let Some(dispatcher) = if let Some(dispatcher) = // Submit formshared_state.read().await.dispatcher {shared_state.read().await.dispatcher {
-                                    match spawn_agent(dispatcher, // Submit formform.name, // Submit formform.goal, // Submit form[]).await {
+                                if let Some(dispatcher) = shared_state.read().await.dispatcher.clone() {
+                                    match spawn_agent(&dispatcher, &form.name, &form.goal, &[]).await {
                                         Ok(pid) => {
                                             debug!("Agent spawned successfully: pid={}", pid);
                                             // Add success notification
-                                            let notif = Notification::from_sys_alert(
-                                                "info",
-                                                // Submit formformat!("Agent \{} spawned with PID \{\}", form.name, pid),
-                                            );
+                                            let message = format!("Agent {} spawned with PID {}", form.name, pid);
+                                            let notif = Notification::from_sys_alert("info", &message);
                                             shared_state.write().await.notifications.add(notif).await;
                                             state.reducer(Action::SetNewAgentForm(None));
                                         }
                                         Err(e) => {
-                                            new_form.error = Some(format!("Failed to spawn agent: \{\}", e));
+                                            new_form.error = Some(format!("Failed to spawn agent: {}", e));
                                         }
                                     }
                                 } else {
@@ -723,6 +722,7 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                                     name: String::new(),
                                     goal: String::new(),
                                     focused_field: 0,
+                                    error: None,
                                 })
                             };
                             state.reducer(Action::SetNewAgentForm(new_form));

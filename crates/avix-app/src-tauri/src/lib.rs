@@ -1,5 +1,7 @@
 use avix_client_core::config::ClientConfig;
 use avix_client_core::state::new_shared;
+use avix_core::bootstrap::Runtime;
+use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 mod commands;
@@ -7,6 +9,21 @@ mod commands;
 pub async fn create_app_state(
 ) -> Result<avix_client_core::state::SharedState, Box<dyn std::error::Error>> {
     let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+    // Auto-gen client.json if it didn't exist
+    let config_path = avix_client_core::persistence::app_data_dir().join("client.json");
+    if !config_path.exists() {
+        avix_client_core::persistence::save_json(&config_path, &config)?;
+        tracing::info!("Auto-generated client.json at {}", config_path.display());
+    }
+
+    // Embed avix daemon
+    let runtime = avix_core::bootstrap::Runtime::bootstrap_with_root(&config.runtime_root).await?;
+    tokio::spawn(async move {
+        if let Err(e) = runtime.start_daemon(9142, false).await {
+            tracing::error!("Failed to start embedded daemon: {}", e);
+        }
+    });
+
     let state = new_shared(config);
     {
         let mut guard = state.write().await;
@@ -37,7 +54,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let app_handle = app.handle().clone();
             let state = app.state::<avix_client_core::state::SharedState>();
             let mut state_guard = state.try_write().unwrap();
-            let callback = Box::new(move |event: &str, data: &serde_json::Value| {
+            let callback = Arc::new(move |event: &str, data: &serde_json::Value| {
                 let _ = app_handle.emit(event, data);
             });
             state_guard.set_emit_callback(callback);
