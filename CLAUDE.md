@@ -142,6 +142,32 @@ All three must exit 0. Fix before committing.
 - **Never use `.unwrap()`** in non-test code — use `?` or explicit error handling
 - Every public function that can fail returns `Result<T, E>`
 
+### TUI Invariants
+* TUI loop non-blocking: 100ms poll + async actions via mpsc
+* State via reducer pattern (immutable updates)
+* ATP events dispatched to single background task
+* Persist only notifications (not agent output/state)
+* Modals exclusive: HIL &gt; form &gt; popup &gt; main UI
+
+### TUI Key Bindings Reference
+**Normal mode**:
+* `q`: quit
+* `c`: connect
+* `/`: command mode
+* ↑↓: agent select
+* `a`: spawn test agent
+* `f`: toggle new agent form
+* `n`: toggle notifications popup
+
+**Command mode (`:`)**:
+* chars/backspace/←→/↑↓(history)/Enter/Esc
+
+**HIL modal**: `a`(approve)/`d`(deny)/Esc(dismiss)
+**Agent form**: Tab(switch)/Enter(spawn)/Esc/cancel
+**Notifs popup**: ↑↓/Enter(read)/Esc
+
+See `docs/architecture/tui.md`.
+
 ### Naming
 
 | Context               | Convention           | Example                    |

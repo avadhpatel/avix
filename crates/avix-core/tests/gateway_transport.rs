@@ -73,11 +73,11 @@ async fn start_server() -> TestServer {
     );
 
     let user_addr = Arc::clone(&server)
-        .bind_and_run("127.0.0.1:0".parse().unwrap(), false)
+        .bind_and_run("127.0.0.1:0".parse().unwrap(), false, true)
         .await
         .expect("bind user port");
     let admin_addr = Arc::clone(&server)
-        .bind_and_run("127.0.0.1:0".parse().unwrap(), true)
+        .bind_and_run("127.0.0.1:0".parse().unwrap(), true, true)
         .await
         .expect("bind admin port");
 

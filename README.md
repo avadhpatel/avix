@@ -213,7 +213,8 @@ Supported providers: Anthropic, OpenAI, Ollama, Stability AI, ElevenLabs.
 ## Clients
 
 * **Daemon**: `avix start --root <dir> [--port 9142]` — ATP WS gateway + services + kernel.agent
-* **CLI**: `avix agent spawn/list/kill`, `avix hil approve/deny`, `avix logs --follow`, `--tui`
+* **CLI**: `avix agent spawn/list/kill`, `avix hil approve/deny`, `avix logs --follow`
+* **TUI**: `avix tui` — fullscreen dashboard: agents/output/events/notifs/HIL. Keys: q/c//↑↓/f/n, `:spawn`/`:kill`/`:logs`
 * **GUI**: `cd crates/avix-app && tauri dev` — GoldenLayout UI, dockable panels, HIL modals
 
 All share `avix-client-core` ATP lib.
