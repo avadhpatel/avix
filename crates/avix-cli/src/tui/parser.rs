@@ -1,10 +1,10 @@
 use super::state::ParsedCommand;
 
-/// Parse a command input string starting with ':' into a ParsedCommand.
+/// Parse a command input string starting with '/' into a ParsedCommand.
 /// Returns an error string if parsing fails.
 pub fn parse(input: &str) -> Result<ParsedCommand, String> {
-    if !input.starts_with(':') {
-        return Err("Command must start with ':'".to_string());
+    if !input.starts_with('/') {
+        return Err("Command must start with '/'".to_string());
     }
 
     let trimmed = input[1..].trim();
@@ -86,55 +86,55 @@ mod tests {
 
     #[test]
     fn parse_quit() {
-        assert_eq!(parse(":quit"), Ok(ParsedCommand::Quit));
-        assert_eq!(parse(":q"), Ok(ParsedCommand::Quit));
+        assert_eq!(parse("/quit"), Ok(ParsedCommand::Quit));
+        assert_eq!(parse("/q"), Ok(ParsedCommand::Quit));
     }
 
     #[test]
     fn parse_connect() {
-        assert_eq!(parse(":connect"), Ok(ParsedCommand::Connect));
-        assert_eq!(parse(":c"), Ok(ParsedCommand::Connect));
+        assert_eq!(parse("/connect"), Ok(ParsedCommand::Connect));
+        assert_eq!(parse("/c"), Ok(ParsedCommand::Connect));
     }
 
     #[test]
     fn parse_help() {
-        assert_eq!(parse(":help"), Ok(ParsedCommand::Help));
-        assert_eq!(parse(":h"), Ok(ParsedCommand::Help));
-        assert_eq!(parse(":?"), Ok(ParsedCommand::Help));
+        assert_eq!(parse("/help"), Ok(ParsedCommand::Help));
+        assert_eq!(parse("/h"), Ok(ParsedCommand::Help));
+        assert_eq!(parse("/?"), Ok(ParsedCommand::Help));
     }
 
     #[test]
     fn parse_toggle_logs() {
-        assert_eq!(parse(":logs"), Ok(ParsedCommand::ToggleLogs));
-        assert_eq!(parse(":log"), Ok(ParsedCommand::ToggleLogs));
+        assert_eq!(parse("/logs"), Ok(ParsedCommand::ToggleLogs));
+        assert_eq!(parse("/log"), Ok(ParsedCommand::ToggleLogs));
     }
 
     #[test]
     fn parse_toggle_notifs() {
-        assert_eq!(parse(":notifs"), Ok(ParsedCommand::ToggleNotifications));
-        assert_eq!(parse(":n"), Ok(ParsedCommand::ToggleNotifications));
+        assert_eq!(parse("/notifs"), Ok(ParsedCommand::ToggleNotifications));
+        assert_eq!(parse("/n"), Ok(ParsedCommand::ToggleNotifications));
     }
 
     #[test]
     fn parse_toggle_new_agent_form() {
         assert_eq!(
-            parse(":new-agent-form"),
+            parse("/new-agent-form"),
             Ok(ParsedCommand::ToggleNewAgentForm)
         );
-        assert_eq!(parse(":f"), Ok(ParsedCommand::ToggleNewAgentForm));
+        assert_eq!(parse("/f"), Ok(ParsedCommand::ToggleNewAgentForm));
     }
 
     #[test]
     fn parse_spawn() {
         assert_eq!(
-            parse(":spawn foo \"analyze logs\""),
+            parse("/spawn foo \"analyze logs\""),
             Ok(ParsedCommand::Spawn {
                 name: "foo".to_string(),
                 goal: "analyze logs".to_string(),
             })
         );
         assert_eq!(
-            parse(":spawn bar test"),
+            parse("/spawn bar test"),
             Ok(ParsedCommand::Spawn {
                 name: "bar".to_string(),
                 goal: "test".to_string(),
@@ -144,16 +144,16 @@ mod tests {
 
     #[test]
     fn parse_kill() {
-        assert_eq!(parse(":kill 123"), Ok(ParsedCommand::Kill { pid: 123 }));
+        assert_eq!(parse("/kill 123"), Ok(ParsedCommand::Kill { pid: 123 }));
     }
 
     #[test]
     fn parse_invalid() {
         assert!(parse("quit").is_err());
-        assert!(parse(":").is_err());
-        assert!(parse(":unknown").is_err());
-        assert!(parse(":spawn foo").is_err());
-        assert!(parse(":kill abc").is_err());
+        assert!(parse("/").is_err());
+        assert!(parse("/unknown").is_err());
+        assert!(parse("/spawn foo").is_err());
+        assert!(parse("/kill abc").is_err());
     }
 
     #[test]

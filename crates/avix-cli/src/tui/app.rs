@@ -561,7 +561,7 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                                 let cmd = input.input.clone();
                                 state.reducer(Action::SubmitCommand(cmd.clone()));
                                 // Parse and dispatch
-                                match super::parser::parse(&format!(":{}", cmd)) {
+                                match super::parser::parse(&format!("/{}", cmd)) {
                                     Ok(parsed) => {
                                         let _ = dispatch_parsed_command(
                                             parsed,

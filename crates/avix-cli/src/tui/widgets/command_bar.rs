@@ -24,7 +24,7 @@ impl CommandBarWidget {
             } else {
                 display.push('|');
             }
-            format!(":{}", display)
+            format!("/{}", display)
         } else {
             "".to_string()
         };

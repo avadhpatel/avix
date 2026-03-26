@@ -39,11 +39,7 @@ impl StatusWidget {
         let secs = total_secs % 60;
         let uptime_status = format!("Uptime: {:02}:{:02}", mins, secs);
 
-        let hint = if !state.command_mode {
-            " /cmd :help |"
-        } else {
-            ""
-        };
+        let hint = if !state.command_mode { " /help |" } else { "" };
 
         let status_text = format!(
             "{} | {} | {} | {} |{}{}",

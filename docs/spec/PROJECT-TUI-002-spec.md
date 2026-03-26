@@ -6,16 +6,16 @@
 ## Motivation & Problem Statement
 PROJECT-TUI-001 delivered core TUI dashboard with command mode (`/` + `:` commands), event logging, responsive layout, modals, and ATP integration. Usability-agent and architecture/tui.md identified 4 small remaining gaps blocking production-readiness:
 
-* G1 (P2): `:kill &lt;pid&gt;` parses but dispatches stub notification (TODO in app.rs).
-* G2 (P3): Status bar lacks discoverability hint for command mode (`/cmd :help`).
+* G1 (P2): `/kill &lt;pid&gt;` parses but dispatches stub notification (TODO in app.rs).
+* G2 (P3): Status bar lacks discoverability hint for command mode (`/cmd /help`).
 * G3 (P4): Uptime placeholder `--:--:--` in status (TODO in status.rs).
 * G4 (Low): Minor clippy lints in avix-cli::tui (unused vars, etc.).
 
 These are polish items: no layout/API changes, pure TDD fixes. Aligns with CLAUDE.md invariants (tracing spans, no unwrap/println!, client-side only).
 
 ## Goals
-* G1: Full `:kill &lt;pid&gt;` → `send_signal(dispatcher, credential, pid, \"SIGKILL\", None)` dispatch + SentCommand log + success/error notif.
-* G2: StatusWidget appends \" | Press / for commands (:help)\" if !command_mode.
+* G1: Full `/kill &lt;pid&gt;` → `send_signal(dispatcher, credential, pid, \"SIGKILL\", None)` dispatch + SentCommand log + success/error notif.
+* G2: StatusWidget appends \" | Press / for commands (/help)\" if !command_mode.
 * G3: TuiState.startup_time: Instant; StatusWidget formats elapsed as \"mm:ss\" (update on every tick).
 * G4: Zero clippy warnings (`cargo clippy -p avix-cli -D warnings` clean).
 * Backward compat: No regressions in existing flows (spawn, HIL, logs, etc.).
@@ -42,7 +42,7 @@ Per docs/architecture/00-overview.md: Fresh IPC per call, capability token scope
 
 ## Detailed Design
 
-### G1: Implement :kill Dispatch (app.rs:dispatch_parsed_command)
+### G1: Implement /kill Dispatch (app.rs:dispatch_parsed_command)
 ```rust
 ParsedCommand::Kill { pid } => {
     let cmd_str = format!("kill {}", pid);
@@ -62,7 +62,7 @@ ParsedCommand::Kill { pid } => {
 ### G2: Status Hint (widgets/status.rs:render)
 ```rust
 let hint = if !state.command_mode {
-    " | Press / for commands (:help)".to_string()
+    " | Press / for commands (/help)".to_string()
 } else { String::new() };
 let status_text = format!("{} | ... |{}{}", connection_status, ..., uptime_status, hint);
 ```
@@ -91,7 +91,7 @@ let status_text = format!("{} | ... |{}{}", connection_status, ..., uptime_statu
 * Invalid pid → parser already errs.
 
 ## User/Dev Experience
-* UX: `:kill 123` → agent vanishes (AgentExit event), discoverable via `/ :help`, precise uptime, clean status.
+* UX: `/kill 123` → agent vanishes (AgentExit event), discoverable via `/ /help`, precise uptime, clean status.
 * Flows unchanged; hints reduce magic-key reliance.
 * Dev: `cargo test tui/` + manual `avix tui` → connect, spawn, kill, watch uptime.
 * Keyboard: Unchanged.
@@ -106,7 +106,7 @@ let status_text = format!("{} | ... |{}{}", connection_status, ..., uptime_statu
 * PROJECT-TUI-001 complete (current state).
 
 ## Success Criteria
-* Functional: `:kill` dispatches SIGKILL, agent exits; hint/uptime render; clippy clean.
+* Functional: `/kill` dispatches SIGKILL, agent exits; hint/uptime render; clippy clean.
 * Tests: +Unit for dispatch_kill, uptime fmt; coverage >95%.
 * UX: Usability-agent: \"Hints intuitive, no stubs\".
 * Manual: Full cycle connect-spawn-kill-logs; resize/uptime ticks.

@@ -4,7 +4,7 @@
 4 small, independent TDD gaps from TUI-001/PM-REPORT-PROJECT-TUI-002-INIT. Sequential: G1 dispatch → G2/G3 status → G4 clean. ~4-6h total. No layout changes.
 
 ## What to Implement (Sequential Tasks)
-* **G1 P2: :kill Dispatch** (app.rs): Impl dispatch_parsed_command Kill → send_signal SIGKILL + log + error notif.
+* **G1 P2: /kill Dispatch** (app.rs): Impl dispatch_parsed_command Kill → send_signal SIGKILL + log + error notif.
 * **G2 P3: Status Hint** (status.rs): Append hint if !command_mode.
 * **G3 P4: Uptime** (state.rs/app.rs/status.rs): startup_time + fmt mm:ss.
 * **G4 Low: Clippy** (tui/): cargo clippy fixes.
@@ -37,7 +37,7 @@ G4: `cargo clippy` pre/post.
 * **Unit**: dispatch_kill, parse_kill (exists), render_hint/uptime (new), reducer noop.
 * **Integration**: Mock SharedState/AtpClient → assert send_signal called.
 * **Manual**:
-  * `avix tui` → / :kill &lt;real_pid&gt; → agent gone + log.
+  * `avix tui` → / /kill &lt;real_pid&gt; → agent gone + log.
   * Status: hint visible → / → gone; uptime increments.
   * Resize 80x24.
 * **E2E**: No regressions (spawn/HIL/logs).
