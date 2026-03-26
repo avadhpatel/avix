@@ -34,6 +34,7 @@ pub struct Runtime {
     vfs: VfsRouter,
     process_table: Arc<ProcessTable>,
     root: PathBuf,
+    runtime_dir: PathBuf,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -50,6 +51,7 @@ impl Runtime {
         let mut service_pids = std::collections::HashMap::new();
         let vfs = VfsRouter::new();
         let process_table = Arc::new(ProcessTable::new());
+        let runtime_dir = std::env::var("AVIX_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|_| root.join("run/avix"));
 
         // Phase 0: init
         log.push(BootLogEntry {
@@ -109,6 +111,7 @@ impl Runtime {
             vfs,
             process_table,
             root: root.to_path_buf(),
+            runtime_dir,
         })
     }
 
@@ -122,6 +125,10 @@ impl Runtime {
 
     pub fn boot_log(&self) -> &[BootLogEntry] {
         &self.boot_log
+    }
+
+    pub fn runtime_dir(&self) -> &Path {
+        &self.runtime_dir
     }
 
     /// Returns the Pid assigned to a named built-in service, if it was started.

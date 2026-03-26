@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -40,25 +41,28 @@ pub struct ServiceManager {
     token_to_svc: Arc<RwLock<HashMap<String, String>>>,
     pid_counter: Arc<std::sync::atomic::AtomicU32>,
     tool_registry: Option<Arc<ToolRegistry>>,
+    runtime_dir: PathBuf,
 }
 
 impl ServiceManager {
-    pub fn new_for_test() -> Self {
+    pub fn new_for_test(runtime_dir: PathBuf) -> Self {
         Self {
             services: Arc::new(RwLock::new(HashMap::new())),
             token_to_svc: Arc::new(RwLock::new(HashMap::new())),
             pid_counter: Arc::new(std::sync::atomic::AtomicU32::new(10)),
             tool_registry: None,
+            runtime_dir,
         }
     }
 
-    pub fn new_with_registry() -> (Self, Arc<ToolRegistry>) {
+    pub fn new_with_registry(runtime_dir: PathBuf) -> (Self, Arc<ToolRegistry>) {
         let reg = Arc::new(ToolRegistry::new());
         let mgr = Self {
             services: Arc::new(RwLock::new(HashMap::new())),
             token_to_svc: Arc::new(RwLock::new(HashMap::new())),
             pid_counter: Arc::new(std::sync::atomic::AtomicU32::new(10)),
             tool_registry: Some(Arc::clone(&reg)),
+            runtime_dir,
         };
         (mgr, reg)
     }
@@ -127,11 +131,11 @@ impl ServiceManager {
         let mut env = HashMap::new();
         #[cfg(unix)]
         {
-            env.insert("AVIX_KERNEL_SOCK".into(), "/run/avix/kernel.sock".into());
-            env.insert("AVIX_ROUTER_SOCK".into(), "/run/avix/router.sock".into());
+            env.insert("AVIX_KERNEL_SOCK".into(), format!("{}/kernel.sock", self.runtime_dir.display()));
+            env.insert("AVIX_ROUTER_SOCK".into(), format!("{}/router.sock", self.runtime_dir.display()));
             env.insert(
                 "AVIX_SVC_SOCK".into(),
-                format!("/run/avix/services/{name}-{pid}.sock"),
+                format!("{}/services/{name}-{pid}.sock", self.runtime_dir.display()),
             );
         }
         #[cfg(windows)]

@@ -2,7 +2,7 @@ use avix_core::service::{IpcRegisterRequest, ServiceManager, ServiceSpawnRequest
 
 #[tokio::test]
 async fn spawn_service_returns_token() {
-    let mgr = ServiceManager::new_for_test();
+    let mgr = ServiceManager::new_for_test(std::path::PathBuf::from("/run/avix"));
     let token = mgr
         .spawn_and_get_token(ServiceSpawnRequest {
             name: "llm.svc".into(),
@@ -16,7 +16,7 @@ async fn spawn_service_returns_token() {
 
 #[tokio::test]
 async fn service_token_has_unique_pid() {
-    let mgr = ServiceManager::new_for_test();
+    let mgr = ServiceManager::new_for_test(std::path::PathBuf::from("/run/avix"));
     let t1 = mgr
         .spawn_and_get_token(ServiceSpawnRequest {
             name: "svc-a".into(),
@@ -36,7 +36,7 @@ async fn service_token_has_unique_pid() {
 
 #[tokio::test]
 async fn ipc_register_with_valid_token() {
-    let mgr = ServiceManager::new_for_test();
+    let mgr = ServiceManager::new_for_test(std::path::PathBuf::from("/run/avix"));
     let token = mgr
         .spawn_and_get_token(ServiceSpawnRequest {
             name: "router.svc".into(),
@@ -60,7 +60,7 @@ async fn ipc_register_with_valid_token() {
 
 #[tokio::test]
 async fn ipc_register_with_invalid_token_fails() {
-    let mgr = ServiceManager::new_for_test();
+    let mgr = ServiceManager::new_for_test(std::path::PathBuf::from("/run/avix"));
     let result = mgr
         .handle_ipc_register(IpcRegisterRequest {
             token: "bad-token".into(),
@@ -78,7 +78,7 @@ async fn ipc_register_with_invalid_token_fails() {
 
 #[tokio::test]
 async fn ipc_register_name_mismatch_fails() {
-    let mgr = ServiceManager::new_for_test();
+    let mgr = ServiceManager::new_for_test(std::path::PathBuf::from("/run/avix"));
     let token = mgr
         .spawn_and_get_token(ServiceSpawnRequest {
             name: "auth.svc".into(),
@@ -100,7 +100,7 @@ async fn ipc_register_name_mismatch_fails() {
 
 #[tokio::test]
 async fn service_env_contains_socket_vars() {
-    let mgr = ServiceManager::new_for_test();
+    let mgr = ServiceManager::new_for_test(std::path::PathBuf::from("/run/avix"));
     mgr.spawn_and_get_token(ServiceSpawnRequest {
         name: "my.svc".into(),
         binary: "/bin/my".into(),
@@ -117,7 +117,7 @@ async fn service_env_contains_socket_vars() {
 
 #[tokio::test]
 async fn service_env_sock_path_contains_name_and_pid() {
-    let mgr = ServiceManager::new_for_test();
+    let mgr = ServiceManager::new_for_test(std::path::PathBuf::from("/run/avix"));
     let token = mgr
         .spawn_and_get_token(ServiceSpawnRequest {
             name: "my.svc".into(),
@@ -188,7 +188,7 @@ async fn service_tool_remove_removes_from_registry() {
 
 #[tokio::test]
 async fn service_tool_add_invalid_token_fails() {
-    let mgr = ServiceManager::new_for_test();
+    let mgr = ServiceManager::new_for_test(std::path::PathBuf::from("/run/avix"));
     let result = mgr
         .handle_tool_add("bad-token".into(), vec!["fs/read".into()])
         .await;

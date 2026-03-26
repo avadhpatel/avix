@@ -1,4 +1,5 @@
 use crate::types::{token::CapabilityToken, Pid};
+use std::path::PathBuf;
 
 pub struct SpawnParams {
     pub pid: Pid,
@@ -16,4 +17,6 @@ pub struct SpawnParams {
     pub denied_tools: Vec<String>,
     /// Maximum context-window token limit for this agent (0 = unknown).
     pub context_limit: u64,
+    /// Runtime directory for IPC sockets.
+    pub runtime_dir: PathBuf,
 }

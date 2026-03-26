@@ -1,6 +1,5 @@
 use avix_client_core::config::ClientConfig;
 use avix_client_core::state::new_shared;
-use avix_core::bootstrap::Runtime;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 

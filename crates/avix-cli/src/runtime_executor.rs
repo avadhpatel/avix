@@ -62,6 +62,7 @@ async fn main() -> Result<()> {
         selected_model: "claude-sonnet-4".to_string(), // TODO: from config
         denied_tools: vec![],
         context_limit: 0,
+        runtime_dir: std::path::PathBuf::from("/run/avix"),
     };
 
     // TODO: Create LLM client (anthropic or openai)

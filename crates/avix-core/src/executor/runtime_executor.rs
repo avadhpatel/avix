@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -124,6 +124,7 @@ pub struct RuntimeExecutor {
     pub tool_list: Vec<serde_json::Value>,
     pub tool_budgets: ToolBudgets,
     hil_required_tools: Vec<String>,
+    runtime_dir: PathBuf,
     // Day 18 fields
     llm_queue: Arc<std::sync::Mutex<Vec<LlmCompleteResponse>>>,
     call_log: Arc<std::sync::Mutex<Vec<Vec<serde_json::Value>>>>,
@@ -216,6 +217,7 @@ impl RuntimeExecutor {
             killed: Arc::new(AtomicBool::new(false)),
             snapshot_requested: Arc::new(AtomicBool::new(false)),
             memory_svc: None,
+            runtime_dir: params.runtime_dir.clone(),
             memory_context: None,
             conversation_history: Vec::new(),
             spawned_at: chrono::Utc::now(),

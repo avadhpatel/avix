@@ -124,7 +124,7 @@ identities:
         .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
     std::fs::create_dir_all(root.join("secrets"))
         .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-    std::fs::create_dir_all("/run/avix").map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+    std::fs::create_dir_all(params.root.join("run/avix")).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
     Ok(ConfigInitResult { api_key: raw_key })
 }
@@ -165,7 +165,7 @@ spec:
 
   ipc:
     transport: local-ipc
-    socketName: avix-kernel
+    socketName: avix-kernel\n    runtime_dir: \"{root}/run/avix\"
     maxMessageBytes: 65536
     timeoutMs: 5000
 

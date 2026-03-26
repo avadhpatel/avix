@@ -74,7 +74,7 @@ enum Cmd {
         test_mode: bool,
         /// Kernel IPC socket path
         #[arg(long, default_value = "/run/avix/kernel.sock")]
-        kernel_sock: PathBuf,
+        kernel_sock: Option<PathBuf>,
     },
     /// Run an agent (requires AVIX_MASTER_KEY + provider API key env var)
     Run {
@@ -185,7 +185,7 @@ enum ConfigCmd {
         test_mode: bool,
         /// Kernel IPC socket path
         #[arg(long, default_value = "/run/avix/kernel.sock")]
-        kernel_sock: PathBuf,
+        kernel_sock: Option<PathBuf>,
     },
 }
 
@@ -222,7 +222,7 @@ enum AgentCmd {
         test_mode: bool,
         /// Kernel IPC socket path
         #[arg(long, default_value = "/run/avix/kernel.sock")]
-        kernel_sock: PathBuf,
+        kernel_sock: Option<PathBuf>,
     },
 }
 
@@ -267,7 +267,7 @@ enum HilCmd {
         test_mode: bool,
         /// Kernel IPC socket path
         #[arg(long, default_value = "/run/avix/kernel.sock")]
-        kernel_sock: PathBuf,
+        kernel_sock: Option<PathBuf>,
     },
 }
 
@@ -397,6 +397,7 @@ async fn main() -> Result<()> {
                 kernel_sock,
             } => {
                 let root = expand_home(root);
+                let kernel_sock = kernel_sock.unwrap_or_else(|| root.join("run/avix/kernel.sock"));
                 std::env::set_var("AVIX_KERNEL_SOCK", kernel_sock);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
                 runtime.start_daemon(port, test_mode).await?;
@@ -482,6 +483,7 @@ async fn main() -> Result<()> {
                 selected_model: resolved_model.clone(),
                 denied_tools: vec![],
                 context_limit: 0,
+                runtime_dir: runtime.runtime_dir().to_path_buf(),
             };
             let registry = Arc::new(MockToolRegistry::new());
             let mut executor = RuntimeExecutor::spawn_with_registry(params, registry).await?;
@@ -503,6 +505,7 @@ async fn main() -> Result<()> {
             kernel_sock,
         } => {
             let root = expand_home(root);
+            let kernel_sock = kernel_sock.unwrap_or_else(|| root.join("run/avix/kernel.sock"));
             std::env::set_var("AVIX_KERNEL_SOCK", kernel_sock);
             let runtime = Runtime::bootstrap_with_root(&root).await?;
             runtime.start_daemon(port, test_mode).await?;
@@ -562,6 +565,7 @@ async fn main() -> Result<()> {
                 kernel_sock,
             } => {
                 let root = expand_home(root);
+                let kernel_sock = kernel_sock.unwrap_or_else(|| root.join("run/avix/kernel.sock"));
                 std::env::set_var("AVIX_KERNEL_SOCK", kernel_sock);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
                 runtime.start_daemon(port, test_mode).await?;
@@ -606,6 +610,7 @@ async fn main() -> Result<()> {
                 kernel_sock,
             } => {
                 let root = expand_home(root);
+                let kernel_sock = kernel_sock.unwrap_or_else(|| root.join("run/avix/kernel.sock"));
                 std::env::set_var("AVIX_KERNEL_SOCK", kernel_sock);
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
                 runtime.start_daemon(port, test_mode).await?;
