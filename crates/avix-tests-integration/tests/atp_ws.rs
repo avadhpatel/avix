@@ -30,13 +30,14 @@ async fn spawn_debug_server() -> Result<(tokio::process::Child, u16, String)> {
 
     info!("Initializing config for root {}", root);
 
-    // Run config init to create auth.conf with test user
+    // Run config init to create auth.conf + signing.key with test user
     let init_output = Command::new("cargo")
         .arg("run")
         .arg("-p")
         .arg("avix-cli")
         .arg("--bin")
         .arg("avix")
+        .arg("server")
         .arg("config")
         .arg("init")
         .arg("--root")
@@ -45,7 +46,6 @@ async fn spawn_debug_server() -> Result<(tokio::process::Child, u16, String)> {
         .arg("test")
         .arg("--role")
         .arg("admin")
-        .env("AVIX_MASTER_KEY", "changeme")
         .output()
         .await?;
     if !init_output.status.success() {
@@ -73,13 +73,13 @@ async fn spawn_debug_server() -> Result<(tokio::process::Child, u16, String)> {
         .arg("--log")
         .arg("trace")
         .arg("server")
+        .arg("start")
         .arg("--root")
         .arg(&root)
         .arg("--port")
         .arg(port.to_string())
         .arg("--test-mode")
         .env("RUST_LOG", "avix=trace")
-        .env("AVIX_MASTER_KEY", "changeme")
         .spawn()?;
 
     // Wait for port to be open, timeout 30s

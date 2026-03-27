@@ -134,7 +134,7 @@ async fn service_env_sock_path_contains_name_and_pid() {
 
 #[tokio::test]
 async fn service_tool_add_registers_tools_in_registry() {
-    let (mgr, registry) = ServiceManager::new_with_registry();
+    let (mgr, registry) = ServiceManager::new_with_registry(std::path::PathBuf::from("/tmp"));
     let token = mgr
         .spawn_and_get_token(ServiceSpawnRequest {
             name: "fs.svc".into(),
@@ -156,7 +156,7 @@ async fn service_tool_add_registers_tools_in_registry() {
 
 #[tokio::test]
 async fn service_tool_remove_removes_from_registry() {
-    let (mgr, registry) = ServiceManager::new_with_registry();
+    let (mgr, registry) = ServiceManager::new_with_registry(std::path::PathBuf::from("/tmp"));
     let token = mgr
         .spawn_and_get_token(ServiceSpawnRequest {
             name: "fs.svc".into(),

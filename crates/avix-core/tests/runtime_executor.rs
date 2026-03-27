@@ -30,6 +30,7 @@ async fn spawn_with_caps(pid_val: u32, caps: &[&str]) -> (RuntimeExecutor, Arc<M
         selected_model: "claude-sonnet-4".into(),
         denied_tools: vec![],
         context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -118,6 +119,7 @@ async fn shutdown_deregisters_all_category2_tools() {
         selected_model: "claude-sonnet-4".into(),
         denied_tools: vec![],
         context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
     };
     let mut executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -151,6 +153,7 @@ async fn category2_tools_registered_with_user_visibility() {
         selected_model: "claude-sonnet-4".into(),
         denied_tools: vec![],
         context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
     };
     RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -378,6 +381,7 @@ async fn agent_spawn_translates_to_kernel_proc_spawn() {
         selected_model: "claude-sonnet-4".into(),
         denied_tools: vec![],
         context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
     };
     let mut executor =
         RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
@@ -416,6 +420,7 @@ async fn agent_kill_records_in_kernel() {
         selected_model: "claude-sonnet-4".into(),
         denied_tools: vec![],
         context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
     };
     let mut executor =
         RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
@@ -451,6 +456,7 @@ async fn cap_request_tool_triggers_resource_request() {
         selected_model: "claude-sonnet-4".into(),
         denied_tools: vec![],
         context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
     };
     let mut executor =
         RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
@@ -491,6 +497,7 @@ async fn build_test_executor_with_mocks() -> RuntimeExecutor {
         selected_model: "claude-sonnet-4".into(),
         denied_tools: vec![],
         context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
     };
     RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -510,6 +517,7 @@ async fn build_test_executor_with_max_chain(max: usize) -> RuntimeExecutor {
         selected_model: "claude-sonnet-4".into(),
         denied_tools: vec![],
         context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
     };
     let mut executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -841,6 +849,7 @@ async fn spawn_with_signed_token(
         selected_model: "claude-sonnet-4".into(),
         denied_tools: vec![],
         context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -1008,6 +1017,7 @@ async fn spawn_status_yaml_contains_pid_and_name() {
         selected_model: "claude-sonnet-4".into(),
         denied_tools: vec![],
         context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -1047,6 +1057,7 @@ async fn spawn_writes_resolved_yaml_to_vfs() {
         selected_model: "claude-sonnet-4".into(),
         denied_tools: vec![],
         context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await

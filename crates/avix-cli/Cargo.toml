@@ -7,10 +7,6 @@ edition.workspace = true
 name = "avix"
 path = "src/main.rs"
 
-[[bin]]
-name = "avix-re"
-path = "src/runtime_executor.rs"
-
 [dependencies]
 avix-core             = { path = "../avix-core" }
 avix-client-core      = { path = "../avix-client-core" }

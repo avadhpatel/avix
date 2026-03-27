@@ -91,10 +91,13 @@ mod tests {
         let yaml_path = dir.path().join("agents.yaml");
         let table = Arc::new(ProcessTable::new());
 
+        // Use the current process PID — guaranteed alive and signallable by this process
+        let alive_pid = std::process::id();
+
         // Create a dummy agents.yaml with one agent
         let agents = crate::kernel::proc::AgentsYaml {
             agents: vec![crate::kernel::proc::AgentRecord {
-                pid: 1, // Assume PID 1 is alive (init)
+                pid: alive_pid,
                 name: "test-agent".to_string(),
                 goal: "test goal".to_string(),
                 session_id: "sess-1".to_string(),
@@ -104,13 +107,13 @@ mod tests {
         let yaml_str = serde_yaml::to_string(&agents).unwrap();
         std::fs::write(&yaml_path, yaml_str).unwrap();
 
-        // Run re-adopt
-        phase3_re_adopt(table.clone(), yaml_path).await.unwrap();
+        // Run re-adopt (empty key is fine for tests — no tokens are actually verified)
+        phase3_re_adopt(table.clone(), yaml_path, vec![0u8; 32]).await.unwrap();
 
         // Check process table
         let entries = table.list_by_kind(ProcessKind::Agent).await;
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].pid.as_u32(), 1);
+        assert_eq!(entries[0].pid.as_u32(), alive_pid);
         assert_eq!(entries[0].name, "test-agent");
         assert_eq!(entries[0].goal, "test goal");
         assert_eq!(entries[0].status, ProcessStatus::Running);

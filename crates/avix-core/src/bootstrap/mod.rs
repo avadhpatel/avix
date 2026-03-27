@@ -72,11 +72,14 @@ impl Runtime {
             message: "phase 1: VFS mount".into(),
         });
 
-        // Phase 2: load master key from env and zero it; mount persistent trees
-        let master_key = std::env::var("AVIX_MASTER_KEY")
-            .map_err(|_| AvixError::ConfigParse("AVIX_MASTER_KEY env var not set".into()))?;
-        // Zero the env var immediately
-        std::env::remove_var("AVIX_MASTER_KEY");
+        // Phase 2: load signing key from etc/signing.key (written by `avix server config init`)
+        let signing_key_path = root.join("etc/signing.key");
+        let master_key = std::fs::read_to_string(&signing_key_path)
+            .map_err(|_| AvixError::ConfigParse(
+                "etc/signing.key not found — run `avix server config init` first".into(),
+            ))?
+            .trim()
+            .to_string();
 
         phase2::mount_persistent_trees(&vfs, root).await?;
         log.push(BootLogEntry {

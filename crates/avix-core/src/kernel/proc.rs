@@ -91,19 +91,15 @@ impl ProcHandler {
         info!(pid, "persisted agent record to agents.yaml");
 
         // Write /proc/<pid>/status.yaml and resolved.yaml
-        // TODO: Implement init_proc_files here or in RuntimeExecutor
+        // TODO: Implement init_proc_files here
 
-        // Fork/exec avix-re (RuntimeExecutor)
-        use std::process::Stdio;
-        use tokio::process::Command;
-
-        // Mint capability token
+        // Mint capability token for the agent
         let issued_to = IssuedTo {
             pid,
             agent_name: name.to_string(),
             spawned_by: caller_identity.to_string(),
         };
-        let token = CapabilityToken::mint(
+        let _token = CapabilityToken::mint(
             vec![
                 "fs/read".to_string(),
                 "fs/write".to_string(),
@@ -111,30 +107,12 @@ impl ProcHandler {
                 "llm/complete".to_string(),
             ],
             Some(issued_to),
-            3600, // 1 hour TTL
+            3600,
             &self.master_key,
         );
 
-        let token_json = serde_json::to_string(&token)?;
-        let mut cmd = Command::new("./target/debug/avix-re");
-        cmd.env("AVIX_PID", pid.to_string())
-            .env("AVIX_GOAL", goal)
-            .env("AVIX_TOKEN", token_json)
-            .env("AVIX_SESSION_ID", session_id)
-            .env("AVIX_AGENT_NAME", name)
-            .env("AVIX_SPAWNED_BY", "kernel") // TODO: get from context
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        // Spawn the process
-        let mut child = cmd.spawn().map_err(|e| AvixError::Io(format!("Failed to spawn avix-re: {}", e)))?;
-
-        // TODO: Store the child handle to manage it (kill, etc.)
-        // For now, detach it
-        tokio::spawn(async move {
-            let _ = child.wait().await;
-            // TODO: On exit, send agent.exit event, remove from agents.yaml
-        });
+        // TODO: spawn RuntimeExecutor as an in-process tokio task, passing the token
+        // and an IPC-backed tool registry connected to router.svc.
 
         // Mark as running
         self.process_table.set_status(Pid::new(pid), ProcessStatus::Running).await?;

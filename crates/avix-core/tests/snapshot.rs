@@ -41,6 +41,7 @@ async fn spawn_test_executor(username: &str, pid: u32) -> RuntimeExecutor {
         selected_model: "claude-sonnet-4".into(),
         denied_tools: vec![],
         context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
     };
     RuntimeExecutor::spawn_with_registry(params, registry)
         .await

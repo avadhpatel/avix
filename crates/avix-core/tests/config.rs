@@ -576,8 +576,8 @@ fn config_init_creates_kernel_yaml() {
         "kernel.yaml must have kind: KernelConfig"
     );
     assert!(
-        content.contains("AVIX_MASTER_KEY"),
-        "kernel.yaml must reference AVIX_MASTER_KEY"
+        content.contains("signing.key"),
+        "kernel.yaml must reference signing.key"
     );
 }
 

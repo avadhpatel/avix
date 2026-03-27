@@ -21,6 +21,7 @@ impl NewAgentFormWidget {
             .constraints([
                 Constraint::Length(3), // Name field
                 Constraint::Length(3), // Goal field
+                Constraint::Length(1), // Error message
                 Constraint::Length(1), // Submit hint
             ])
             .split(area);

@@ -24,28 +24,28 @@ fn pid_ordering() {
 
 #[test]
 fn ipc_addr_kernel_unix() {
-    let addr = IpcAddr::from_name("kernel");
+    let addr = IpcAddr::from_name(std::path::Path::new("/run/avix"), "kernel");
     #[cfg(unix)]
     assert_eq!(addr.os_path(), "/run/avix/kernel.sock");
 }
 
 #[test]
 fn ipc_addr_agent_unix() {
-    let addr = IpcAddr::for_agent(Pid::new(57));
+    let addr = IpcAddr::for_agent(std::path::Path::new("/run/avix"), Pid::new(57));
     #[cfg(unix)]
     assert_eq!(addr.os_path(), "/run/avix/agents/57.sock");
 }
 
 #[test]
 fn ipc_addr_service_unix() {
-    let addr = IpcAddr::for_service("github-svc");
+    let addr = IpcAddr::for_service(std::path::Path::new("/run/avix"), "github-svc");
     #[cfg(unix)]
     assert_eq!(addr.os_path(), "/run/avix/services/github-svc.sock");
 }
 
 #[test]
 fn ipc_addr_router_unix() {
-    let addr = IpcAddr::router();
+    let addr = IpcAddr::router(std::path::Path::new("/run/avix"));
     #[cfg(unix)]
     assert_eq!(addr.os_path(), "/run/avix/router.sock");
 }

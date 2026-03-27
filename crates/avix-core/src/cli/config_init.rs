@@ -27,8 +27,27 @@ fn write_if_absent(path: &Path, content: &str) -> Result<bool, AvixError> {
     Ok(true)
 }
 
+fn generate_signing_key() -> String {
+    let a = uuid::Uuid::new_v4();
+    let b = uuid::Uuid::new_v4();
+    let mut bytes = [0u8; 32];
+    bytes[..16].copy_from_slice(a.as_bytes());
+    bytes[16..].copy_from_slice(b.as_bytes());
+    hex::encode(bytes)
+}
+
 pub fn run_config_init(params: ConfigInitParams) -> Result<ConfigInitResult, AvixError> {
-    let etc_dir = params.root.join("etc");
+    let root = &params.root;
+    let etc_dir = root.join("etc");
+    std::fs::create_dir_all(&etc_dir).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+
+    // Signing key: generated once at init time, read by the server at start.
+    // Never regenerated if it already exists (would invalidate all issued tokens).
+    let signing_key_path = etc_dir.join("signing.key");
+    if !signing_key_path.exists() {
+        std::fs::write(&signing_key_path, generate_signing_key())
+            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+    }
 
     // Idempotent: if auth.conf exists, return ok
     if etc_dir.join("auth.conf").exists() {
@@ -36,8 +55,6 @@ pub fn run_config_init(params: ConfigInitParams) -> Result<ConfigInitResult, Avi
             api_key: "sk-avix-existing".into(),
         });
     }
-
-    std::fs::create_dir_all(&etc_dir).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
     let raw_key = format!("sk-avix-{}", uuid::Uuid::new_v4());
 
@@ -190,9 +207,9 @@ spec:
 
   secrets:
     algorithm: aes-256-gcm
-    masterKey:
-      source: env
-      envVar: AVIX_MASTER_KEY
+    signingKey:
+      source: file
+      path: etc/signing.key
     store:
       path: /secrets
       provider: local

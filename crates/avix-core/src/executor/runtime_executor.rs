@@ -1520,6 +1520,7 @@ mod tests {
             selected_model: "claude-sonnet-4".into(),
             denied_tools: vec![],
             context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
         }
     }
 
@@ -1598,6 +1599,7 @@ mod tests {
             selected_model: "claude-sonnet-4".into(),
             denied_tools: vec![],
             context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
         };
         let mut executor = RuntimeExecutor::spawn_with_registry(params, registry)
             .await

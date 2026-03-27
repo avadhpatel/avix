@@ -37,6 +37,7 @@ async fn make_executor_with_vfs(
         selected_model: "claude-sonnet-4".into(),
         denied_tools: vec![],
         context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -131,6 +132,7 @@ async fn memory_write_tools_registered_at_spawn() {
             selected_model: "claude-sonnet-4".into(),
             denied_tools: vec![],
             context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
         };
         let executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&reg))
             .await

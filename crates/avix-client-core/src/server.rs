@@ -57,12 +57,7 @@ impl ServerHandle {
         );
 
         let mut cmd = Command::new(&avix_bin);
-        cmd.arg("start").arg("--root").arg(&config.runtime_root);
-
-        // Forward AVIX_MASTER_KEY if present in the environment.
-        if let Ok(key) = std::env::var("AVIX_MASTER_KEY") {
-            cmd.env("AVIX_MASTER_KEY", key);
-        }
+        cmd.args(["server", "start", "--root"]).arg(&config.runtime_root);
 
         let child = cmd
             .spawn()

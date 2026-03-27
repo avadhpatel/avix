@@ -42,41 +42,49 @@ struct Cli {
     #[arg(long = "log", default_value_t = LevelFilter::WARN)]
     log: LevelFilter,
 
-    /// ATP server URL
-    #[arg(long, default_value = "ws://localhost:9142/atp")]
-    url: String,
-
-    /// Authentication token
-    #[arg(long, default_value = "token")]
-    token: String,
-
     #[command(subcommand)]
     command: Cmd,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Initialise a new Avix runtime root
-    Config {
-        #[command(subcommand)]
-        sub: ConfigCmd,
-    },
-    /// Run the Avix server
+    /// Server-side: initialize, configure, and run the Avix runtime
     Server {
+        #[command(subcommand)]
+        sub: ServerCmd,
+    },
+    /// Client-side: connect to and interact with a running Avix server
+    Client {
+        #[command(subcommand)]
+        sub: ClientCmd,
+    },
+}
+
+// ── Server commands ───────────────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+enum ServerCmd {
+    /// Start the Avix server daemon
+    Start {
         /// Runtime root directory
         #[arg(long)]
         root: PathBuf,
-        /// ATP port (default 9142)
+        /// ATP listen port
         #[arg(long, default_value = "9142")]
         port: u16,
         /// Enable test mode: mock IPC layer with seeded procs and periodic events
         #[arg(long)]
         test_mode: bool,
-        /// Kernel IPC socket path
-        #[arg(long, default_value = "/run/avix/kernel.sock")]
+        /// Kernel IPC socket path (default: <root>/run/avix/kernel.sock)
+        #[arg(long)]
         kernel_sock: Option<PathBuf>,
     },
-    /// Run an agent (requires AVIX_MASTER_KEY + provider API key env var)
+    /// Server configuration management
+    Config {
+        #[command(subcommand)]
+        sub: ServerConfigCmd,
+    },
+    /// Run an agent directly against the runtime (requires provider API key env var)
     Run {
         /// Runtime root directory
         #[arg(long, default_value = "~/avix-data")]
@@ -91,7 +99,7 @@ enum Cmd {
         #[arg(long)]
         model: Option<String>,
     },
-    /// Resolve agent parameters for a user (without spawning an agent)
+    /// Resolve agent parameters for a user without spawning
     Resolve {
         /// Parameter kind to resolve (currently always `agent-manifest`)
         kind: String,
@@ -117,40 +125,10 @@ enum Cmd {
         #[arg(long, default_value = "~/avix-data")]
         root: PathBuf,
     },
-    /// Connect to an Avix ATP server
-    Connect,
-    /// ATP protocol commands
-    Atp {
-        #[command(subcommand)]
-        sub: AtpCmd,
-    },
-    /// Manage agents
-    Agent {
-        #[command(subcommand)]
-        sub: AgentCmd,
-    },
-    /// Manage human-in-the-loop requests
-    Hil {
-        #[command(subcommand)]
-        sub: HilCmd,
-    },
-    /// Launch TUI dashboard
-    Tui,
-    /// Tail logs from the server
-    Logs {
-        /// Follow logs
-        #[arg(long)]
-        follow: bool,
-    },
-    /// Run minimal executor (read IPC → exec goal → output/exit)
-    Re {
-        /// Goal for the executor
-        goal: String,
-    },
 }
 
 #[derive(Subcommand)]
-enum ConfigCmd {
+enum ServerConfigCmd {
     /// Create auth.conf and print the generated API key
     Init {
         /// Runtime root directory
@@ -165,27 +143,56 @@ enum ConfigCmd {
     },
     /// Validate and apply hot-reloadable kernel config changes
     Reload {
-        /// Only validate and classify sections — do not write reload-pending marker
+        /// Only validate — do not write reload-pending marker
         #[arg(long)]
         check: bool,
         /// Runtime root directory
         #[arg(long, default_value = "~/avix-data")]
         root: PathBuf,
     },
-    /// Run the Avix server
-    Server {
-        /// Runtime root directory
+}
+
+// ── Client commands ───────────────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+enum ClientCmd {
+    /// Test connectivity to the Avix server (reads config.yaml)
+    Connect,
+    /// Launch the TUI dashboard
+    Tui,
+    /// ATP protocol commands
+    Atp {
+        #[command(subcommand)]
+        sub: AtpCmd,
+    },
+    /// Manage agents on the running server
+    Agent {
+        #[command(subcommand)]
+        sub: AgentCmd,
+    },
+    /// Manage human-in-the-loop requests
+    Hil {
+        #[command(subcommand)]
+        sub: HilCmd,
+    },
+    /// Tail logs from the server
+    Logs {
+        /// Follow logs continuously
         #[arg(long)]
-        root: PathBuf,
-        /// ATP port (default 9142)
-        #[arg(long, default_value = "9142")]
-        port: u16,
-        /// Enable test mode: mock IPC layer with seeded procs and periodic events
+        follow: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum AtpCmd {
+    /// Interactive ATP shell (REPL)
+    Shell {
+        /// ATP server URL
+        #[arg(long, default_value = "ws://localhost:9142/atp")]
+        server: String,
+        /// Authentication token (prompts if omitted)
         #[arg(long)]
-        test_mode: bool,
-        /// Kernel IPC socket path
-        #[arg(long, default_value = "/run/avix/kernel.sock")]
-        kernel_sock: Option<PathBuf>,
+        token: Option<String>,
     },
 }
 
@@ -204,25 +211,10 @@ enum AgentCmd {
     },
     /// List active agents
     List,
-    /// Kill an agent
+    /// Kill an agent by PID
     Kill {
         /// PID of the agent
         pid: u64,
-    },
-    /// Run the Avix server
-    Server {
-        /// Runtime root directory
-        #[arg(long)]
-        root: PathBuf,
-        /// ATP port (default 9142)
-        #[arg(long, default_value = "9142")]
-        port: u16,
-        /// Enable test mode: mock IPC layer with seeded procs and periodic events
-        #[arg(long)]
-        test_mode: bool,
-        /// Kernel IPC socket path
-        #[arg(long, default_value = "/run/avix/kernel.sock")]
-        kernel_sock: Option<PathBuf>,
     },
 }
 
@@ -232,7 +224,7 @@ enum HilCmd {
     Approve {
         /// PID of the agent
         pid: u64,
-        /// HIL ID
+        /// HIL request ID
         hil_id: String,
         /// Approval token
         #[arg(long)]
@@ -245,7 +237,7 @@ enum HilCmd {
     Deny {
         /// PID of the agent
         pid: u64,
-        /// HIL ID
+        /// HIL request ID
         hil_id: String,
         /// Approval token
         #[arg(long)]
@@ -254,35 +246,9 @@ enum HilCmd {
         #[arg(long)]
         note: Option<String>,
     },
-    /// Run the Avix server
-    Server {
-        /// Runtime root directory
-        #[arg(long)]
-        root: PathBuf,
-        /// ATP port (default 9142)
-        #[arg(long, default_value = "9142")]
-        port: u16,
-        /// Enable test mode: mock IPC layer with seeded procs and periodic events
-        #[arg(long)]
-        test_mode: bool,
-        /// Kernel IPC socket path
-        #[arg(long, default_value = "/run/avix/kernel.sock")]
-        kernel_sock: Option<PathBuf>,
-    },
 }
 
-#[derive(Subcommand)]
-enum AtpCmd {
-    /// Interactive ATP shell (REPL)
-    Shell {
-        /// ATP server URL (default ws://localhost:9142/atp)
-        #[arg(long, default_value = "ws://localhost:9142/atp")]
-        server: String,
-        /// Authentication token (if not provided, prompts for login)
-        #[arg(long)]
-        token: Option<String>,
-    },
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Emit output in JSON or human-readable format
 fn emit<T: serde::Serialize>(json_mode: bool, human_fn: impl FnOnce(&T) -> String, value: T) {
@@ -295,22 +261,29 @@ fn emit<T: serde::Serialize>(json_mode: bool, human_fn: impl FnOnce(&T) -> Strin
 
 fn log_filename(cmd: &Cmd) -> &str {
     match cmd {
-        Cmd::Server { .. } => "server",
-        Cmd::Tui => "tui",
-        Cmd::Agent { .. } => "agent",
-        Cmd::Hil { .. } => "hil",
-        Cmd::Logs { .. } => "logs",
-        _ => "cli",
+        Cmd::Server { sub } => match sub {
+            ServerCmd::Start { .. } => "server",
+            ServerCmd::Run { .. } => "run",
+            _ => "server",
+        },
+        Cmd::Client { sub } => match sub {
+            ClientCmd::Tui => "tui",
+            ClientCmd::Hil { .. } => "hil",
+            ClientCmd::Logs { .. } => "logs",
+            ClientCmd::Agent { .. } => "agent",
+            _ => "client",
+        },
     }
 }
 
-/// Connect to ATP server using loaded config and return dispatcher
+/// Connect to the ATP server using config.yaml and return a dispatcher.
 async fn connect_config() -> Result<Dispatcher, anyhow::Error> {
     let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
     let client = AtpClient::connect(config).await?;
-    let dispatcher = Dispatcher::new(client);
-    Ok(dispatcher)
+    Ok(Dispatcher::new(client))
 }
+
+// ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -339,58 +312,9 @@ async fn main() -> Result<()> {
     );
 
     match cli.command {
-        Cmd::Config { sub } => match sub {
-            ConfigCmd::Init { root, user, role } => {
-                let root = expand_home(root);
-                let result = run_config_init(ConfigInitParams {
-                    root: root.clone(),
-                    identity_name: user,
-                    credential_type: "api_key".into(),
-                    role,
-                    master_key_source: "env".into(),
-                    mode: "cli".into(),
-                })?;
-                println!("Avix runtime initialised at: {}", root.display());
-                println!("API key (Avix): {}", result.api_key);
-                println!();
-                println!("Next step:");
-                println!(
-                    "  AVIX_MASTER_KEY=<key> <PROVIDER>_API_KEY=<key> \\\n  avix run --root {} --provider <anthropic|openai|xai|ollama> --goal \\\"say hello world\\\"",
-                    root.display()
-                );
-            }
-
-            ConfigCmd::Reload { check, root } => {
-                let root = expand_home(root);
-                let result = run_config_reload(ReloadParams {
-                    root,
-                    check_only: check,
-                })
-                .await?;
-                if result.restart_required.is_empty() {
-                    println!(
-                        "Config valid — hot-reloadable sections: {}",
-                        result.reloaded_sections.join(", ")
-                    );
-                    if check {
-                        println!("(--check mode: no reload-pending marker written)");
-                    }
-                } else {
-                    eprintln!(
-                        "WARNING: sections requiring restart: {}",
-                        result.restart_required.join(", ")
-                    );
-                    if !result.reloaded_sections.is_empty() {
-                        println!(
-                            "Hot-reloadable sections: {}",
-                            result.reloaded_sections.join(", ")
-                        );
-                    }
-                    std::process::exit(1);
-                }
-            }
-
-            ConfigCmd::Server {
+        // ── Server commands ───────────────────────────────────────────────────
+        Cmd::Server { sub } => match sub {
+            ServerCmd::Start {
                 root,
                 port,
                 test_mode,
@@ -402,240 +326,247 @@ async fn main() -> Result<()> {
                 let runtime = Runtime::bootstrap_with_root(&root).await?;
                 runtime.start_daemon(port, test_mode).await?;
             }
-        },
 
-        Cmd::Resolve {
-            kind,
-            user,
-            agent,
-            explain,
-            limits_only,
-            extra_crew,
-            dry_run,
-            root,
-        } => {
-            let root = expand_home(root);
-            let result = run_resolve(ResolveParams {
+            ServerCmd::Config { sub } => match sub {
+                ServerConfigCmd::Init { root, user, role } => {
+                    let root = expand_home(root);
+                    let result = run_config_init(ConfigInitParams {
+                        root: root.clone(),
+                        identity_name: user,
+                        credential_type: "api_key".into(),
+                        role,
+                        master_key_source: "env".into(),
+                        mode: "cli".into(),
+                    })?;
+                    println!("Avix runtime initialised at: {}", root.display());
+                    println!("API key (Avix): {}", result.api_key);
+                    println!();
+                    println!("Next step:");
+                    println!(
+                        "  <PROVIDER>_API_KEY=<key> avix server start --root {} --port 9142",
+                        root.display()
+                    );
+                }
+
+                ServerConfigCmd::Reload { check, root } => {
+                    let root = expand_home(root);
+                    let result = run_config_reload(ReloadParams {
+                        root,
+                        check_only: check,
+                    })
+                    .await?;
+                    if result.restart_required.is_empty() {
+                        println!(
+                            "Config valid — hot-reloadable sections: {}",
+                            result.reloaded_sections.join(", ")
+                        );
+                        if check {
+                            println!("(--check mode: no reload-pending marker written)");
+                        }
+                    } else {
+                        eprintln!(
+                            "WARNING: sections requiring restart: {}",
+                            result.restart_required.join(", ")
+                        );
+                        if !result.reloaded_sections.is_empty() {
+                            println!(
+                                "Hot-reloadable sections: {}",
+                                result.reloaded_sections.join(", ")
+                            );
+                        }
+                        std::process::exit(1);
+                    }
+                }
+            },
+
+            ServerCmd::Run {
                 root,
+                goal,
+                name,
+                model,
+            } => {
+                let root = expand_home(root);
+
+                let llm_config = load_llm_config(&root)?;
+                let provider_cfg = llm_config
+                    .default_provider_for(Modality::Text)
+                    .ok_or_else(|| anyhow::anyhow!("no default text provider in etc/llm.yaml"))?;
+
+                let resolved_model = model
+                    .clone()
+                    .or_else(|| default_text_model(provider_cfg))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "no text model found for provider '{}' in etc/llm.yaml",
+                            provider_cfg.name
+                        )
+                    })?;
+
+                let llm_client: Box<dyn LlmClient> =
+                    build_llm_client(provider_cfg, &resolved_model)?;
+
+                let runtime = Runtime::bootstrap_with_root(&root).await?;
+                println!(
+                    "Runtime booted — {} phases complete",
+                    runtime.boot_log().len()
+                );
+
+                let token = CapabilityToken::test_token(&[
+                    "cap/request-tool",
+                    "cap/escalate",
+                    "cap/list",
+                    "job/watch",
+                ]);
+                let params = SpawnParams {
+                    pid: Pid::new(100),
+                    agent_name: name.clone(),
+                    goal: goal.clone(),
+                    spawned_by: "cli".into(),
+                    session_id: uuid::Uuid::new_v4().to_string(),
+                    token,
+                    system_prompt: None,
+                    selected_model: resolved_model.clone(),
+                    denied_tools: vec![],
+                    context_limit: 0,
+                    runtime_dir: runtime.runtime_dir().to_path_buf(),
+                };
+                let registry = Arc::new(MockToolRegistry::new());
+                let mut executor =
+                    RuntimeExecutor::spawn_with_registry(params, registry).await?;
+
+                println!("Agent '{}' spawned (PID 100)", name);
+                println!("Goal: {}", goal);
+                println!();
+                println!("--- Agent output ---");
+                let result = executor.run_with_client(&goal, llm_client.as_ref()).await?;
+                println!("{}", result.text);
+                println!("--- Done ---");
+            }
+
+            ServerCmd::Resolve {
                 kind,
-                username: user,
-                agent_name: agent,
+                user,
+                agent,
                 explain,
                 limits_only,
                 extra_crew,
                 dry_run,
-            })
-            .await?;
-            println!("{}", result.output);
-        }
-
-        Cmd::Run {
-            root,
-            goal,
-            name,
-            model,
-        } => {
-            let root = expand_home(root);
-
-            // Load provider config from etc/llm.yaml in the runtime root
-            let llm_config = load_llm_config(&root)?;
-            let provider_cfg = llm_config
-                .default_provider_for(Modality::Text)
-                .ok_or_else(|| anyhow::anyhow!("no default text provider in etc/llm.yaml"))?;
-
-            // Resolve the model name before building the client so we can also
-            // pass it to SpawnParams (RuntimeExecutor sends empty model string).
-            let resolved_model = model
-                .clone()
-                .or_else(|| default_text_model(provider_cfg))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "no text model found for provider '{}' in etc/llm.yaml",
-                        provider_cfg.name
-                    )
-                })?;
-
-            // Build the LLM client via AutoAgents — type-erased as Box<dyn LlmClient>
-            let llm_client: Box<dyn LlmClient> = build_llm_client(provider_cfg, &resolved_model)?;
-
-            // Bootstrap: checks auth.conf, reads+zeroes AVIX_MASTER_KEY
-            let runtime = Runtime::bootstrap_with_root(&root).await?;
-            println!(
-                "Runtime booted — {} phases complete",
-                runtime.boot_log().len()
-            );
-
-            // Spawn executor with minimal capability token
-            let token = CapabilityToken::test_token(&[
-                "cap/request-tool",
-                "cap/escalate",
-                "cap/list",
-                "job/watch",
-            ]);
-            let params = SpawnParams {
-                pid: Pid::new(100),
-                agent_name: name.clone(),
-                goal: goal.clone(),
-                spawned_by: "cli".into(),
-                session_id: uuid::Uuid::new_v4().to_string(),
-                token,
-                system_prompt: None,
-                selected_model: resolved_model.clone(),
-                denied_tools: vec![],
-                context_limit: 0,
-                runtime_dir: runtime.runtime_dir().to_path_buf(),
-            };
-            let registry = Arc::new(MockToolRegistry::new());
-            let mut executor = RuntimeExecutor::spawn_with_registry(params, registry).await?;
-
-            println!("Agent '{}' spawned (PID 100)", name);
-            println!("Goal: {}", goal);
-            println!();
-
-            println!("--- Agent output ---");
-            let result = executor.run_with_client(&goal, llm_client.as_ref()).await?;
-            println!("{}", result.text);
-            println!("--- Done ---");
-        }
-
-        Cmd::Server {
-            root,
-            port,
-            test_mode,
-            kernel_sock,
-        } => {
-            let root = expand_home(root);
-            let kernel_sock = kernel_sock.unwrap_or_else(|| root.join("run/avix/kernel.sock"));
-            std::env::set_var("AVIX_KERNEL_SOCK", kernel_sock);
-            let runtime = Runtime::bootstrap_with_root(&root).await?;
-            runtime.start_daemon(port, test_mode).await?;
-        }
-
-        Cmd::Connect => {
-            connect_config().await?;
-            emit(cli.json, |_: &()| "Connected to server".to_string(), ());
-        }
-
-        Cmd::Atp { sub } => match sub {
-            AtpCmd::Shell { server, token } => {
-                run_atp_shell(server, token).await?;
-            }
-        },
-
-        Cmd::Agent { sub } => match sub {
-            AgentCmd::Spawn {
-                name,
-                goal,
-                capabilities,
+                root,
             } => {
-                let dispatcher = connect_config().await?;
-                let _config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
-                let pid = spawn_agent(
-                    &dispatcher,
-                    &name,
-                    &goal,
-                    &capabilities.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-                )
+                let root = expand_home(root);
+                let result = run_resolve(ResolveParams {
+                    root,
+                    kind,
+                    username: user,
+                    agent_name: agent,
+                    explain,
+                    limits_only,
+                    extra_crew,
+                    dry_run,
+                })
                 .await?;
-                emit(
-                    cli.json,
-                    |pid: &u64| format!("Agent spawned with PID {}", pid),
+                println!("{}", result.output);
+            }
+
+        },
+
+        // ── Client commands ───────────────────────────────────────────────────
+        Cmd::Client { sub } => match sub {
+            ClientCmd::Connect => {
+                connect_config().await?;
+                emit(cli.json, |_: &()| "Connected to server".to_string(), ());
+            }
+
+            ClientCmd::Tui => {
+                return tui::app::run(cli.json).await;
+            }
+
+            ClientCmd::Atp { sub } => match sub {
+                AtpCmd::Shell { server, token } => {
+                    run_atp_shell(server, token).await?;
+                }
+            },
+
+            ClientCmd::Agent { sub } => match sub {
+                AgentCmd::Spawn {
+                    name,
+                    goal,
+                    capabilities,
+                } => {
+                    let dispatcher = connect_config().await?;
+                    let pid = spawn_agent(
+                        &dispatcher,
+                        &name,
+                        &goal,
+                        &capabilities.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                    )
+                    .await?;
+                    emit(
+                        cli.json,
+                        |pid: &u64| format!("Agent spawned with PID {}", pid),
+                        pid,
+                    );
+                }
+                AgentCmd::List => {
+                    let dispatcher = connect_config().await?;
+                    let agents = list_agents(&dispatcher).await?;
+                    emit(
+                        cli.json,
+                        |agents: &Vec<serde_json::Value>| format!("Agents: {:?}", agents),
+                        agents,
+                    );
+                }
+                AgentCmd::Kill { pid } => {
+                    let dispatcher = connect_config().await?;
+                    kill_agent(&dispatcher, pid).await?;
+                    emit(cli.json, |_: &()| format!("Killed agent {}", pid), ());
+                }
+            },
+
+            ClientCmd::Hil { sub } => match sub {
+                HilCmd::Approve {
                     pid,
-                );
-            }
-            AgentCmd::List => {
-                let dispatcher = connect_config().await?;
-                let _config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
-                let agents = list_agents(&dispatcher).await?;
-                emit(
-                    cli.json,
-                    |agents: &Vec<serde_json::Value>| format!("Agents: {:?}", agents),
-                    agents,
-                );
-            }
-            AgentCmd::Kill { pid } => {
-                let dispatcher = connect_config().await?;
-                kill_agent(&dispatcher, pid).await?;
-                emit(cli.json, |_: &()| format!("Killed agent {}", pid), ());
-            }
-            AgentCmd::Server {
-                root,
-                port,
-                test_mode,
-                kernel_sock,
-            } => {
-                let root = expand_home(root);
-                let kernel_sock = kernel_sock.unwrap_or_else(|| root.join("run/avix/kernel.sock"));
-                std::env::set_var("AVIX_KERNEL_SOCK", kernel_sock);
-                let runtime = Runtime::bootstrap_with_root(&root).await?;
-                runtime.start_daemon(port, test_mode).await?;
+                    hil_id,
+                    token,
+                    note,
+                } => {
+                    let dispatcher = connect_config().await?;
+                    resolve_hil(&dispatcher, pid, &hil_id, &token, true, note.as_deref())
+                        .await?;
+                    emit(
+                        cli.json,
+                        |_: &()| format!("Approved HIL {} for PID {}", hil_id, pid),
+                        (),
+                    );
+                }
+                HilCmd::Deny {
+                    pid,
+                    hil_id,
+                    token,
+                    note,
+                } => {
+                    let dispatcher = connect_config().await?;
+                    resolve_hil(&dispatcher, pid, &hil_id, &token, false, note.as_deref())
+                        .await?;
+                    emit(
+                        cli.json,
+                        |_: &()| format!("Denied HIL {} for PID {}", hil_id, pid),
+                        (),
+                    );
+                }
+            },
+
+            ClientCmd::Logs { follow: _ } => {
+                // For now, stub
+                emit(cli.json, |_: &()| "Logs output".to_string(), ());
             }
         },
-
-        Cmd::Hil { sub } => match sub {
-            HilCmd::Approve {
-                pid,
-                hil_id,
-                token,
-                note,
-            } => {
-                let dispatcher = connect_config().await?;
-                let _config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
-                resolve_hil(&dispatcher, pid, &hil_id, &token, true, note.as_deref()).await?;
-                emit(
-                    cli.json,
-                    |_: &()| format!("Approved HIL {} for PID {}", hil_id, pid),
-                    (),
-                );
-            }
-            HilCmd::Deny {
-                pid,
-                hil_id,
-                token,
-                note,
-            } => {
-                let dispatcher = connect_config().await?;
-                let _config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
-                resolve_hil(&dispatcher, pid, &hil_id, &token, false, note.as_deref()).await?;
-                emit(
-                    cli.json,
-                    |_: &()| format!("Denied HIL {} for PID {}", hil_id, pid),
-                    (),
-                );
-            }
-            HilCmd::Server {
-                root,
-                port,
-                test_mode,
-                kernel_sock,
-            } => {
-                let root = expand_home(root);
-                let kernel_sock = kernel_sock.unwrap_or_else(|| root.join("run/avix/kernel.sock"));
-                std::env::set_var("AVIX_KERNEL_SOCK", kernel_sock);
-                let runtime = Runtime::bootstrap_with_root(&root).await?;
-                runtime.start_daemon(port, test_mode).await?;
-            }
-        },
-
-        Cmd::Tui => {
-            return tui::app::run(cli.json).await;
-        }
-
-        Cmd::Logs { follow: _ } => {
-            // For now, stub
-            emit(cli.json, |_: &()| "Logs output".to_string(), ());
-        }
-
-        Cmd::Re { goal } => {
-            // Minimal loop: read IPC → exec goal → output/exit
-            println!("avix-re: executing goal '{}'", goal);
-            // TODO: implement IPC read and exec
-            println!("Output: goal executed");
-        }
     }
 
     Ok(())
 }
+
+// ── LLM helpers ───────────────────────────────────────────────────────────────
 
 /// Load and parse `{root}/etc/llm.yaml`.
 fn load_llm_config(root: &std::path::Path) -> Result<LlmConfig> {
@@ -661,8 +592,6 @@ fn default_text_model(provider: &ProviderConfig) -> Option<String> {
 }
 
 /// Build an LLM client from a `ProviderConfig` read out of `llm.yaml`.
-/// The API key is read from the env var named by `auth.secretName`.
-/// `model` is the already-resolved model name (from `--model` or `llm.yaml`).
 fn build_llm_client(provider: &ProviderConfig, model: &str) -> Result<Box<dyn LlmClient>> {
     let api_key = match &provider.auth {
         ProviderAuth::ApiKey { secret_name, .. } => {
@@ -705,9 +634,6 @@ fn build_llm_client(provider: &ProviderConfig, model: &str) -> Result<Box<dyn Ll
             Ok(Box::new(AutoAgentsChatClient::new(p)))
         }
         "xai" => {
-            // The autoagents XAI backend does not implement tool calling.
-            // Use DirectHttpLlmClient with XaiAdapter — xAI's API is
-            // OpenAI-compatible and supports function calling natively.
             let auth = api_key.map(|k| ("Authorization".to_string(), format!("Bearer {k}")));
             Ok(Box::new(DirectHttpLlmClient::new(
                 "https://api.x.ai",
@@ -733,9 +659,9 @@ fn build_llm_client(provider: &ProviderConfig, model: &str) -> Result<Box<dyn Ll
     }
 }
 
+// ── ATP shell ─────────────────────────────────────────────────────────────────
+
 /// Run the interactive ATP shell REPL.
-/// Connects to the given server, logs in if no token, subscribes to all events, then enters REPL.
-/// Links: docs/dev_plans/ATP-WS-TESTS-PLAN.md#52
 async fn run_atp_shell(server_url: String, token: Option<String>) -> Result<()> {
     use futures_util::{SinkExt, StreamExt};
     use serde_json::Value;
@@ -747,7 +673,6 @@ async fn run_atp_shell(server_url: String, token: Option<String>) -> Result<()> 
 
     println!("ATP Shell — connecting to {}", server_url);
 
-    // If token provided, use as credential; else prompt
     let credential = if let Some(t) = token {
         t
     } else {
@@ -758,7 +683,6 @@ async fn run_atp_shell(server_url: String, token: Option<String>) -> Result<()> 
         credential.trim().to_string()
     };
 
-    // HTTP login
     let client = reqwest::Client::new();
     let login_url = server_url
         .replace("ws://", "http://")
@@ -777,7 +701,6 @@ async fn run_atp_shell(server_url: String, token: Option<String>) -> Result<()> 
 
     println!("Logged in, connecting WS...");
 
-    // Connect WS
     let mut request = server_url.into_client_request()?;
     request
         .headers_mut()
@@ -785,14 +708,12 @@ async fn run_atp_shell(server_url: String, token: Option<String>) -> Result<()> 
     let (ws_stream, _) = connect_async(request).await?;
     let (mut write, mut read) = ws_stream.split();
 
-    // Subscribe to all events
     let sub_msg = serde_json::json!({"type": "subscribe", "events": ["*"]});
     write.send(Message::Text(sub_msg.to_string())).await?;
 
     println!("Connected. Type JSON-RPC commands, or 'help', 'quit'.");
     println!("Events will be printed as received.");
 
-    // Spawn event reader
     let event_handle = tokio::spawn(async move {
         while let Some(msg) = read.next().await {
             match msg {
@@ -810,7 +731,6 @@ async fn run_atp_shell(server_url: String, token: Option<String>) -> Result<()> 
         }
     });
 
-    // REPL loop
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     loop {
@@ -830,32 +750,30 @@ async fn run_atp_shell(server_url: String, token: Option<String>) -> Result<()> 
                 println!("  quit    - Exit");
                 continue;
             }
-            _ => {
-                // Try to parse as JSON
-                match serde_json::from_str::<Value>(line) {
-                    Ok(mut req) => {
-                        static mut ID: u64 = 0;
-                        unsafe { ID += 1 };
-                        req["jsonrpc"] = "2.0".into();
-                        req["id"] = unsafe { ID }.into();
-                        write.send(Message::Text(req.to_string())).await?;
-                        println!("Sent: {}", req);
-                    }
-                    Err(_) => {
-                        eprintln!(
-                            "Invalid JSON. Try: {{\"method\": \"proc.list\", \"params\": {{}}}}"
-                        );
-                    }
+            _ => match serde_json::from_str::<Value>(line) {
+                Ok(mut req) => {
+                    static mut ID: u64 = 0;
+                    unsafe { ID += 1 };
+                    req["jsonrpc"] = "2.0".into();
+                    req["id"] = unsafe { ID }.into();
+                    write.send(Message::Text(req.to_string())).await?;
+                    println!("Sent: {}", req);
                 }
-            }
+                Err(_) => {
+                    eprintln!(
+                        "Invalid JSON. Try: {{\"method\": \"proc.list\", \"params\": {{}}}}"
+                    );
+                }
+            },
         }
     }
 
-    // Close WS
     write.send(Message::Close(None)).await?;
     event_handle.abort();
     Ok(())
 }
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
 
 fn expand_home(path: PathBuf) -> PathBuf {
     let s = path.to_string_lossy();

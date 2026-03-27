@@ -357,6 +357,7 @@ mod tests {
                 name: "name".into(),
                 goal: "goal".into(),
                 focused_field: 0,
+                error: None,
             }),
             notifications: vec![],
             agent_list_widget: AgentListWidget::default(),
@@ -471,6 +472,7 @@ mod tests {
             name: "agent".into(),
             goal: "goal".into(),
             focused_field: 1,
+            error: None,
         };
         state.reducer(Action::SetNewAgentForm(Some(form.clone())));
         assert_eq!(state.new_agent_form, Some(form));
