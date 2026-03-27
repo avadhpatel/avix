@@ -47,17 +47,23 @@ impl ServerHandle {
             )));
         }
 
+        let runtime_root = config.runtime_root.as_ref().ok_or_else(|| {
+            ClientError::Other(anyhow::anyhow!(
+                "auto_start_server is enabled but runtime_root is not set in client.yaml"
+            ))
+        })?;
+
         let avix_bin = std::env::current_exe()
             .map_err(|e| ClientError::Other(anyhow::anyhow!("Cannot find avix binary: {e}")))?;
 
         info!(
             "Spawning server: {} start --root {:?}",
             avix_bin.display(),
-            config.runtime_root
+            runtime_root
         );
 
         let mut cmd = Command::new(&avix_bin);
-        cmd.args(["server", "start", "--root"]).arg(&config.runtime_root);
+        cmd.args(["server", "start", "--root"]).arg(runtime_root);
 
         let child = cmd
             .spawn()

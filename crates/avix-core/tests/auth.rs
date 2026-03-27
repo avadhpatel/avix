@@ -1,8 +1,20 @@
 use avix_core::auth::AuthService;
 use avix_core::config::AuthConfig;
 
+const TEST_API_KEY: &str = "valid-api-key";
+
+fn make_key_hash(raw: &str) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = HmacSha256::new_from_slice(b"config-init-secret").unwrap();
+    mac.update(raw.as_bytes());
+    format!("hmac-sha256:{}", hex::encode(mac.finalize().into_bytes()))
+}
+
 fn test_config() -> AuthConfig {
-    AuthConfig::from_str(
+    let key_hash = make_key_hash(TEST_API_KEY);
+    let yaml = format!(
         r#"
 apiVersion: avix/v1
 kind: AuthConfig
@@ -14,10 +26,10 @@ identities:
     role: admin
     credential:
       type: api_key
-      key_hash: "hmac-sha256:test-key-hash"
-"#,
-    )
-    .unwrap()
+      key_hash: "{key_hash}"
+"#
+    );
+    AuthConfig::from_str(&yaml).unwrap()
 }
 
 #[tokio::test]
@@ -32,8 +44,8 @@ async fn login_with_valid_api_key_returns_session() {
 #[tokio::test]
 async fn login_with_wrong_key_fails() {
     let svc = AuthService::new(test_config());
-    // empty string is invalid
     assert!(svc.login("alice", "").await.is_err());
+    assert!(svc.login("alice", "wrong-key").await.is_err());
 }
 
 #[tokio::test]

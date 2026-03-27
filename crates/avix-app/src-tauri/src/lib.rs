@@ -16,7 +16,10 @@ pub async fn create_app_state(
     }
 
     // Embed avix daemon
-    let runtime = avix_core::bootstrap::Runtime::bootstrap_with_root(&config.runtime_root).await?;
+    let root = config.runtime_root.clone().unwrap_or_else(|| {
+        avix_client_core::persistence::app_data_dir().join("runtime")
+    });
+    let runtime = avix_core::bootstrap::Runtime::bootstrap_with_root(&root).await?;
     tokio::spawn(async move {
         if let Err(e) = runtime.start_daemon(9142, false).await {
             tracing::error!("Failed to start embedded daemon: {}", e);

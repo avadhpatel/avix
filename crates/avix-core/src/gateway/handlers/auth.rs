@@ -69,6 +69,15 @@ mod tests {
     use chrono::Utc;
     use std::sync::Arc;
 
+    fn make_key_hash(raw: &str) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(b"config-init-secret").unwrap();
+        mac.update(raw.as_bytes());
+        format!("hmac-sha256:{}", hex::encode(mac.finalize().into_bytes()))
+    }
+
     fn make_ctx() -> (HandlerCtx, Arc<ATPTokenStore>) {
         let store = Arc::new(ATPTokenStore::new("secret".into()));
         let config = AuthConfig {
@@ -83,7 +92,7 @@ mod tests {
                 uid: 1001,
                 role: Role::Admin,
                 credential: CredentialType::ApiKey {
-                    key_hash: "key123".into(),
+                    key_hash: make_key_hash("key123"),
                     header: None,
                 },
             }],

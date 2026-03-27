@@ -179,7 +179,6 @@ impl GatewayServer {
                             min_role,
                         );
                     }
-                    tracing::debug!("emitted all event kinds for testing");
                 }
             });
         }

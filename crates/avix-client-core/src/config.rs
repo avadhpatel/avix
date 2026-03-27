@@ -12,7 +12,9 @@ pub struct ClientConfig {
     pub server_url: String,
     pub identity: String,
     pub credential: String,
-    pub runtime_root: PathBuf,
+    /// Only required when auto_start_server is true (or when running the embedded daemon in the app).
+    #[serde(default)]
+    pub runtime_root: Option<PathBuf>,
     #[serde(default = "default_true")]
     pub auto_start_server: bool,
 }
@@ -27,13 +29,7 @@ impl Default for ClientConfig {
             server_url: "http://localhost:9142".to_string(),
             identity: "admin".to_string(),
             credential: String::new(),
-            runtime_root: dirs::home_dir()
-                .unwrap_or_else(|| {
-                    env::var("HOME")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|_| PathBuf::from("./"))
-                })
-                .join("avix-data"),
+            runtime_root: None,
             auto_start_server: true,
         }
     }
@@ -41,7 +37,7 @@ impl Default for ClientConfig {
 
 impl ClientConfig {
     pub fn load() -> Result<Self, ClientError> {
-        let path = persistence::app_data_dir().join("config.yaml");
+        let path = persistence::app_data_dir().join("client.yaml");
         info!("Config load {}", path.display());
         let config = persistence::load_yaml(&path)?;
         debug!("Config {:?}", config);
@@ -49,7 +45,7 @@ impl ClientConfig {
     }
 
     pub fn save(&self) -> Result<(), ClientError> {
-        let path = persistence::app_data_dir().join("config.yaml");
+        let path = persistence::app_data_dir().join("client.yaml");
         info!("Config save {}", path.display());
         debug!("Config {:?}", self);
         persistence::save_yaml(&path, self)
@@ -68,17 +64,17 @@ mod tests {
             server_url: "http://localhost:7700".into(),
             identity: "bob".into(),
             credential: "secret".into(),
-            runtime_root: dir.path().to_path_buf(),
+            runtime_root: Some(dir.path().to_path_buf()),
             auto_start_server: false,
         };
-        let path = dir.path().join("config.yaml");
+        let path = dir.path().join("client.yaml");
         persistence::save_yaml(&path, &cfg).unwrap();
         let loaded: ClientConfig = persistence::load_yaml(&path).unwrap();
         assert_eq!(loaded.identity, "bob");
         assert_eq!(loaded.server_url, "http://localhost:7700");
         assert_eq!(loaded.credential, "secret");
         assert!(!loaded.auto_start_server);
-        assert_eq!(loaded.runtime_root, dir.path().to_path_buf());
+        assert_eq!(loaded.runtime_root, Some(dir.path().to_path_buf()));
     }
 
     #[test]

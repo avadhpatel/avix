@@ -39,7 +39,7 @@ struct Cli {
     json: bool,
 
     /// Log level
-    #[arg(long = "log", default_value_t = LevelFilter::WARN)]
+    #[arg(long = "log", default_value_t = LevelFilter::WARN, global = true)]
     log: LevelFilter,
 
     #[command(subcommand)]

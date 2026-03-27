@@ -19,6 +19,15 @@ use chrono::Utc;
 
 // ── Test helpers ───────────────────────────────────────────────────────────────
 
+fn make_key_hash(raw: &str) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = HmacSha256::new_from_slice(b"config-init-secret").unwrap();
+    mac.update(raw.as_bytes());
+    format!("hmac-sha256:{}", hex::encode(mac.finalize().into_bytes()))
+}
+
 fn make_auth_config() -> AuthConfig {
     AuthConfig {
         api_version: "v1".to_string(),
@@ -33,7 +42,7 @@ fn make_auth_config() -> AuthConfig {
                 uid: 1001,
                 role: Role::Admin,
                 credential: CredentialType::ApiKey {
-                    key_hash: "hunter2".to_string(),
+                    key_hash: make_key_hash("hunter2"),
                     header: None,
                 },
             },
@@ -42,7 +51,7 @@ fn make_auth_config() -> AuthConfig {
                 uid: 1002,
                 role: Role::Guest,
                 credential: CredentialType::ApiKey {
-                    key_hash: "guestpass".to_string(),
+                    key_hash: make_key_hash("guestpass"),
                     header: None,
                 },
             },
@@ -188,8 +197,7 @@ async fn login_returns_token() {
     assert!(body["expiresAt"].is_string(), "expected expiresAt field");
 }
 
-/// The current credential validator accepts any non-empty credential.
-/// This test verifies that an empty credential string returns 401.
+/// A wrong or empty credential returns 401.
 #[tokio::test]
 async fn login_wrong_credential_returns_401() {
     let srv = start_server().await;

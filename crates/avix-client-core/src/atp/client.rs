@@ -169,7 +169,7 @@ mod tests {
             server_url: server.url(),
             identity: "user".to_string(),
             credential: "pass".to_string(),
-            runtime_root: std::path::PathBuf::from("/tmp"),
+            runtime_root: None,
             auto_start_server: false,
         };
 
@@ -200,7 +200,7 @@ mod tests {
             server_url: server.url(),
             identity: "user".to_string(),
             credential: "wrong".to_string(),
-            runtime_root: std::path::PathBuf::from("/tmp"),
+            runtime_root: None,
             auto_start_server: false,
         };
 
