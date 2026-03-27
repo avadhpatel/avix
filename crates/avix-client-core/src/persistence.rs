@@ -4,6 +4,7 @@ use tracing::debug;
 use tracing::warn;
 
 use serde::{de::DeserializeOwned, Serialize};
+use serde_yaml;
 
 use crate::error::ClientError;
 use crate::notification::Notification;
@@ -58,6 +59,58 @@ where
     })?;
     debug!("write {:?} {}B", path, json.len());
     fs::write(&tmp_path, json).map_err(|e| {
+        warn!("Failed to write to tmp file {}: {}", tmp_path.display(), e);
+        ClientError::Other(e.into())
+    })?;
+    fs::rename(&tmp_path, path).map_err(|e| {
+        warn!(
+            "Failed to rename {} to {}: {}",
+            tmp_path.display(),
+            path.display(),
+            e
+        );
+        ClientError::Other(e.into())
+    })
+}
+
+pub fn load_yaml<T>(path: &Path) -> Result<T, ClientError>
+where
+    T: DeserializeOwned + Default,
+{
+    debug!("read {:?}", path);
+    if !path.exists() {
+        debug!("path doesn't exists");
+        return Ok(Default::default());
+    }
+    let content = fs::read_to_string(path).map_err(|e| {
+        warn!("Failed to read file {}: {}", path.display(), e);
+        ClientError::Other(e.into())
+    })?;
+    serde_yaml::from_str(&content).map_err(|e| {
+        warn!(
+            "Failed to deserialize YAML from file {}: {}",
+            path.display(),
+            e
+        );
+        ClientError::Other(e.into())
+    })
+}
+
+pub fn save_yaml<T>(path: &Path, value: &T) -> Result<(), ClientError>
+where
+    T: Serialize + ?Sized,
+{
+    let tmp_path = path.with_extension("tmp");
+    let yaml = serde_yaml::to_string(value).map_err(|e| {
+        warn!(
+            "Failed to serialize value to YAML for {}: {}",
+            path.display(),
+            e
+        );
+        ClientError::Other(e.into())
+    })?;
+    debug!("write {:?} {}B", path, yaml.len());
+    fs::write(&tmp_path, yaml).map_err(|e| {
         warn!("Failed to write to tmp file {}: {}", tmp_path.display(), e);
         ClientError::Other(e.into())
     })?;
