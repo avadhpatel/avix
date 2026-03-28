@@ -46,3 +46,6 @@ reqwest            = { version = "0.12", default-features = false, features = ["
 axum               = { version = "0.7", features = ["ws"] }
 tower              = { version = "0.4" }
 tracing-appender   = { version = "0.2" }
+flate2             = { version = "1" }
+tar                = { version = "0.4" }
+walkdir            = { version = "2" }
