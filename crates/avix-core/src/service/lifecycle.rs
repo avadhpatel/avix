@@ -8,7 +8,7 @@ use super::token::ServiceToken;
 use super::unit::ServiceUnit;
 use crate::error::AvixError;
 use crate::tool_registry::entry::ToolEntry;
-use crate::tool_registry::ToolRegistry;
+use crate::tool_registry::{ToolRegistry, ToolScanner};
 use crate::types::{
     tool::{ToolName, ToolState, ToolVisibility},
     Pid,
@@ -96,6 +96,7 @@ impl ServiceManager {
     pub async fn handle_ipc_register(
         &self,
         req: IpcRegisterRequest,
+        service_root: &Path,
     ) -> Result<IpcRegisterResult, AvixError> {
         let svc_name = self.validate_token(&req.token).await?;
         if svc_name != req.name {
@@ -108,6 +109,15 @@ impl ServiceManager {
         record.endpoint = Some(req.endpoint);
         record.registered_at = Some(chrono::Utc::now());
         let pid = record.token.pid;
+        drop(guard);
+
+        // Scan and register tool descriptors from disk
+        let svc_dir = service_root.join("services").join(&svc_name);
+        let entries = ToolScanner::scan_as_entries(&svc_name, &svc_dir)?;
+        if let Some(reg) = &self.tool_registry {
+            reg.add(&svc_name, entries).await?;
+        }
+
         Ok(IpcRegisterResult {
             registered: true,
             pid,
@@ -288,12 +298,15 @@ namespace = "/tools/{name}/"
 
         let before = chrono::Utc::now();
         let result = mgr
-            .handle_ipc_register(IpcRegisterRequest {
-                token: token.token_str.clone(),
-                name: "test-svc".into(),
-                endpoint: "/run/avix/test-svc-10.sock".into(),
-                tools: vec!["test/echo".into()],
-            })
+            .handle_ipc_register(
+                IpcRegisterRequest {
+                    token: token.token_str.clone(),
+                    name: "test-svc".into(),
+                    endpoint: "/run/avix/test-svc-10.sock".into(),
+                    tools: vec!["test/echo".into()],
+                },
+                dir.path(),
+            )
             .await
             .unwrap();
         let after = chrono::Utc::now();
@@ -304,5 +317,45 @@ namespace = "/tools/{name}/"
         // before we get there), so instead verify the pid was set correctly.
         assert_eq!(result.pid, token.pid);
         let _ = (before, after); // timestamps verified by the fact it ran without panic
+    }
+
+    #[tokio::test]
+    async fn handle_ipc_register_scans_and_registers_tools() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, registry) =
+            ServiceManager::new_with_registry(dir.path().to_path_buf());
+
+        let token = mgr
+            .spawn_and_get_token(ServiceSpawnRequest {
+                name: "my-svc".into(),
+                binary: "/bin/my-svc".into(),
+            })
+            .await
+            .unwrap();
+
+        // Write a tool descriptor for the service
+        let tools_dir = dir.path().join("services").join("my-svc").join("tools");
+        std::fs::create_dir_all(&tools_dir).unwrap();
+        std::fs::write(
+            tools_dir.join("echo.tool.yaml"),
+            "name: my/echo\ndescription: Echo tool\n",
+        )
+        .unwrap();
+
+        mgr.handle_ipc_register(
+            IpcRegisterRequest {
+                token: token.token_str.clone(),
+                name: "my-svc".into(),
+                endpoint: "/run/avix/my-svc-10.sock".into(),
+                tools: vec![],
+            },
+            dir.path(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(registry.tool_count().await, 1);
+        let entry = registry.lookup("my/echo").await.unwrap();
+        assert_eq!(entry.owner, "my-svc");
     }
 }
