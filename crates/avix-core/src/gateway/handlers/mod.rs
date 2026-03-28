@@ -199,8 +199,7 @@ impl IpcRouter for TestIpcRouter {
                     as u32;
                 let is_agent = {
                     let mut procs = self.procs.lock().await;
-                    let was = procs.remove(&pid).map(|p| p.is_agent).unwrap_or(false);
-                    was
+                    procs.remove(&pid).map(|p| p.is_agent).unwrap_or(false)
                 };
                 let (event_kind, event_body) = if is_agent {
                     (
