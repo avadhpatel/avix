@@ -40,8 +40,7 @@ impl ServiceInstaller {
             self.verify_checksum(&bytes, expected)?;
         }
 
-        let tmp_dir =
-            tempfile::tempdir().map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let tmp_dir = tempfile::tempdir().map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         self.extract_tarball(&bytes, tmp_dir.path())?;
 
         let unit = ServiceUnit::load(&tmp_dir.path().join("service.unit"))?;
@@ -57,17 +56,13 @@ impl ServiceInstaller {
             source_url: Some(req.source.clone()),
             checksum: req.checksum.clone(),
             installed_at: chrono::Utc::now(),
-            service_unit_path: install_dir
-                .join("service.unit")
-                .display()
-                .to_string(),
+            service_unit_path: install_dir.join("service.unit").display().to_string(),
             binary_path: unit.service.binary.clone(),
         };
         let receipt_path = install_dir.join(".install.json");
         let json = serde_json::to_string_pretty(&receipt)
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        std::fs::write(&receipt_path, json)
-            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        std::fs::write(&receipt_path, json).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
         Ok(InstallResult {
             name: unit.name.clone(),
@@ -80,9 +75,8 @@ impl ServiceInstaller {
 
     async fn fetch(&self, source: &str) -> Result<Vec<u8>, AvixError> {
         if let Some(path) = source.strip_prefix("file://") {
-            std::fs::read(path).map_err(|e| {
-                AvixError::ConfigParse(format!("cannot read {path}: {e}"))
-            })
+            std::fs::read(path)
+                .map_err(|e| AvixError::ConfigParse(format!("cannot read {path}: {e}")))
         } else if source.starts_with("https://") || source.starts_with("http://") {
             let bytes = reqwest::get(source)
                 .await
@@ -135,10 +129,7 @@ impl ServiceInstaller {
                 .to_path_buf();
 
             // Strip the top-level <name>-<version>/ component
-            let stripped = raw_path
-                .components()
-                .skip(1)
-                .collect::<PathBuf>();
+            let stripped = raw_path.components().skip(1).collect::<PathBuf>();
 
             if stripped.as_os_str().is_empty() {
                 continue;
@@ -192,8 +183,7 @@ impl ServiceInstaller {
     }
 
     fn copy_to_install_dir(&self, src: &Path, dest: &Path) -> Result<(), AvixError> {
-        std::fs::create_dir_all(dest)
-            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        std::fs::create_dir_all(dest).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         for entry in walkdir::WalkDir::new(src) {
             let entry = entry.map_err(|e| AvixError::ConfigParse(e.to_string()))?;
             let rel = entry
@@ -378,14 +368,8 @@ mod tests {
 
         assert_eq!(result.name, "test-svc");
         assert_eq!(result.version, "1.0.0");
-        assert!(root
-            .path()
-            .join("services/test-svc/service.unit")
-            .exists());
-        assert!(root
-            .path()
-            .join("services/test-svc/.install.json")
-            .exists());
+        assert!(root.path().join("services/test-svc/service.unit").exists());
+        assert!(root.path().join("services/test-svc/.install.json").exists());
     }
 
     #[tokio::test]
@@ -463,8 +447,7 @@ mod tests {
             .await
             .unwrap();
 
-        let json =
-            std::fs::read_to_string(&result.receipt_path).unwrap();
+        let json = std::fs::read_to_string(&result.receipt_path).unwrap();
         let receipt: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(receipt["name"], "receipt-svc");
         assert_eq!(receipt["version"], "3.0.0");

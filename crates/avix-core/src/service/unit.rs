@@ -31,9 +31,8 @@ fn default_source() -> ServiceSource {
 impl ServiceUnit {
     /// Load and parse a `service.unit` file from `path`.
     pub fn load(path: &Path) -> Result<Self, AvixError> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            AvixError::ConfigParse(format!("cannot read {}: {e}", path.display()))
-        })?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| AvixError::ConfigParse(format!("cannot read {}: {e}", path.display())))?;
         toml::from_str(&content)
             .map_err(|e| AvixError::ConfigParse(format!("service.unit parse error: {e}")))
     }
@@ -315,7 +314,10 @@ namespace = "/tools/multi/"
         let unit = ServiceUnit::load(&path).unwrap();
         assert!(unit.capabilities.caller_scoped);
         assert_eq!(unit.capabilities.required, vec!["fs:read"]);
-        assert!(matches!(unit.capabilities.host_access[0], HostAccess::Network));
+        assert!(matches!(
+            unit.capabilities.host_access[0],
+            HostAccess::Network
+        ));
     }
 
     #[test]

@@ -1,9 +1,9 @@
+use serde_json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
 use tracing::warn;
-use serde_json;
 
 use crate::atp::types::AgentStatus;
 use crate::atp::{AtpClient, Dispatcher, EventEmitter};

@@ -268,13 +268,23 @@ async fn test_basic() -> Result<()> {
 
     // session/ready → reply body should be "ack"
     let reply = ws.cmd("session", "ready", json!({})).await?;
-    assert!(reply["ok"].as_bool().unwrap_or(false), "session/ready failed: {reply}");
+    assert!(
+        reply["ok"].as_bool().unwrap_or(false),
+        "session/ready failed: {reply}"
+    );
     assert_eq!(reply["body"], "ack");
 
     // proc/list → reply body should be an array
     let reply = ws.cmd("proc", "list", json!({})).await?;
-    assert!(reply["ok"].as_bool().unwrap_or(false), "proc/list failed: {reply}");
-    assert!(reply["body"].is_array(), "expected array, got: {}", reply["body"]);
+    assert!(
+        reply["ok"].as_bool().unwrap_or(false),
+        "proc/list failed: {reply}"
+    );
+    assert!(
+        reply["body"].is_array(),
+        "expected array, got: {}",
+        reply["body"]
+    );
 
     server.kill().await?;
     info!("test_basic passed");
@@ -299,7 +309,10 @@ async fn test_errors() -> Result<()> {
 
     // Bad WS token → upgrade rejected (connect_async returns Err)
     let result = WsConn::connect("bad-token", port).await;
-    assert!(result.is_err(), "expected WS upgrade to fail with bad token");
+    assert!(
+        result.is_err(),
+        "expected WS upgrade to fail with bad token"
+    );
 
     server.kill().await?;
     info!("test_errors passed");
@@ -319,14 +332,27 @@ async fn test_events() -> Result<()> {
 
     // Spawn a proc
     let reply = ws
-        .cmd("proc", "spawn", json!({"cmd": ["echo", "hello"], "name": "test-proc"}))
+        .cmd(
+            "proc",
+            "spawn",
+            json!({"cmd": ["echo", "hello"], "name": "test-proc"}),
+        )
         .await?;
-    assert!(reply["ok"].as_bool().unwrap_or(false), "proc/spawn failed: {reply}");
-    assert!(reply["body"]["pid"].is_number(), "expected pid in reply body");
+    assert!(
+        reply["ok"].as_bool().unwrap_or(false),
+        "proc/spawn failed: {reply}"
+    );
+    assert!(
+        reply["body"]["pid"].is_number(),
+        "expected pid in reply body"
+    );
 
     // Receive proc.start event
     let event = ws.recv_event().await?;
-    assert_eq!(event["event"], "proc.start", "expected proc.start, got: {event}");
+    assert_eq!(
+        event["event"], "proc.start",
+        "expected proc.start, got: {event}"
+    );
     assert!(event["body"]["pid"].is_number());
 
     server.kill().await?;
@@ -342,7 +368,10 @@ async fn test_full_errors() -> Result<()> {
     // First server: test bad WS token
     let (mut server, port, _api_key) = spawn_debug_server().await?;
     let result = WsConn::connect("completely-invalid-token", port).await;
-    assert!(result.is_err(), "expected WS upgrade rejection with bad token");
+    assert!(
+        result.is_err(),
+        "expected WS upgrade rejection with bad token"
+    );
     server.kill().await?;
 
     // Second server: test invalid op and malformed frame
@@ -354,14 +383,19 @@ async fn test_full_errors() -> Result<()> {
 
     // Unknown proc op → error reply
     let reply = ws.cmd("proc", "unknown_op_xyz", json!({})).await?;
-    assert!(!reply["ok"].as_bool().unwrap_or(true), "expected error for unknown op");
+    assert!(
+        !reply["ok"].as_bool().unwrap_or(true),
+        "expected error for unknown op"
+    );
     assert!(reply["error"].is_object());
 
     // Malformed frame (no type field) → server silently drops it; no reply comes back.
     // We can only verify the connection stays alive.
     use futures_util::SinkExt as _;
     ws.write
-        .send(Message::Text(r#"{"id":1,"method":"proc.list"}"#.to_string()))
+        .send(Message::Text(
+            r#"{"id":1,"method":"proc.list"}"#.to_string(),
+        ))
         .await?;
 
     // Connection should still be usable
@@ -386,9 +420,16 @@ async fn test_proc_lifecycle() -> Result<()> {
 
     // Spawn a proc
     let reply = ws
-        .cmd("proc", "spawn", json!({"cmd": ["echo", "hi"], "name": "test-proc"}))
+        .cmd(
+            "proc",
+            "spawn",
+            json!({"cmd": ["echo", "hi"], "name": "test-proc"}),
+        )
         .await?;
-    assert!(reply["ok"].as_bool().unwrap_or(false), "proc/spawn failed: {reply}");
+    assert!(
+        reply["ok"].as_bool().unwrap_or(false),
+        "proc/spawn failed: {reply}"
+    );
     let pid = reply["body"]["pid"].as_u64().expect("pid in body");
 
     // Receive proc.start event
@@ -447,7 +488,11 @@ async fn test_basic_reconnect() -> Result<()> {
         let mut ws = WsConn::connect(&token, port).await?;
         ws.drain_ready().await?;
         let reply = ws
-            .cmd("proc", "spawn", json!({"cmd": ["sleep", "10"], "name": "persistent-proc"}))
+            .cmd(
+                "proc",
+                "spawn",
+                json!({"cmd": ["sleep", "10"], "name": "persistent-proc"}),
+            )
             .await?;
         assert!(reply["ok"].as_bool().unwrap_or(false));
         reply["body"]["pid"].as_u64().expect("pid")
@@ -494,7 +539,10 @@ async fn test_agent_spawn_lifecycle() -> Result<()> {
             json!({"agent": "test-agent", "goal": "Say hello world"}),
         )
         .await?;
-    assert!(reply["ok"].as_bool().unwrap_or(false), "spawn failed: {reply}");
+    assert!(
+        reply["ok"].as_bool().unwrap_or(false),
+        "spawn failed: {reply}"
+    );
     let pid = reply["body"]["pid"].as_u64().expect("pid") as u32;
 
     // Receive agent.spawned event

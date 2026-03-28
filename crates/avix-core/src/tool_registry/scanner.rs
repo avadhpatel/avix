@@ -17,8 +17,8 @@ impl ToolScanner {
             return Ok(vec![]);
         }
         let mut descriptors = Vec::new();
-        for entry in std::fs::read_dir(&tools_dir)
-            .map_err(|e| AvixError::ConfigParse(e.to_string()))?
+        for entry in
+            std::fs::read_dir(&tools_dir).map_err(|e| AvixError::ConfigParse(e.to_string()))?
         {
             let entry = entry.map_err(|e| AvixError::ConfigParse(e.to_string()))?;
             let path = entry.path();
@@ -113,7 +113,10 @@ mod tests {
             write_tool(
                 &dir,
                 &format!("{n}.tool.yaml"),
-                &format!("name: github/{}\ndescription: tool\n", n.replace("github-", "")),
+                &format!(
+                    "name: github/{}\ndescription: tool\n",
+                    n.replace("github-", "")
+                ),
             );
         }
         let descs = ToolScanner::scan(dir.path()).unwrap();

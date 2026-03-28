@@ -9,10 +9,10 @@ use tracing::{debug, info, warn};
 
 use crate::error::AvixError;
 use crate::executor::{AgentExecutorFactory, SpawnParams};
-use crate::process::table::ProcessTable;
 use crate::process::entry::{ProcessEntry, ProcessKind, ProcessStatus};
-use crate::types::Pid;
+use crate::process::table::ProcessTable;
 use crate::types::token::{CapabilityToken, IssuedTo};
+use crate::types::Pid;
 
 /// Persistent record of a spawned agent, stored in /etc/avix/agents.yaml.
 /// Used for daemon restart to re-adopt running agents.
@@ -60,7 +60,11 @@ impl ProcHandler {
     /// Create a new proc handler. No executor factory — spawn() allocates a PID
     /// and updates the process table but does not launch an executor task.
     /// Used in tests and contexts where executor launch is not needed.
-    pub fn new(process_table: Arc<ProcessTable>, agents_yaml_path: PathBuf, master_key: Vec<u8>) -> Self {
+    pub fn new(
+        process_table: Arc<ProcessTable>,
+        agents_yaml_path: PathBuf,
+        master_key: Vec<u8>,
+    ) -> Self {
         Self {
             process_table,
             agents_yaml_path,
@@ -103,14 +107,23 @@ impl ProcHandler {
             handle.abort();
             info!(pid, "aborted executor task for killed agent");
         } else {
-            warn!(pid, "no executor task found for agent (may have exited already)");
+            warn!(
+                pid,
+                "no executor task found for agent (may have exited already)"
+            );
         }
     }
 
     /// Spawn a new agent: allocate PID, mint CapToken, write /proc/ files, persist to agents.yaml, fork/exec RuntimeExecutor.
     /// Returns the allocated PID.
     /// Links: docs/dev_plans/PROJECT-SPAWN-001-dev-plan.md#detailed-implementation-guidance
-    pub async fn spawn(&self, name: &str, goal: &str, session_id: &str, caller_identity: &str) -> Result<u32, AvixError> {
+    pub async fn spawn(
+        &self,
+        name: &str,
+        goal: &str,
+        session_id: &str,
+        caller_identity: &str,
+    ) -> Result<u32, AvixError> {
         info!(name, goal, session_id, "spawning agent");
 
         // Allocate PID (simple increment for now)
@@ -123,7 +136,7 @@ impl ProcHandler {
             name: name.to_string(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Pending,
-            parent: None, // kernel spawn
+            parent: None,                          // kernel spawn
             spawned_by_user: "kernel".to_string(), // TODO: get from context
             goal: goal.to_string(),
             spawned_at: chrono::Utc::now(),
@@ -134,7 +147,8 @@ impl ProcHandler {
         self.process_table.insert(entry).await;
 
         // Persist to agents.yaml
-        self.persist_agent_record(pid, name, goal, session_id).await?;
+        self.persist_agent_record(pid, name, goal, session_id)
+            .await?;
         info!(pid, "persisted agent record to agents.yaml");
 
         // Write /proc/<pid>/status.yaml and resolved.yaml
@@ -182,7 +196,9 @@ impl ProcHandler {
         }
 
         // Mark as running
-        self.process_table.set_status(Pid::new(pid), ProcessStatus::Running).await?;
+        self.process_table
+            .set_status(Pid::new(pid), ProcessStatus::Running)
+            .await?;
 
         Ok(pid)
     }
@@ -210,7 +226,8 @@ impl ProcHandler {
                 ProcessStatus::Stopped => "stopped",
                 ProcessStatus::Crashed => "crashed",
                 ProcessStatus::Pending => "pending",
-            }.to_string();
+            }
+            .to_string();
 
             active.push(ActiveAgent {
                 pid: pid_u32,
@@ -238,7 +255,13 @@ impl ProcHandler {
 
     /// Persist agent record to agents.yaml (atomic write).
     /// Links: docs/architecture/08-llm-service.md#configuration
-    async fn persist_agent_record(&self, pid: u32, name: &str, goal: &str, session_id: &str) -> Result<(), AvixError> {
+    async fn persist_agent_record(
+        &self,
+        pid: u32,
+        name: &str,
+        goal: &str,
+        session_id: &str,
+    ) -> Result<(), AvixError> {
         let mut agents = self.load_agents_yaml().await.unwrap_or_default();
 
         let record = AgentRecord {
@@ -266,22 +289,19 @@ impl ProcHandler {
             return Ok(AgentsYaml { agents: Vec::new() });
         }
 
-        let yaml = fs::read_to_string(&self.agents_yaml_path)
-            .map_err(|e| AvixError::Io(e.to_string()))?;
-        serde_yaml::from_str(&yaml)
-            .map_err(|e| AvixError::ConfigParse(e.to_string()))
+        let yaml =
+            fs::read_to_string(&self.agents_yaml_path).map_err(|e| AvixError::Io(e.to_string()))?;
+        serde_yaml::from_str(&yaml).map_err(|e| AvixError::ConfigParse(e.to_string()))
     }
 
     /// Save agents.yaml atomically.
     async fn save_agents_yaml(&self, agents: &AgentsYaml) -> Result<(), AvixError> {
-        let yaml = serde_yaml::to_string(agents)
-            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let yaml =
+            serde_yaml::to_string(agents).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
         let tmp_path = self.agents_yaml_path.with_extension("tmp");
-        fs::write(&tmp_path, &yaml)
-            .map_err(|e| AvixError::Io(e.to_string()))?;
-        fs::rename(&tmp_path, &self.agents_yaml_path)
-            .map_err(|e| AvixError::Io(e.to_string()))?;
+        fs::write(&tmp_path, &yaml).map_err(|e| AvixError::Io(e.to_string()))?;
+        fs::rename(&tmp_path, &self.agents_yaml_path).map_err(|e| AvixError::Io(e.to_string()))?;
         Ok(())
     }
 
@@ -298,8 +318,8 @@ impl ProcHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     /// Minimal factory that records how many times `launch` was called.
@@ -322,7 +342,9 @@ mod tests {
         let master_key = b"test-master-key-32-bytes-padded!".to_vec();
         let count = Arc::new(AtomicU32::new(0));
 
-        let factory = Arc::new(CountingFactory { count: Arc::clone(&count) });
+        let factory = Arc::new(CountingFactory {
+            count: Arc::clone(&count),
+        });
         let handler = ProcHandler::new_with_factory(
             table.clone(),
             dir.path().join("agents.yaml"),
@@ -331,22 +353,40 @@ mod tests {
             factory,
         );
 
-        let pid1 = handler.spawn("agent-a", "goal-a", "sess-1", "kernel").await.unwrap();
-        let pid2 = handler.spawn("agent-b", "goal-b", "sess-1", "kernel").await.unwrap();
+        let pid1 = handler
+            .spawn("agent-a", "goal-a", "sess-1", "kernel")
+            .await
+            .unwrap();
+        let pid2 = handler
+            .spawn("agent-b", "goal-b", "sess-1", "kernel")
+            .await
+            .unwrap();
 
         // Factory should have been called once per spawn
         assert_eq!(count.load(Ordering::SeqCst), 2);
 
         // Both pids registered and running
-        assert_eq!(table.get(Pid::new(pid1)).await.unwrap().status, ProcessStatus::Running);
-        assert_eq!(table.get(Pid::new(pid2)).await.unwrap().status, ProcessStatus::Running);
+        assert_eq!(
+            table.get(Pid::new(pid1)).await.unwrap().status,
+            ProcessStatus::Running
+        );
+        assert_eq!(
+            table.get(Pid::new(pid2)).await.unwrap().status,
+            ProcessStatus::Running
+        );
 
         // Abort handles stored — abort_agent should remove them
         handler.abort_agent(pid1).await;
         {
             let handles = handler.task_handles.lock().await;
-            assert!(!handles.contains_key(&pid1), "handle for pid1 should be gone after abort");
-            assert!(handles.contains_key(&pid2), "handle for pid2 should still be present");
+            assert!(
+                !handles.contains_key(&pid1),
+                "handle for pid1 should be gone after abort"
+            );
+            assert!(
+                handles.contains_key(&pid2),
+                "handle for pid2 should still be present"
+            );
         }
     }
 
@@ -357,7 +397,10 @@ mod tests {
         let master_key = b"test-master-key-32-bytes-padded!".to_vec();
         let handler = ProcHandler::new(table.clone(), dir.path().join("agents.yaml"), master_key);
 
-        let pid = handler.spawn("agent", "goal", "sess", "kernel").await.unwrap();
+        let pid = handler
+            .spawn("agent", "goal", "sess", "kernel")
+            .await
+            .unwrap();
         let entry = table.get(Pid::new(pid)).await.unwrap();
         assert_eq!(entry.status, ProcessStatus::Running);
         // No task handles stored
@@ -372,7 +415,10 @@ mod tests {
         let master_key = b"test-master-key-32-bytes-padded!".to_vec();
         let handler = ProcHandler::new(table.clone(), yaml_path.clone(), master_key);
 
-        let pid = handler.spawn("test_agent", "test_goal", "sess-1", "kernel").await.unwrap();
+        let pid = handler
+            .spawn("test_agent", "test_goal", "sess-1", "kernel")
+            .await
+            .unwrap();
 
         // Check process table
         let entry = table.get(Pid::new(pid)).await.unwrap();
@@ -381,7 +427,8 @@ mod tests {
         assert_eq!(entry.status, ProcessStatus::Running);
 
         // Check yaml
-        let yaml: AgentsYaml = serde_yaml::from_str(&fs::read_to_string(&yaml_path).unwrap()).unwrap();
+        let yaml: AgentsYaml =
+            serde_yaml::from_str(&fs::read_to_string(&yaml_path).unwrap()).unwrap();
         assert_eq!(yaml.agents.len(), 1);
         assert_eq!(yaml.agents[0].pid, pid);
         assert_eq!(yaml.agents[0].name, "test_agent");
@@ -398,8 +445,14 @@ mod tests {
         let handler = ProcHandler::new(table.clone(), yaml_path, master_key);
 
         // Spawn two agents
-        let pid1 = handler.spawn("agent1", "goal1", "sess-1", "kernel").await.unwrap();
-        let pid2 = handler.spawn("agent2", "goal2", "sess-1", "kernel").await.unwrap();
+        let pid1 = handler
+            .spawn("agent1", "goal1", "sess-1", "kernel")
+            .await
+            .unwrap();
+        let pid2 = handler
+            .spawn("agent2", "goal2", "sess-1", "kernel")
+            .await
+            .unwrap();
 
         let active = handler.list().await.unwrap();
         assert_eq!(active.len(), 2);
@@ -423,7 +476,10 @@ mod tests {
         let master_key = b"test-master-key-32-bytes-padded!".to_vec();
         let handler = ProcHandler::new(table, yaml_path.clone(), master_key);
 
-        let pid = handler.spawn("test", "goal", "sess", "kernel").await.unwrap();
+        let pid = handler
+            .spawn("test", "goal", "sess", "kernel")
+            .await
+            .unwrap();
         assert_eq!(handler.load_agents_yaml().await.unwrap().agents.len(), 1);
 
         handler.remove_agent_record(pid).await.unwrap();

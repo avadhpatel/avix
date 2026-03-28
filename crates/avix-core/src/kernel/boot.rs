@@ -4,8 +4,8 @@ use tracing::{info, warn};
 
 use crate::error::AvixError;
 use crate::kernel::proc::ProcHandler;
-use crate::process::table::ProcessTable;
 use crate::process::entry::{ProcessEntry, ProcessKind, ProcessStatus};
+use crate::process::table::ProcessTable;
 use crate::types::Pid;
 
 /// Kernel boot phase 3: re-adopt orphaned agents from agents.yaml.
@@ -68,10 +68,12 @@ pub async fn phase3_re_adopt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::sync::Arc;
+    use tempfile::TempDir;
 
-    fn make_agents_yaml(agents: Vec<crate::kernel::proc::AgentRecord>) -> crate::kernel::proc::AgentsYaml {
+    fn make_agents_yaml(
+        agents: Vec<crate::kernel::proc::AgentRecord>,
+    ) -> crate::kernel::proc::AgentsYaml {
         crate::kernel::proc::AgentsYaml { agents }
     }
 
@@ -94,15 +96,22 @@ mod tests {
         let yaml_str = serde_yaml::to_string(&make_agents_yaml(vec![
             make_record(10, "agent-a"),
             make_record(11, "agent-b"),
-        ])).unwrap();
+        ]))
+        .unwrap();
         std::fs::write(&yaml_path, yaml_str).unwrap();
 
-        phase3_re_adopt(table.clone(), yaml_path, vec![0u8; 32]).await.unwrap();
+        phase3_re_adopt(table.clone(), yaml_path, vec![0u8; 32])
+            .await
+            .unwrap();
 
         let entries = table.list_by_kind(ProcessKind::Agent).await;
         assert_eq!(entries.len(), 2);
-        assert!(entries.iter().any(|e| e.pid.as_u32() == 10 && e.name == "agent-a"));
-        assert!(entries.iter().any(|e| e.pid.as_u32() == 11 && e.name == "agent-b"));
+        assert!(entries
+            .iter()
+            .any(|e| e.pid.as_u32() == 10 && e.name == "agent-a"));
+        assert!(entries
+            .iter()
+            .any(|e| e.pid.as_u32() == 11 && e.name == "agent-b"));
         assert!(entries.iter().all(|e| e.status == ProcessStatus::Running));
     }
 
@@ -113,24 +122,29 @@ mod tests {
         let table = Arc::new(ProcessTable::new());
 
         // Pre-register PID 20 so it's already in the table
-        table.insert(ProcessEntry {
-            pid: Pid::new(20),
-            name: "already-running".to_string(),
-            kind: ProcessKind::Agent,
-            status: ProcessStatus::Running,
-            goal: "original goal".to_string(),
-            spawned_by_user: "kernel".to_string(),
-            spawned_at: chrono::Utc::now(),
-            ..Default::default()
-        }).await;
+        table
+            .insert(ProcessEntry {
+                pid: Pid::new(20),
+                name: "already-running".to_string(),
+                kind: ProcessKind::Agent,
+                status: ProcessStatus::Running,
+                goal: "original goal".to_string(),
+                spawned_by_user: "kernel".to_string(),
+                spawned_at: chrono::Utc::now(),
+                ..Default::default()
+            })
+            .await;
 
         let yaml_str = serde_yaml::to_string(&make_agents_yaml(vec![
             make_record(20, "already-running"),
             make_record(21, "new-agent"),
-        ])).unwrap();
+        ]))
+        .unwrap();
         std::fs::write(&yaml_path, yaml_str).unwrap();
 
-        phase3_re_adopt(table.clone(), yaml_path, vec![0u8; 32]).await.unwrap();
+        phase3_re_adopt(table.clone(), yaml_path, vec![0u8; 32])
+            .await
+            .unwrap();
 
         // PID 20 was already there (not duplicated), PID 21 was added
         let entries = table.list_by_kind(ProcessKind::Agent).await;
@@ -147,7 +161,9 @@ mod tests {
         let yaml_path = dir.path().join("agents.yaml"); // does not exist
         let table = Arc::new(ProcessTable::new());
 
-        phase3_re_adopt(table.clone(), yaml_path, vec![0u8; 32]).await.unwrap();
+        phase3_re_adopt(table.clone(), yaml_path, vec![0u8; 32])
+            .await
+            .unwrap();
 
         assert!(table.list_by_kind(ProcessKind::Agent).await.is_empty());
     }

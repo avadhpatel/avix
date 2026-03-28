@@ -238,11 +238,8 @@ mod tests {
 
         // No event should arrive; channel should be empty.
         // Use a short timeout to confirm.
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(20),
-            events.recv(),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(20), events.recv()).await;
         assert!(result.is_err(), "expected timeout, got an event");
     }
 }

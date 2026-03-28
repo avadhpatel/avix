@@ -57,9 +57,7 @@ impl AgentExecutorFactory for IpcExecutorFactory {
                 Ok(e) => e,
                 Err(err) => {
                     warn!(pid = pid.as_u32(), error = %err, "executor spawn failed");
-                    let _ = process_table
-                        .set_status(pid, ProcessStatus::Crashed)
-                        .await;
+                    let _ = process_table.set_status(pid, ProcessStatus::Crashed).await;
                     return;
                 }
             };
@@ -69,9 +67,7 @@ impl AgentExecutorFactory for IpcExecutorFactory {
             match executor.run_with_client(&goal, &llm_client).await {
                 Ok(_) => {
                     info!(pid = pid.as_u32(), "executor finished");
-                    let _ = process_table
-                        .set_status(pid, ProcessStatus::Stopped)
-                        .await;
+                    let _ = process_table.set_status(pid, ProcessStatus::Stopped).await;
                 }
                 Err(err) => {
                     warn!(pid = pid.as_u32(), error = %err, "executor crashed");

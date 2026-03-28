@@ -117,8 +117,8 @@ async fn dispatch_request(
             }
         },
 
-        "kernel/proc/kill" | "kernel/proc/stat" | "kernel/proc/pause"
-        | "kernel/proc/resume" | "kernel/proc/wait" | "kernel/proc/setcap" => {
+        "kernel/proc/kill" | "kernel/proc/stat" | "kernel/proc/pause" | "kernel/proc/resume"
+        | "kernel/proc/wait" | "kernel/proc/setcap" => {
             let pid_val = params["id"]
                 .as_u64()
                 .or_else(|| params["pid"].as_u64())
@@ -130,12 +130,15 @@ async fn dispatch_request(
                     proc_handler.abort_agent(pid_val).await;
                     kill_proc(id, pid_val, proc_handler.process_table()).await
                 }
-                "kernel/proc/stat" => {
-                    stat_proc(id, pid_val, proc_handler.process_table()).await
-                }
+                "kernel/proc/stat" => stat_proc(id, pid_val, proc_handler.process_table()).await,
                 "kernel/proc/pause" => {
-                    set_status(id, pid_val, ProcessStatus::Paused, proc_handler.process_table())
-                        .await
+                    set_status(
+                        id,
+                        pid_val,
+                        ProcessStatus::Paused,
+                        proc_handler.process_table(),
+                    )
+                    .await
                 }
                 "kernel/proc/resume" => {
                     set_status(
@@ -153,21 +156,12 @@ async fn dispatch_request(
 
         other => {
             warn!(method = other, "kernel IPC: unknown method");
-            JsonRpcResponse::err(
-                id,
-                -32601,
-                &format!("unknown kernel method: {other}"),
-                None,
-            )
+            JsonRpcResponse::err(id, -32601, &format!("unknown kernel method: {other}"), None)
         }
     }
 }
 
-async fn kill_proc(
-    id: &str,
-    pid: u32,
-    table: &Arc<ProcessTable>,
-) -> JsonRpcResponse {
+async fn kill_proc(id: &str, pid: u32, table: &Arc<ProcessTable>) -> JsonRpcResponse {
     match table
         .set_status(Pid::new(pid), ProcessStatus::Stopped)
         .await
@@ -180,11 +174,7 @@ async fn kill_proc(
     }
 }
 
-async fn stat_proc(
-    id: &str,
-    pid: u32,
-    table: &Arc<ProcessTable>,
-) -> JsonRpcResponse {
+async fn stat_proc(id: &str, pid: u32, table: &Arc<ProcessTable>) -> JsonRpcResponse {
     match table.get(Pid::new(pid)).await {
         Some(entry) => {
             let status = match entry.status {
@@ -283,13 +273,8 @@ mod tests {
         .await;
         let pid = spawn_resp.result.unwrap()["pid"].as_u64().unwrap();
 
-        let stat_resp = dispatch_request(
-            "req-2",
-            "kernel/proc/stat",
-            json!({ "id": pid }),
-            ph,
-        )
-        .await;
+        let stat_resp =
+            dispatch_request("req-2", "kernel/proc/stat", json!({ "id": pid }), ph).await;
         assert!(stat_resp.error.is_none());
         let body = stat_resp.result.unwrap();
         assert_eq!(body["name"], "agent-x");
@@ -321,13 +306,8 @@ mod tests {
         assert!(kill_resp.error.is_none());
 
         // Verify status is now stopped
-        let stat_resp = dispatch_request(
-            "req-3",
-            "kernel/proc/stat",
-            json!({ "id": pid }),
-            ph,
-        )
-        .await;
+        let stat_resp =
+            dispatch_request("req-3", "kernel/proc/stat", json!({ "id": pid }), ph).await;
         assert_eq!(stat_resp.result.unwrap()["status"], "stopped");
     }
 
@@ -335,8 +315,7 @@ mod tests {
     async fn unknown_method_returns_error() {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
-        let resp =
-            dispatch_request("req-1", "kernel/bogus/method", json!({}), ph).await;
+        let resp = dispatch_request("req-1", "kernel/bogus/method", json!({}), ph).await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
     }

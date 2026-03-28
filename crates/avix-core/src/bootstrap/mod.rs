@@ -53,8 +53,12 @@ impl Runtime {
         let mut service_pids = std::collections::HashMap::new();
         let vfs = VfsRouter::new();
         let process_table = Arc::new(ProcessTable::new());
-        let runtime_dir = std::env::var("AVIX_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|_| root.join("run/avix"));
-        let kernel_sock = std::env::var("AVIX_KERNEL_SOCK").map(PathBuf::from).unwrap_or_else(|_| runtime_dir.join("kernel.sock"));
+        let runtime_dir = std::env::var("AVIX_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| root.join("run/avix"));
+        let kernel_sock = std::env::var("AVIX_KERNEL_SOCK")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| runtime_dir.join("kernel.sock"));
 
         // Phase 0: init
         log.push(BootLogEntry {
@@ -78,9 +82,11 @@ impl Runtime {
         // Phase 2: load signing key from etc/signing.key (written by `avix server config init`)
         let signing_key_path = root.join("etc/signing.key");
         let master_key = std::fs::read_to_string(&signing_key_path)
-            .map_err(|_| AvixError::ConfigParse(
-                "etc/signing.key not found — run `avix server config init` first".into(),
-            ))?
+            .map_err(|_| {
+                AvixError::ConfigParse(
+                    "etc/signing.key not found — run `avix server config init` first".into(),
+                )
+            })?
             .trim()
             .to_string();
 
@@ -164,8 +170,14 @@ impl Runtime {
         // Phase 3.5: re-adopt orphaned agents
         // VFS mounts /etc/avix → <root>/etc, so agents.yaml lives at <root>/etc/agents.yaml.
         let agents_yaml_path = self.root.join("etc/agents.yaml");
-        let master_key_bytes = hex::decode(&*self.master_key).map_err(|e| AvixError::ConfigParse(format!("invalid master key: {}", e)))?;
-        phase3_re_adopt(self.process_table.clone(), agents_yaml_path, master_key_bytes).await?;
+        let master_key_bytes = hex::decode(&*self.master_key)
+            .map_err(|e| AvixError::ConfigParse(format!("invalid master key: {}", e)))?;
+        phase3_re_adopt(
+            self.process_table.clone(),
+            agents_yaml_path,
+            master_key_bytes,
+        )
+        .await?;
         self.boot_log.push(BootLogEntry {
             phase: BootPhase(3),
             message: "phase 3.5: re-adopted agents".into(),

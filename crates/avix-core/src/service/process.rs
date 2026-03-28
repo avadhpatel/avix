@@ -39,7 +39,13 @@ impl ServiceProcess {
         let socket_path = Self::socket_path_for(run_dir, &unit.name, pid);
 
         let mut cmd = Command::new(&unit.service.binary);
-        cmd.envs(build_env(unit, token, kernel_sock, router_sock, &socket_path));
+        cmd.envs(build_env(
+            unit,
+            token,
+            kernel_sock,
+            router_sock,
+            &socket_path,
+        ));
         #[cfg(unix)]
         cmd.process_group(0);
 
@@ -69,14 +75,8 @@ pub(crate) fn build_env(
     svc_sock: &Path,
 ) -> Vec<(String, String)> {
     vec![
-        (
-            "AVIX_KERNEL_SOCK".into(),
-            kernel_sock.display().to_string(),
-        ),
-        (
-            "AVIX_ROUTER_SOCK".into(),
-            router_sock.display().to_string(),
-        ),
+        ("AVIX_KERNEL_SOCK".into(), kernel_sock.display().to_string()),
+        ("AVIX_ROUTER_SOCK".into(), router_sock.display().to_string()),
         ("AVIX_SVC_SOCK".into(), svc_sock.display().to_string()),
         ("AVIX_SVC_TOKEN".into(), token.token_str.clone()),
     ]

@@ -413,7 +413,9 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                                         name: r.name,
                                         session_id: r.session_id,
                                         status: match r.status.as_str() {
-                                            "running" => avix_client_core::atp::types::AgentStatus::Running,
+                                            "running" => {
+                                                avix_client_core::atp::types::AgentStatus::Running
+                                            }
                                             _ => avix_client_core::atp::types::AgentStatus::Stopped,
                                         },
                                         goal: r.goal,
@@ -499,18 +501,32 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                                 new_form.error = Some("Agent goal cannot be empty".into());
                             } else {
                                 // Submit form
-                                if let Some(dispatcher) = shared_state.read().await.dispatcher.clone() {
-                                    match spawn_agent(&dispatcher, &form.name, &form.goal, &[]).await {
+                                if let Some(dispatcher) =
+                                    shared_state.read().await.dispatcher.clone()
+                                {
+                                    match spawn_agent(&dispatcher, &form.name, &form.goal, &[])
+                                        .await
+                                    {
                                         Ok(pid) => {
                                             debug!("Agent spawned successfully: pid={}", pid);
                                             // Add success notification
-                                            let message = format!("Agent {} spawned with PID {}", form.name, pid);
-                                            let notif = Notification::from_sys_alert("info", &message);
-                                            shared_state.read().await.notifications.add(notif).await;
+                                            let message = format!(
+                                                "Agent {} spawned with PID {}",
+                                                form.name, pid
+                                            );
+                                            let notif =
+                                                Notification::from_sys_alert("info", &message);
+                                            shared_state
+                                                .read()
+                                                .await
+                                                .notifications
+                                                .add(notif)
+                                                .await;
                                             state.reducer(Action::SetNewAgentForm(None));
                                         }
                                         Err(e) => {
-                                            new_form.error = Some(format!("Failed to spawn agent: {}", e));
+                                            new_form.error =
+                                                Some(format!("Failed to spawn agent: {}", e));
                                         }
                                     }
                                 } else {

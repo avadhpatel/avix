@@ -155,7 +155,11 @@ impl IpcRouter for TestIpcRouter {
                     )
                 };
                 self.event_bus.publish(
-                    crate::gateway::atp::frame::AtpEvent::new(event_kind, "test-session", event_body),
+                    crate::gateway::atp::frame::AtpEvent::new(
+                        event_kind,
+                        "test-session",
+                        event_body,
+                    ),
                     None,
                     Role::User,
                 );
@@ -195,8 +199,10 @@ impl IpcRouter for TestIpcRouter {
             }
 
             "kernel/proc/kill" => {
-                let pid = (params["id"].as_u64().or_else(|| params["pid"].as_u64()).unwrap_or(0))
-                    as u32;
+                let pid = (params["id"]
+                    .as_u64()
+                    .or_else(|| params["pid"].as_u64())
+                    .unwrap_or(0)) as u32;
                 let is_agent = {
                     let mut procs = self.procs.lock().await;
                     procs.remove(&pid).map(|p| p.is_agent).unwrap_or(false)
@@ -213,7 +219,11 @@ impl IpcRouter for TestIpcRouter {
                     )
                 };
                 self.event_bus.publish(
-                    crate::gateway::atp::frame::AtpEvent::new(event_kind, "test-session", event_body),
+                    crate::gateway::atp::frame::AtpEvent::new(
+                        event_kind,
+                        "test-session",
+                        event_body,
+                    ),
                     None,
                     crate::types::Role::User,
                 );
@@ -221,8 +231,10 @@ impl IpcRouter for TestIpcRouter {
             }
 
             "kernel/proc/stat" => {
-                let pid = (params["id"].as_u64().or_else(|| params["pid"].as_u64()).unwrap_or(0))
-                    as u32;
+                let pid = (params["id"]
+                    .as_u64()
+                    .or_else(|| params["pid"].as_u64())
+                    .unwrap_or(0)) as u32;
                 let procs = self.procs.lock().await;
                 match procs.get(&pid) {
                     Some(p) => Ok(serde_json::json!({

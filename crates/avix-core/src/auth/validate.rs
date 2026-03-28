@@ -13,9 +13,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// For `password`: placeholder — accepts any non-empty value until bcrypt is wired up.
 pub fn validate_credential(credential: &CredentialType, presented: &str) -> bool {
     match credential {
-        CredentialType::ApiKey { key_hash, .. } => {
-            verify_api_key(key_hash, presented)
-        }
+        CredentialType::ApiKey { key_hash, .. } => verify_api_key(key_hash, presented),
         CredentialType::Password { .. } => !presented.is_empty(),
     }
 }
@@ -29,8 +27,8 @@ fn verify_api_key(key_hash: &str, presented: &str) -> bool {
         Ok(b) => b,
         Err(_) => return false,
     };
-    let mut mac = HmacSha256::new_from_slice(b"config-init-secret")
-        .expect("HMAC accepts any key size");
+    let mut mac =
+        HmacSha256::new_from_slice(b"config-init-secret").expect("HMAC accepts any key size");
     mac.update(presented.as_bytes());
     mac.verify_slice(&stored_bytes).is_ok()
 }
@@ -40,8 +38,8 @@ mod tests {
     use super::*;
 
     fn make_key_hash(raw_key: &str) -> String {
-        let mut mac = HmacSha256::new_from_slice(b"config-init-secret")
-            .expect("HMAC accepts any key size");
+        let mut mac =
+            HmacSha256::new_from_slice(b"config-init-secret").expect("HMAC accepts any key size");
         mac.update(raw_key.as_bytes());
         format!("hmac-sha256:{}", hex::encode(mac.finalize().into_bytes()))
     }
