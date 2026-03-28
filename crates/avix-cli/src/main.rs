@@ -7,11 +7,14 @@ use std::sync::Arc;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt};
 
+use avix_client_core::atp::types::Cmd as AtpCmd_;
 use avix_client_core::atp::{AtpClient, Dispatcher};
 use avix_client_core::commands::spawn_agent::spawn_agent;
 use avix_client_core::commands::{kill_agent, list_agents, resolve_hil};
 use avix_client_core::config::ClientConfig;
 use avix_client_core::persistence;
+
+use avix_core::service::{ServiceManager, ServiceStatus};
 
 use avix_core::bootstrap::Runtime;
 use avix_core::cli::config_init::{run_config_init, ConfigInitParams};
@@ -57,6 +60,76 @@ enum Cmd {
     Client {
         #[command(subcommand)]
         sub: ClientCmd,
+    },
+    /// Manage installed services
+    Service {
+        #[command(subcommand)]
+        sub: ServiceCmd,
+    },
+}
+
+// ── Service commands ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+enum ServiceCmd {
+    /// Install a service from a local path (file://) or URL (https://)
+    Install {
+        /// Package source — local path or https:// URL
+        source: String,
+        /// Expected checksum in "sha256:<hex>" format
+        #[arg(long)]
+        checksum: Option<String>,
+        /// Do not start the service after install
+        #[arg(long = "no-start")]
+        no_start: bool,
+    },
+    /// List all installed services
+    List {
+        /// Runtime root directory
+        #[arg(long, default_value = "~/avix-data")]
+        root: PathBuf,
+    },
+    /// Show full status of a service
+    Status {
+        /// Service name
+        name: String,
+        /// Runtime root directory
+        #[arg(long, default_value = "~/avix-data")]
+        root: PathBuf,
+    },
+    /// Start a stopped/failed service
+    Start {
+        /// Service name
+        name: String,
+    },
+    /// Gracefully stop a running service
+    Stop {
+        /// Service name
+        name: String,
+    },
+    /// Stop then start a service
+    Restart {
+        /// Service name
+        name: String,
+    },
+    /// Remove a service from disk
+    Uninstall {
+        /// Service name
+        name: String,
+        /// Kill the service if running before uninstalling
+        #[arg(long)]
+        force: bool,
+        /// Runtime root directory
+        #[arg(long, default_value = "~/avix-data")]
+        root: PathBuf,
+    },
+    /// Stream service output logs
+    Logs {
+        /// Service name
+        name: String,
+        /// Follow log output continuously
+        #[arg(long)]
+        follow: bool,
     },
 }
 
@@ -273,6 +346,7 @@ fn log_filename(cmd: &Cmd) -> &str {
             ClientCmd::Agent { .. } => "agent",
             _ => "client",
         },
+        Cmd::Service { .. } => "service",
     }
 }
 
@@ -561,6 +635,236 @@ async fn main() -> Result<()> {
                 emit(cli.json, |_: &()| "Logs output".to_string(), ());
             }
         },
+
+        // ── Service commands ──────────────────────────────────────────────────
+        Cmd::Service { sub } => match sub {
+            ServiceCmd::Install {
+                source,
+                checksum,
+                no_start,
+            } => {
+                // Prefix bare filesystem paths with file://
+                let source = if !source.starts_with("file://")
+                    && !source.starts_with("https://")
+                    && !source.starts_with("http://")
+                {
+                    format!("file://{}", std::fs::canonicalize(&source)
+                        .with_context(|| format!("cannot resolve path: {source}"))?
+                        .display())
+                } else {
+                    source
+                };
+
+                let dispatcher = connect_config().await?;
+                let reply = dispatcher
+                    .call(&AtpCmd_::new(
+                        "sys",
+                        "install",
+                        "",
+                        serde_json::json!({
+                            "source":    source,
+                            "checksum":  checksum,
+                            "autostart": !no_start,
+                        }),
+                    ))
+                    .await?;
+
+                if !reply.ok {
+                    let msg = reply
+                        .message
+                        .unwrap_or_else(|| "install failed".into());
+                    anyhow::bail!("{msg}");
+                }
+                let body = reply.body.unwrap_or_default();
+                emit(
+                    cli.json,
+                    |b: &serde_json::Value| {
+                        let name = b["name"].as_str().unwrap_or("?");
+                        let ver = b["version"].as_str().unwrap_or("?");
+                        let tools = b["tools"]
+                            .as_array()
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|v| v.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .unwrap_or_default();
+                        format!("Installed {name} v{ver} — tools: {tools}")
+                    },
+                    body,
+                );
+            }
+
+            ServiceCmd::List { root } => {
+                let root = expand_home(root);
+                let units = ServiceManager::discover_installed(&root)
+                    .context("failed to read installed services")?;
+
+                #[derive(serde::Serialize)]
+                struct Row {
+                    name: String,
+                    version: String,
+                    tool_count: usize,
+                }
+                let rows: Vec<Row> = units
+                    .into_iter()
+                    .map(|u| Row {
+                        name: u.name,
+                        version: u.version,
+                        tool_count: u.tools.provides.len(),
+                    })
+                    .collect();
+
+                emit(
+                    cli.json,
+                    |rows: &Vec<Row>| {
+                        if rows.is_empty() {
+                            return "No services installed.".into();
+                        }
+                        let mut out = format!("{:<20} {:<10} {}\n", "NAME", "VERSION", "TOOLS");
+                        for r in rows {
+                            out.push_str(&format!(
+                                "{:<20} {:<10} {}\n",
+                                r.name, r.version, r.tool_count
+                            ));
+                        }
+                        out
+                    },
+                    rows,
+                );
+            }
+
+            ServiceCmd::Status { name, root } => {
+                let root = expand_home(root);
+                let status_path = root
+                    .join("proc/services")
+                    .join(&name)
+                    .join("status.yaml");
+
+                if !status_path.exists() {
+                    anyhow::bail!("no status file for service '{name}' — is it running?");
+                }
+                let yaml = std::fs::read_to_string(&status_path)
+                    .with_context(|| format!("cannot read {}", status_path.display()))?;
+                let status: ServiceStatus = serde_yaml::from_str(&yaml)
+                    .with_context(|| "failed to parse status.yaml")?;
+
+                emit(
+                    cli.json,
+                    |s: &ServiceStatus| {
+                        format!(
+                            "name:          {}\nversion:       {}\npid:           {}\nstate:         {:?}\nendpoint:      {}\ntools:         {}\nrestart_count: {}",
+                            s.name,
+                            s.version,
+                            s.pid.as_u32(),
+                            s.state,
+                            s.endpoint.as_deref().unwrap_or("-"),
+                            s.tools.join(", "),
+                            s.restart_count,
+                        )
+                    },
+                    status,
+                );
+            }
+
+            ServiceCmd::Start { name } => {
+                let dispatcher = connect_config().await?;
+                let reply = dispatcher
+                    .call(&AtpCmd_::new(
+                        "signal",
+                        "send",
+                        "",
+                        serde_json::json!({ "name": name, "signal": "SIGSTART" }),
+                    ))
+                    .await?;
+                if !reply.ok {
+                    anyhow::bail!(reply.message.unwrap_or_else(|| "start failed".into()));
+                }
+                emit(cli.json, |_: &()| format!("Started {name}"), ());
+            }
+
+            ServiceCmd::Stop { name } => {
+                let dispatcher = connect_config().await?;
+                let reply = dispatcher
+                    .call(&AtpCmd_::new(
+                        "signal",
+                        "send",
+                        "",
+                        serde_json::json!({ "name": name, "signal": "SIGTERM" }),
+                    ))
+                    .await?;
+                if !reply.ok {
+                    anyhow::bail!(reply.message.unwrap_or_else(|| "stop failed".into()));
+                }
+                emit(cli.json, |_: &()| format!("Stopped {name}"), ());
+            }
+
+            ServiceCmd::Restart { name } => {
+                let dispatcher = connect_config().await?;
+                for (signal, label) in [("SIGSTOP", "stop"), ("SIGSTART", "start")] {
+                    let reply = dispatcher
+                        .call(&AtpCmd_::new(
+                            "signal",
+                            "send",
+                            "",
+                            serde_json::json!({ "name": name, "signal": signal }),
+                        ))
+                        .await?;
+                    if !reply.ok {
+                        anyhow::bail!(
+                            reply.message.unwrap_or_else(|| format!("restart ({label}) failed"))
+                        );
+                    }
+                }
+                emit(cli.json, |_: &()| format!("Restarted {name}"), ());
+            }
+
+            ServiceCmd::Uninstall { name, force, root } => {
+                let root = expand_home(root);
+                let svc_dir = root.join("services").join(&name);
+
+                if !svc_dir.exists() {
+                    anyhow::bail!("service '{name}' is not installed");
+                }
+
+                if force {
+                    // Best-effort kill — ignore errors (service may not be running)
+                    if let Ok(dispatcher) = connect_config().await {
+                        let _ = dispatcher
+                            .call(&AtpCmd_::new(
+                                "signal",
+                                "send",
+                                "",
+                                serde_json::json!({ "name": name, "signal": "SIGKILL" }),
+                            ))
+                            .await;
+                    }
+                } else {
+                    // Check if service has a status file indicating it's running
+                    let status_path =
+                        root.join("proc/services").join(&name).join("status.yaml");
+                    if status_path.exists() {
+                        anyhow::bail!(
+                            "service '{name}' may be running — use --force to kill it first"
+                        );
+                    }
+                }
+
+                std::fs::remove_dir_all(&svc_dir)
+                    .with_context(|| format!("failed to remove {}", svc_dir.display()))?;
+                emit(cli.json, |_: &()| format!("Uninstalled {name}"), ());
+            }
+
+            ServiceCmd::Logs { name, follow: _ } => {
+                // Stub: read /proc/services/<name>/log if present
+                emit(
+                    cli.json,
+                    |_: &()| format!("Logs for {name}: (not yet implemented)"),
+                    (),
+                );
+            }
+        },
     }
 
     Ok(())
@@ -783,4 +1087,165 @@ fn expand_home(path: PathBuf) -> PathBuf {
         }
     }
     path
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn service_install_parses_source_and_checksum() {
+        let cli = Cli::try_parse_from([
+            "avix",
+            "service",
+            "install",
+            "./pkg.tar.gz",
+            "--checksum",
+            "sha256:abc123",
+        ])
+        .unwrap();
+        match cli.command {
+            Cmd::Service {
+                sub: ServiceCmd::Install { source, checksum, no_start },
+            } => {
+                assert_eq!(source, "./pkg.tar.gz");
+                assert_eq!(checksum.as_deref(), Some("sha256:abc123"));
+                assert!(!no_start);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn service_install_no_start_flag() {
+        let cli = Cli::try_parse_from([
+            "avix", "service", "install", "./pkg.tar.gz", "--no-start",
+        ])
+        .unwrap();
+        match cli.command {
+            Cmd::Service {
+                sub: ServiceCmd::Install { no_start, .. },
+            } => assert!(no_start),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn service_list_subcommand_parses() {
+        let cli = Cli::try_parse_from(["avix", "service", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Cmd::Service { sub: ServiceCmd::List { .. } }
+        ));
+    }
+
+    #[test]
+    fn service_status_parses_name() {
+        let cli =
+            Cli::try_parse_from(["avix", "service", "status", "github-svc"]).unwrap();
+        match cli.command {
+            Cmd::Service {
+                sub: ServiceCmd::Status { name, .. },
+            } => assert_eq!(name, "github-svc"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn service_start_parses() {
+        let cli =
+            Cli::try_parse_from(["avix", "service", "start", "my-svc"]).unwrap();
+        match cli.command {
+            Cmd::Service {
+                sub: ServiceCmd::Start { name },
+            } => assert_eq!(name, "my-svc"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn service_stop_parses() {
+        let cli = Cli::try_parse_from(["avix", "service", "stop", "my-svc"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Cmd::Service { sub: ServiceCmd::Stop { .. } }
+        ));
+    }
+
+    #[test]
+    fn service_restart_parses() {
+        let cli =
+            Cli::try_parse_from(["avix", "service", "restart", "my-svc"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Cmd::Service { sub: ServiceCmd::Restart { .. } }
+        ));
+    }
+
+    #[test]
+    fn service_uninstall_force_flag() {
+        let cli = Cli::try_parse_from([
+            "avix",
+            "service",
+            "uninstall",
+            "github-svc",
+            "--force",
+        ])
+        .unwrap();
+        match cli.command {
+            Cmd::Service {
+                sub: ServiceCmd::Uninstall { name, force, .. },
+            } => {
+                assert_eq!(name, "github-svc");
+                assert!(force);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn service_logs_follow_parses() {
+        let cli = Cli::try_parse_from([
+            "avix", "service", "logs", "github-svc", "--follow",
+        ])
+        .unwrap();
+        match cli.command {
+            Cmd::Service {
+                sub: ServiceCmd::Logs { name, follow },
+            } => {
+                assert_eq!(name, "github-svc");
+                assert!(follow);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn service_status_json_flag() {
+        let cli = Cli::try_parse_from([
+            "avix", "--json", "service", "status", "github-svc",
+        ])
+        .unwrap();
+        assert!(cli.json);
+        assert!(matches!(
+            cli.command,
+            Cmd::Service { sub: ServiceCmd::Status { .. } }
+        ));
+    }
+
+    #[test]
+    fn service_install_no_checksum_defaults_none() {
+        let cli =
+            Cli::try_parse_from(["avix", "service", "install", "https://example.com/x.tar.gz"])
+                .unwrap();
+        match cli.command {
+            Cmd::Service {
+                sub: ServiceCmd::Install { checksum, .. },
+            } => assert!(checksum.is_none()),
+            _ => panic!("wrong variant"),
+        }
+    }
 }
