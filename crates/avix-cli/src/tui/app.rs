@@ -9,7 +9,6 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::time;
 use tracing::{debug, info, warn};
@@ -305,59 +304,23 @@ async fn dispatch_parsed_command(
     Ok(())
 }
 
+// update_state_from_shared reads shared state into local TUI state.
+// It must NOT make network calls — agent list refresh is handled by a
+// background polling task spawned in run_app.
 async fn update_state_from_shared(
     state: &mut TuiState,
     shared: &SharedState,
     _config: &ClientConfig,
 ) {
-    #[derive(Deserialize)]
-    struct AgentInfo {
-        pid: u64,
-        name: String,
-        session_id: String,
-        status: String,
-        goal: String,
-    }
-
     let s = shared.read().await;
     state.connected = matches!(
         s.connection_status,
         avix_client_core::state::ConnectionStatus::Connected { .. }
     );
-
-    if state.connected {
-        if let Some(dispatcher) = &s.dispatcher {
-            // Fetch agents
-            if let Ok(agents) = list_agents(dispatcher).await {
-                // Convert to ActiveAgent
-                let active_agents: Vec<_> = agents
-                    .into_iter()
-                    .filter_map(|a| {
-                        serde_json::from_value::<AgentInfo>(a).ok().map(|agent| {
-                            avix_client_core::state::ActiveAgent {
-                                pid: agent.pid,
-                                name: agent.name,
-                                session_id: agent.session_id,
-                                status: match agent.status.as_str() {
-                                    "running" => avix_client_core::atp::types::AgentStatus::Running,
-                                    _ => avix_client_core::atp::types::AgentStatus::Stopped,
-                                },
-                                goal: agent.goal,
-                            }
-                        })
-                    })
-                    .collect();
-                debug!("Agents updated: {} agents", active_agents.len());
-                *s.agents.write().await = active_agents;
-            }
-        }
-    }
-
     state.agents = s.agents.read().await.clone();
     state.notifications = s.notifications.all().await;
     debug!("Notifications updated: {} total", state.notifications.len());
     state.notifications_count = state.notifications.iter().filter(|n| !n.read).count();
-    // Count HIL pending from notifications
     state.hil_pending = state
         .notifications
         .iter()
@@ -410,27 +373,74 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
         }
     }
 
-    loop {
-        let was_connected = state.connected;
+    // Background task: refresh the agent list every 2 s without blocking the
+    // main render loop.  Holds the AppState read-lock only briefly (to clone
+    // the dispatcher Arc), then releases it before the network call.
+    {
+        let bg_shared = Arc::clone(&shared_state);
+        tokio::spawn(async move {
+            let mut interval = time::interval(Duration::from_millis(2_000));
+            interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                let (dispatcher_opt, agents_arc) = {
+                    let s = bg_shared.read().await;
+                    if !matches!(
+                        s.connection_status,
+                        avix_client_core::state::ConnectionStatus::Connected { .. }
+                    ) {
+                        continue;
+                    }
+                    (s.dispatcher.clone(), Arc::clone(&s.agents))
+                }; // read lock released before network call
+                if let Some(dispatcher) = dispatcher_opt {
+                    if let Ok(raw) = list_agents(&dispatcher).await {
+                        #[derive(serde::Deserialize)]
+                        struct AgentRow {
+                            pid: u64,
+                            name: String,
+                            #[serde(default)]
+                            session_id: String,
+                            status: String,
+                            goal: String,
+                        }
+                        let updated: Vec<avix_client_core::state::ActiveAgent> = raw
+                            .into_iter()
+                            .filter_map(|v| {
+                                serde_json::from_value::<AgentRow>(v).ok().map(|r| {
+                                    avix_client_core::state::ActiveAgent {
+                                        pid: r.pid,
+                                        name: r.name,
+                                        session_id: r.session_id,
+                                        status: match r.status.as_str() {
+                                            "running" => avix_client_core::atp::types::AgentStatus::Running,
+                                            _ => avix_client_core::atp::types::AgentStatus::Stopped,
+                                        },
+                                        goal: r.goal,
+                                    }
+                                })
+                            })
+                            .collect();
+                        *agents_arc.write().await = updated;
+                    }
+                }
+            }
+        });
+    }
 
-        // Drain action channel
+    loop {
+        // 1. Apply any queued actions from background tasks (instant).
         while let Ok(action) = action_rx.try_recv() {
             state.reducer(action);
         }
 
-        // Update TuiState from shared_state
-        update_state_from_shared(&mut state, &shared_state, &client_config).await;
-
-        if state.connected != was_connected {
-            if state.connected {
-                info!("Login successful");
-            } else {
-                info!("Disconnected");
-            }
-        }
-
+        // 2. Draw current local state immediately — form close and other local
+        //    state changes are visible on this iteration, not the next.
         terminal.draw(|f| ui(f, &state))?;
 
+        // 3. Poll for input first, BEFORE the shared-state sync.  This is the
+        //    critical fix: event handling (e.g. form submit) must not be gated
+        //    behind any network-touching code.
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if let Some(hil) = &state.pending_hil {
@@ -496,7 +506,7 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                                             // Add success notification
                                             let message = format!("Agent {} spawned with PID {}", form.name, pid);
                                             let notif = Notification::from_sys_alert("info", &message);
-                                            shared_state.write().await.notifications.add(notif).await;
+                                            shared_state.read().await.notifications.add(notif).await;
                                             state.reducer(Action::SetNewAgentForm(None));
                                         }
                                         Err(e) => {
@@ -742,7 +752,16 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
             }
         }
 
-        time::sleep(Duration::from_millis(100)).await;
+        // 4. Sync from shared state (now fast: no network calls).
+        let was_connected = state.connected;
+        update_state_from_shared(&mut state, &shared_state, &client_config).await;
+        if state.connected != was_connected {
+            if state.connected {
+                info!("Login successful");
+            } else {
+                info!("Disconnected");
+            }
+        }
     }
 }
 
