@@ -1,6 +1,4 @@
-use dirs;
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::path::PathBuf;
 use tracing::{debug, info};
 
