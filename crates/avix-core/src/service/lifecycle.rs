@@ -262,6 +262,24 @@ impl ServiceManager {
         Ok(units)
     }
 
+    /// Re-issue a fresh `ServiceToken` (with a new PID) for a restarted service.
+    pub async fn respawn_token(&self, name: &str) -> Result<ServiceToken, AvixError> {
+        let caller_scoped = self
+            .services
+            .read()
+            .await
+            .get(name)
+            .map(|r| r.caller_scoped)
+            .unwrap_or(false);
+        self.spawn_and_get_token(ServiceSpawnRequest {
+            name: name.to_string(),
+            binary: String::new(),
+            caller_scoped,
+            max_concurrent: 20,
+        })
+        .await
+    }
+
     pub async fn handle_tool_add(&self, params: IpcToolAddParams) -> Result<(), AvixError> {
         let svc_name = self.validate_token(&params.token).await?;
         if let Some(reg) = &self.tool_registry {

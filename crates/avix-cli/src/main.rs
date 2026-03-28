@@ -14,6 +14,7 @@ use avix_client_core::commands::{kill_agent, list_agents, resolve_hil};
 use avix_client_core::config::ClientConfig;
 use avix_client_core::persistence;
 
+use avix_core::secrets::SecretStore;
 use avix_core::service::{ServiceManager, ServiceStatus};
 
 use avix_core::bootstrap::Runtime;
@@ -65,6 +66,11 @@ enum Cmd {
     Service {
         #[command(subcommand)]
         sub: ServiceCmd,
+    },
+    /// Manage runtime secrets
+    Secret {
+        #[command(subcommand)]
+        sub: SecretCmd,
     },
 }
 
@@ -130,6 +136,54 @@ enum ServiceCmd {
         /// Follow log output continuously
         #[arg(long)]
         follow: bool,
+    },
+}
+
+// ── Secret commands ───────────────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+enum SecretCmd {
+    /// Store a secret on disk (admin operation — requires AVIX_ROOT filesystem access)
+    Set {
+        /// Secret name
+        name: String,
+        /// Secret value
+        value: String,
+        /// Store for a service (mutually exclusive with --for-user)
+        #[arg(long = "for-service", conflicts_with = "for_user")]
+        for_service: Option<String>,
+        /// Store for a user (mutually exclusive with --for-service)
+        #[arg(long = "for-user", conflicts_with = "for_service")]
+        for_user: Option<String>,
+        /// Runtime root directory
+        #[arg(long, default_value = "~/avix-data")]
+        root: std::path::PathBuf,
+    },
+    /// List secret names for an owner
+    List {
+        /// List secrets for a service
+        #[arg(long = "for-service", conflicts_with = "for_user")]
+        for_service: Option<String>,
+        /// List secrets for a user
+        #[arg(long = "for-user", conflicts_with = "for_service")]
+        for_user: Option<String>,
+        /// Runtime root directory
+        #[arg(long, default_value = "~/avix-data")]
+        root: std::path::PathBuf,
+    },
+    /// Delete a secret from disk
+    Delete {
+        /// Secret name
+        name: String,
+        /// Delete from service owner
+        #[arg(long = "for-service", conflicts_with = "for_user")]
+        for_service: Option<String>,
+        /// Delete from user owner
+        #[arg(long = "for-user", conflicts_with = "for_service")]
+        for_user: Option<String>,
+        /// Runtime root directory
+        #[arg(long, default_value = "~/avix-data")]
+        root: std::path::PathBuf,
     },
 }
 
@@ -347,6 +401,7 @@ fn log_filename(cmd: &Cmd) -> &str {
             _ => "client",
         },
         Cmd::Service { .. } => "service",
+        Cmd::Secret { .. } => "secret",
     }
 }
 
@@ -505,8 +560,7 @@ async fn main() -> Result<()> {
                     runtime_dir: runtime.runtime_dir().to_path_buf(),
                 };
                 let registry = Arc::new(MockToolRegistry::new());
-                let mut executor =
-                    RuntimeExecutor::spawn_with_registry(params, registry).await?;
+                let mut executor = RuntimeExecutor::spawn_with_registry(params, registry).await?;
 
                 println!("Agent '{}' spawned (PID 100)", name);
                 println!("Goal: {}", goal);
@@ -541,7 +595,6 @@ async fn main() -> Result<()> {
                 .await?;
                 println!("{}", result.output);
             }
-
         },
 
         // ── Client commands ───────────────────────────────────────────────────
@@ -605,8 +658,7 @@ async fn main() -> Result<()> {
                     note,
                 } => {
                     let dispatcher = connect_config().await?;
-                    resolve_hil(&dispatcher, pid, &hil_id, &token, true, note.as_deref())
-                        .await?;
+                    resolve_hil(&dispatcher, pid, &hil_id, &token, true, note.as_deref()).await?;
                     emit(
                         cli.json,
                         |_: &()| format!("Approved HIL {} for PID {}", hil_id, pid),
@@ -620,8 +672,7 @@ async fn main() -> Result<()> {
                     note,
                 } => {
                     let dispatcher = connect_config().await?;
-                    resolve_hil(&dispatcher, pid, &hil_id, &token, false, note.as_deref())
-                        .await?;
+                    resolve_hil(&dispatcher, pid, &hil_id, &token, false, note.as_deref()).await?;
                     emit(
                         cli.json,
                         |_: &()| format!("Denied HIL {} for PID {}", hil_id, pid),
@@ -648,9 +699,12 @@ async fn main() -> Result<()> {
                     && !source.starts_with("https://")
                     && !source.starts_with("http://")
                 {
-                    format!("file://{}", std::fs::canonicalize(&source)
-                        .with_context(|| format!("cannot resolve path: {source}"))?
-                        .display())
+                    format!(
+                        "file://{}",
+                        std::fs::canonicalize(&source)
+                            .with_context(|| format!("cannot resolve path: {source}"))?
+                            .display()
+                    )
                 } else {
                     source
                 };
@@ -670,9 +724,7 @@ async fn main() -> Result<()> {
                     .await?;
 
                 if !reply.ok {
-                    let msg = reply
-                        .message
-                        .unwrap_or_else(|| "install failed".into());
+                    let msg = reply.message.unwrap_or_else(|| "install failed".into());
                     anyhow::bail!("{msg}");
                 }
                 let body = reply.body.unwrap_or_default();
@@ -737,18 +789,15 @@ async fn main() -> Result<()> {
 
             ServiceCmd::Status { name, root } => {
                 let root = expand_home(root);
-                let status_path = root
-                    .join("proc/services")
-                    .join(&name)
-                    .join("status.yaml");
+                let status_path = root.join("proc/services").join(&name).join("status.yaml");
 
                 if !status_path.exists() {
                     anyhow::bail!("no status file for service '{name}' — is it running?");
                 }
                 let yaml = std::fs::read_to_string(&status_path)
                     .with_context(|| format!("cannot read {}", status_path.display()))?;
-                let status: ServiceStatus = serde_yaml::from_str(&yaml)
-                    .with_context(|| "failed to parse status.yaml")?;
+                let status: ServiceStatus =
+                    serde_yaml::from_str(&yaml).with_context(|| "failed to parse status.yaml")?;
 
                 emit(
                     cli.json,
@@ -812,9 +861,9 @@ async fn main() -> Result<()> {
                         ))
                         .await?;
                     if !reply.ok {
-                        anyhow::bail!(
-                            reply.message.unwrap_or_else(|| format!("restart ({label}) failed"))
-                        );
+                        anyhow::bail!(reply
+                            .message
+                            .unwrap_or_else(|| format!("restart ({label}) failed")));
                     }
                 }
                 emit(cli.json, |_: &()| format!("Restarted {name}"), ());
@@ -842,8 +891,7 @@ async fn main() -> Result<()> {
                     }
                 } else {
                     // Check if service has a status file indicating it's running
-                    let status_path =
-                        root.join("proc/services").join(&name).join("status.yaml");
+                    let status_path = root.join("proc/services").join(&name).join("status.yaml");
                     if status_path.exists() {
                         anyhow::bail!(
                             "service '{name}' may be running — use --force to kill it first"
@@ -865,9 +913,94 @@ async fn main() -> Result<()> {
                 );
             }
         },
+
+        // ── Secret commands ───────────────────────────────────────────────────
+        Cmd::Secret { sub } => {
+            let master_key: [u8; 32] = {
+                let raw = std::env::var("AVIX_MASTER_KEY").context("AVIX_MASTER_KEY is not set")?;
+                let bytes = raw.as_bytes();
+                let mut key = [0u8; 32];
+                let len = bytes.len().min(32);
+                key[..len].copy_from_slice(&bytes[..len]);
+                key
+            };
+
+            match sub {
+                SecretCmd::Set {
+                    name,
+                    value,
+                    for_service,
+                    for_user,
+                    root,
+                } => {
+                    let root = expand_home(root);
+                    let owner = owner_from(for_service, for_user)?;
+                    let store = SecretStore::new(&root.join("secrets"), &master_key);
+                    store
+                        .set(&owner, &name, &value)
+                        .context("failed to set secret")?;
+                    emit(
+                        cli.json,
+                        |_: &()| format!("Secret '{name}' set for {owner}"),
+                        (),
+                    );
+                }
+
+                SecretCmd::List {
+                    for_service,
+                    for_user,
+                    root,
+                } => {
+                    let root = expand_home(root);
+                    let owner = owner_from(for_service, for_user)?;
+                    let store = SecretStore::new(&root.join("secrets"), &master_key);
+                    let names = store.list(&owner);
+                    emit(
+                        cli.json,
+                        |names: &Vec<String>| {
+                            if names.is_empty() {
+                                format!("No secrets for {owner}")
+                            } else {
+                                names.join("\n")
+                            }
+                        },
+                        names,
+                    );
+                }
+
+                SecretCmd::Delete {
+                    name,
+                    for_service,
+                    for_user,
+                    root,
+                } => {
+                    let root = expand_home(root);
+                    let owner = owner_from(for_service, for_user)?;
+                    let store = SecretStore::new(&root.join("secrets"), &master_key);
+                    store
+                        .delete(&owner, &name)
+                        .context("failed to delete secret")?;
+                    emit(
+                        cli.json,
+                        |_: &()| format!("Secret '{name}' deleted for {owner}"),
+                        (),
+                    );
+                }
+            }
+        }
     }
 
     Ok(())
+}
+
+// ── Secret helpers ────────────────────────────────────────────────────────────
+
+fn owner_from(for_service: Option<String>, for_user: Option<String>) -> Result<String> {
+    match (for_service, for_user) {
+        (Some(svc), _) => Ok(format!("service:{svc}")),
+        (_, Some(user)) => Ok(format!("user:{user}")),
+        _ => anyhow::bail!("specify --for-service <name> or --for-user <name>"),
+    }
 }
 
 // ── LLM helpers ───────────────────────────────────────────────────────────────
@@ -1064,9 +1197,7 @@ async fn run_atp_shell(server_url: String, token: Option<String>) -> Result<()> 
                     println!("Sent: {}", req);
                 }
                 Err(_) => {
-                    eprintln!(
-                        "Invalid JSON. Try: {{\"method\": \"proc.list\", \"params\": {{}}}}"
-                    );
+                    eprintln!("Invalid JSON. Try: {{\"method\": \"proc.list\", \"params\": {{}}}}");
                 }
             },
         }
@@ -1109,7 +1240,12 @@ mod tests {
         .unwrap();
         match cli.command {
             Cmd::Service {
-                sub: ServiceCmd::Install { source, checksum, no_start },
+                sub:
+                    ServiceCmd::Install {
+                        source,
+                        checksum,
+                        no_start,
+                    },
             } => {
                 assert_eq!(source, "./pkg.tar.gz");
                 assert_eq!(checksum.as_deref(), Some("sha256:abc123"));
@@ -1121,10 +1257,8 @@ mod tests {
 
     #[test]
     fn service_install_no_start_flag() {
-        let cli = Cli::try_parse_from([
-            "avix", "service", "install", "./pkg.tar.gz", "--no-start",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["avix", "service", "install", "./pkg.tar.gz", "--no-start"])
+            .unwrap();
         match cli.command {
             Cmd::Service {
                 sub: ServiceCmd::Install { no_start, .. },
@@ -1138,14 +1272,15 @@ mod tests {
         let cli = Cli::try_parse_from(["avix", "service", "list"]).unwrap();
         assert!(matches!(
             cli.command,
-            Cmd::Service { sub: ServiceCmd::List { .. } }
+            Cmd::Service {
+                sub: ServiceCmd::List { .. }
+            }
         ));
     }
 
     #[test]
     fn service_status_parses_name() {
-        let cli =
-            Cli::try_parse_from(["avix", "service", "status", "github-svc"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "service", "status", "github-svc"]).unwrap();
         match cli.command {
             Cmd::Service {
                 sub: ServiceCmd::Status { name, .. },
@@ -1156,8 +1291,7 @@ mod tests {
 
     #[test]
     fn service_start_parses() {
-        let cli =
-            Cli::try_parse_from(["avix", "service", "start", "my-svc"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "service", "start", "my-svc"]).unwrap();
         match cli.command {
             Cmd::Service {
                 sub: ServiceCmd::Start { name },
@@ -1171,30 +1305,27 @@ mod tests {
         let cli = Cli::try_parse_from(["avix", "service", "stop", "my-svc"]).unwrap();
         assert!(matches!(
             cli.command,
-            Cmd::Service { sub: ServiceCmd::Stop { .. } }
+            Cmd::Service {
+                sub: ServiceCmd::Stop { .. }
+            }
         ));
     }
 
     #[test]
     fn service_restart_parses() {
-        let cli =
-            Cli::try_parse_from(["avix", "service", "restart", "my-svc"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "service", "restart", "my-svc"]).unwrap();
         assert!(matches!(
             cli.command,
-            Cmd::Service { sub: ServiceCmd::Restart { .. } }
+            Cmd::Service {
+                sub: ServiceCmd::Restart { .. }
+            }
         ));
     }
 
     #[test]
     fn service_uninstall_force_flag() {
-        let cli = Cli::try_parse_from([
-            "avix",
-            "service",
-            "uninstall",
-            "github-svc",
-            "--force",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["avix", "service", "uninstall", "github-svc", "--force"]).unwrap();
         match cli.command {
             Cmd::Service {
                 sub: ServiceCmd::Uninstall { name, force, .. },
@@ -1208,10 +1339,8 @@ mod tests {
 
     #[test]
     fn service_logs_follow_parses() {
-        let cli = Cli::try_parse_from([
-            "avix", "service", "logs", "github-svc", "--follow",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["avix", "service", "logs", "github-svc", "--follow"]).unwrap();
         match cli.command {
             Cmd::Service {
                 sub: ServiceCmd::Logs { name, follow },
@@ -1225,14 +1354,14 @@ mod tests {
 
     #[test]
     fn service_status_json_flag() {
-        let cli = Cli::try_parse_from([
-            "avix", "--json", "service", "status", "github-svc",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["avix", "--json", "service", "status", "github-svc"]).unwrap();
         assert!(cli.json);
         assert!(matches!(
             cli.command,
-            Cmd::Service { sub: ServiceCmd::Status { .. } }
+            Cmd::Service {
+                sub: ServiceCmd::Status { .. }
+            }
         ));
     }
 
@@ -1245,6 +1374,119 @@ mod tests {
             Cmd::Service {
                 sub: ServiceCmd::Install { checksum, .. },
             } => assert!(checksum.is_none()),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    // ── Secret command tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn secret_set_for_service_parses() {
+        let cli = Cli::try_parse_from([
+            "avix",
+            "secret",
+            "set",
+            "github-app-key",
+            "ghp_abc",
+            "--for-service",
+            "github-svc",
+        ])
+        .unwrap();
+        match cli.command {
+            Cmd::Secret {
+                sub:
+                    SecretCmd::Set {
+                        name,
+                        value,
+                        for_service,
+                        for_user,
+                        ..
+                    },
+            } => {
+                assert_eq!(name, "github-app-key");
+                assert_eq!(value, "ghp_abc");
+                assert_eq!(for_service.as_deref(), Some("github-svc"));
+                assert!(for_user.is_none());
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn secret_set_for_user_parses() {
+        let cli = Cli::try_parse_from([
+            "avix",
+            "secret",
+            "set",
+            "my-token",
+            "tok-xyz",
+            "--for-user",
+            "alice",
+        ])
+        .unwrap();
+        match cli.command {
+            Cmd::Secret {
+                sub:
+                    SecretCmd::Set {
+                        name,
+                        value,
+                        for_service,
+                        for_user,
+                        ..
+                    },
+            } => {
+                assert_eq!(name, "my-token");
+                assert_eq!(value, "tok-xyz");
+                assert!(for_service.is_none());
+                assert_eq!(for_user.as_deref(), Some("alice"));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn secret_list_for_service_parses() {
+        let cli =
+            Cli::try_parse_from(["avix", "secret", "list", "--for-service", "github-svc"]).unwrap();
+        match cli.command {
+            Cmd::Secret {
+                sub: SecretCmd::List { for_service, .. },
+            } => assert_eq!(for_service.as_deref(), Some("github-svc")),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn secret_list_for_user_parses() {
+        let cli = Cli::try_parse_from(["avix", "secret", "list", "--for-user", "alice"]).unwrap();
+        match cli.command {
+            Cmd::Secret {
+                sub: SecretCmd::List { for_user, .. },
+            } => assert_eq!(for_user.as_deref(), Some("alice")),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn secret_delete_for_service_parses() {
+        let cli = Cli::try_parse_from([
+            "avix",
+            "secret",
+            "delete",
+            "my-key",
+            "--for-service",
+            "my-svc",
+        ])
+        .unwrap();
+        match cli.command {
+            Cmd::Secret {
+                sub: SecretCmd::Delete {
+                    name, for_service, ..
+                },
+            } => {
+                assert_eq!(name, "my-key");
+                assert_eq!(for_service.as_deref(), Some("my-svc"));
+            }
             _ => panic!("wrong variant"),
         }
     }

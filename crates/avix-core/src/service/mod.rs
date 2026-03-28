@@ -6,15 +6,17 @@ pub mod process;
 pub mod status;
 pub mod token;
 pub mod unit;
+pub mod watchdog;
 
 pub use install_receipt::InstallReceipt;
 pub use installer::{InstallRequest, InstallResult, ServiceInstaller};
+pub use ipc_server::ServiceIpcServer;
 pub use lifecycle::{
     IpcRegisterRequest, IpcRegisterResult, IpcToolAddParams, IpcToolRemoveParams, IpcToolSpec,
     ServiceManager, ServiceSpawnRequest,
 };
-pub use ipc_server::ServiceIpcServer;
 pub use process::ServiceProcess;
 pub use status::{ServiceState, ServiceStatus};
 pub use token::ServiceToken;
 pub use unit::{parse_duration, HostAccess, RestartPolicy, ServiceSource, ServiceUnit};
+pub use watchdog::ServiceWatchdog;

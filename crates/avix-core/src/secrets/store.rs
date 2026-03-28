@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use aes_gcm::{
@@ -195,5 +196,187 @@ mod tests {
         store.put("ns", "key", b"old").unwrap();
         store.put("ns", "key", b"new").unwrap();
         assert_eq!(store.get("ns", "key").unwrap(), b"new");
+    }
+}
+
+// ── Disk-backed SecretStore ────────────────────────────────────────────────────
+
+/// Disk-backed secret store.
+///
+/// Secrets are stored as AES-256-GCM ciphertext, hex-encoded, at:
+/// `<root>/<owner-type>/<owner-name>/<secret-name>.enc`
+///
+/// Owner format: `"service:github-svc"` or `"user:alice"`.
+pub struct SecretStore {
+    root: PathBuf,
+    master_key: [u8; 32],
+}
+
+impl SecretStore {
+    /// Create a new `SecretStore` rooted at `root`, using `key` as the master key.
+    /// `key` is zero-padded (or truncated) to 32 bytes.
+    pub fn new(root: &Path, key: &[u8]) -> Self {
+        let mut master_key = [0u8; 32];
+        let len = key.len().min(32);
+        master_key[..len].copy_from_slice(&key[..len]);
+        Self {
+            root: root.to_path_buf(),
+            master_key,
+        }
+    }
+
+    fn secret_path(&self, owner: &str, name: &str) -> PathBuf {
+        let (owner_type, owner_name) = owner.split_once(':').unwrap_or(("other", owner));
+        self.root
+            .join(owner_type)
+            .join(owner_name)
+            .join(format!("{name}.enc"))
+    }
+
+    /// Encrypt `value` and write to disk.
+    pub fn set(&self, owner: &str, name: &str, value: &str) -> Result<(), SecretsError> {
+        let path = self.secret_path(owner, name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.master_key));
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let ciphertext = cipher
+            .encrypt(&nonce, value.as_bytes())
+            .map_err(|_| SecretsError::DecryptionFailed)?;
+        let mut stored = nonce.to_vec();
+        stored.extend_from_slice(&ciphertext);
+        std::fs::write(&path, hex::encode(&stored))?;
+        Ok(())
+    }
+
+    /// Read from disk and decrypt.  Returns plaintext only in memory.
+    pub fn get(&self, owner: &str, name: &str) -> Result<String, SecretsError> {
+        let path = self.secret_path(owner, name);
+        let hex_data = std::fs::read_to_string(&path)
+            .map_err(|_| SecretsError::NotFound(format!("{owner}/{name}")))?;
+        let stored = hex::decode(hex_data.trim()).map_err(|_| SecretsError::DecryptionFailed)?;
+        if stored.len() < 12 {
+            return Err(SecretsError::DecryptionFailed);
+        }
+        let (nonce_bytes, ciphertext) = stored.split_at(12);
+        let nonce = Nonce::from_slice(nonce_bytes);
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.master_key));
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|_| SecretsError::DecryptionFailed)?;
+        String::from_utf8(plaintext).map_err(|_| SecretsError::DecryptionFailed)
+    }
+
+    /// Delete a secret from disk.
+    pub fn delete(&self, owner: &str, name: &str) -> Result<(), SecretsError> {
+        let path = self.secret_path(owner, name);
+        std::fs::remove_file(&path).map_err(|_| SecretsError::NotFound(format!("{owner}/{name}")))
+    }
+
+    /// List all secret names for `owner`.
+    pub fn list(&self, owner: &str) -> Vec<String> {
+        let (owner_type, owner_name) = owner.split_once(':').unwrap_or(("other", owner));
+        let dir = self.root.join(owner_type).join(owner_name);
+        if !dir.exists() {
+            return vec![];
+        }
+        let mut names = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let fname = entry.file_name().to_string_lossy().into_owned();
+                if fname.ends_with(".enc") {
+                    names.push(fname.trim_end_matches(".enc").to_string());
+                }
+            }
+        }
+        names
+    }
+}
+
+#[cfg(test)]
+mod disk_store_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn make_store(dir: &TempDir) -> SecretStore {
+        SecretStore::new(dir.path(), b"test-master-key-32-bytes-padded!!")
+    }
+
+    #[test]
+    fn set_and_get_service_secret_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store(&dir);
+        store
+            .set("service:github-svc", "app-key", "ghp_test123")
+            .unwrap();
+        let value = store.get("service:github-svc", "app-key").unwrap();
+        assert_eq!(value, "ghp_test123");
+    }
+
+    #[test]
+    fn get_nonexistent_secret_errors() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store(&dir);
+        assert!(store.get("service:x", "missing").is_err());
+    }
+
+    #[test]
+    fn secrets_are_not_stored_in_plaintext() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store(&dir);
+        store.set("service:svc", "key", "supersecret").unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join("service").join("svc").join("key.enc"))
+                .unwrap();
+        assert!(!content.contains("supersecret"));
+    }
+
+    #[test]
+    fn set_and_get_user_secret_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store(&dir);
+        store.set("user:alice", "gh-token", "secret-token").unwrap();
+        let value = store.get("user:alice", "gh-token").unwrap();
+        assert_eq!(value, "secret-token");
+    }
+
+    #[test]
+    fn list_returns_secret_names() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store(&dir);
+        store.set("service:svc", "key1", "v1").unwrap();
+        store.set("service:svc", "key2", "v2").unwrap();
+        let mut names = store.list("service:svc");
+        names.sort();
+        assert_eq!(names, vec!["key1", "key2"]);
+    }
+
+    #[test]
+    fn list_nonexistent_owner_returns_empty() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store(&dir);
+        assert!(store.list("service:nobody").is_empty());
+    }
+
+    #[test]
+    fn delete_removes_secret() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store(&dir);
+        store.set("service:svc", "k", "v").unwrap();
+        store.delete("service:svc", "k").unwrap();
+        assert!(store.get("service:svc", "k").is_err());
+    }
+
+    #[test]
+    fn wrong_key_fails_decryption() {
+        let dir = TempDir::new().unwrap();
+        let store1 = SecretStore::new(dir.path(), b"key-one-32-bytes-padded000000000");
+        store1.set("service:svc", "k", "secret").unwrap();
+        let store2 = SecretStore::new(dir.path(), b"key-two-32-bytes-padded000000000");
+        assert!(matches!(
+            store2.get("service:svc", "k"),
+            Err(SecretsError::DecryptionFailed)
+        ));
     }
 }
