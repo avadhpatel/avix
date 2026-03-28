@@ -93,11 +93,20 @@ impl ToolRegistry {
         &self,
         _owner: &str,
         names: &[&str],
-        _reason: &str,
+        reason: &str,
         drain: bool,
     ) -> Result<(), AvixError> {
         if drain {
-            // Wait for in-flight calls to complete
+            // Phase 1: mark unavailable so the router rejects new calls immediately.
+            {
+                let mut guard = self.inner.write().await;
+                for name in names {
+                    if let Some(rec) = guard.get_mut(*name) {
+                        rec.entry.state = ToolState::Unavailable;
+                    }
+                }
+            }
+            // Phase 2: wait for in-flight calls to complete (all permits returned).
             for name in names {
                 let sem = {
                     let guard = self.inner.read().await;
@@ -114,15 +123,19 @@ impl ToolRegistry {
             }
         }
 
+        // Phase 3: remove entries.
         let mut guard = self.inner.write().await;
-        let removed: Vec<String> = names.iter().map(|n| n.to_string()).collect();
-        for name in &removed {
-            guard.remove(name.as_str());
+        let removed: Vec<String> = names
+            .iter()
+            .filter(|n| guard.remove(**n).is_some())
+            .map(|n| n.to_string())
+            .collect();
+        if !removed.is_empty() {
+            let _ = self.events.send(ToolChangedEvent {
+                op: format!("removed: {reason}"),
+                tools: removed,
+            });
         }
-        let _ = self.events.send(ToolChangedEvent {
-            op: "removed".into(),
-            tools: removed,
-        });
         Ok(())
     }
 
@@ -159,5 +172,77 @@ impl ToolRegistry {
 impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::tool::ToolName;
+
+    fn make_entry(name: &str) -> ToolEntry {
+        ToolEntry {
+            name: ToolName::parse(name).unwrap(),
+            owner: "test-svc".into(),
+            state: ToolState::Available,
+            visibility: ToolVisibility::All,
+            descriptor: serde_json::json!({}),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_changed_event_fires_on_add() {
+        let (reg, mut events) = ToolRegistry::new_with_events();
+        reg.add("svc", vec![make_entry("ns/tool")]).await.unwrap();
+        let evt = events.recv().await.unwrap();
+        assert_eq!(evt.op, "added");
+        assert!(evt.tools.contains(&"ns/tool".to_string()));
+    }
+
+    #[tokio::test]
+    async fn tool_changed_event_fires_on_remove() {
+        let (reg, mut events) = ToolRegistry::new_with_events();
+        reg.add("svc", vec![make_entry("ns/tool")]).await.unwrap();
+        let _ = events.recv().await; // consume the add event
+        reg.remove("svc", &["ns/tool"], "test", false)
+            .await
+            .unwrap();
+        let evt = events.recv().await.unwrap();
+        assert!(evt.op.contains("removed"));
+        assert!(evt.tools.contains(&"ns/tool".to_string()));
+    }
+
+    #[tokio::test]
+    async fn remove_with_drain_marks_unavailable_then_removes() {
+        let (reg, _events) = ToolRegistry::new_with_events();
+        reg.add("svc", vec![make_entry("x/drain")]).await.unwrap();
+
+        // With no in-flight calls, drain should complete immediately.
+        reg.remove("svc", &["x/drain"], "drain-test", true)
+            .await
+            .unwrap();
+
+        assert!(reg.lookup("x/drain").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn remove_nonexistent_tool_emits_no_event() {
+        let (reg, mut events) = ToolRegistry::new_with_events();
+        reg.add("svc", vec![make_entry("a/b")]).await.unwrap();
+        let _ = events.recv().await; // consume add event
+
+        // Remove a name that doesn't exist — filter ensures no event.
+        reg.remove("svc", &["no/such"], "test", false)
+            .await
+            .unwrap();
+
+        // No event should arrive; channel should be empty.
+        // Use a short timeout to confirm.
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            events.recv(),
+        )
+        .await;
+        assert!(result.is_err(), "expected timeout, got an event");
     }
 }

@@ -4,9 +4,12 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use serde::Deserialize;
+
 use super::token::ServiceToken;
 use super::unit::ServiceUnit;
 use crate::error::AvixError;
+use crate::tool_registry::descriptor::ToolVisibilitySpec;
 use crate::tool_registry::entry::ToolEntry;
 use crate::tool_registry::{ToolRegistry, ToolScanner};
 use crate::types::{
@@ -30,6 +33,35 @@ pub struct IpcRegisterRequest {
 pub struct IpcRegisterResult {
     pub registered: bool,
     pub pid: Pid,
+}
+
+/// Typed params for the `ipc.tool-add` JSON-RPC method.
+#[derive(Debug, Clone, Deserialize)]
+pub struct IpcToolAddParams {
+    #[serde(rename = "_token")]
+    pub token: String,
+    pub tools: Vec<IpcToolSpec>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct IpcToolSpec {
+    pub name: String,
+    #[serde(default)]
+    pub descriptor: serde_json::Value,
+    #[serde(default)]
+    pub visibility: ToolVisibilitySpec,
+}
+
+/// Typed params for the `ipc.tool-remove` JSON-RPC method.
+#[derive(Debug, Clone, Deserialize)]
+pub struct IpcToolRemoveParams {
+    #[serde(rename = "_token")]
+    pub token: String,
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub drain: bool,
 }
 
 struct ServiceRecord {
@@ -186,20 +218,20 @@ impl ServiceManager {
 
     pub async fn handle_tool_add(
         &self,
-        token_str: String,
-        tool_names: Vec<String>,
+        params: IpcToolAddParams,
     ) -> Result<(), AvixError> {
-        let svc_name = self.validate_token(&token_str).await?;
+        let svc_name = self.validate_token(&params.token).await?;
         if let Some(reg) = &self.tool_registry {
-            let entries: Vec<ToolEntry> = tool_names
-                .iter()
-                .filter_map(|n| {
-                    ToolName::parse(n).ok().map(|name| ToolEntry {
+            let entries: Vec<ToolEntry> = params
+                .tools
+                .into_iter()
+                .filter_map(|spec| {
+                    ToolName::parse(&spec.name).ok().map(|name| ToolEntry {
                         name,
                         owner: svc_name.clone(),
                         state: ToolState::Available,
-                        visibility: ToolVisibility::All,
-                        descriptor: serde_json::json!({"name": n}),
+                        visibility: visibility_from_spec(spec.visibility),
+                        descriptor: spec.descriptor,
                     })
                 })
                 .collect();
@@ -210,17 +242,23 @@ impl ServiceManager {
 
     pub async fn handle_tool_remove(
         &self,
-        token_str: String,
-        tool_names: Vec<String>,
-        reason: &str,
-        drain: bool,
+        params: IpcToolRemoveParams,
     ) -> Result<(), AvixError> {
-        let svc_name = self.validate_token(&token_str).await?;
+        let svc_name = self.validate_token(&params.token).await?;
         if let Some(reg) = &self.tool_registry {
-            let refs: Vec<&str> = tool_names.iter().map(|s| s.as_str()).collect();
-            reg.remove(&svc_name, &refs, reason, drain).await?;
+            let refs: Vec<&str> = params.tools.iter().map(|s| s.as_str()).collect();
+            reg.remove(&svc_name, &refs, &params.reason, params.drain)
+                .await?;
         }
         Ok(())
+    }
+}
+
+fn visibility_from_spec(spec: ToolVisibilitySpec) -> ToolVisibility {
+    match spec {
+        ToolVisibilitySpec::All => ToolVisibility::All,
+        ToolVisibilitySpec::User(u) => ToolVisibility::User(u),
+        ToolVisibilitySpec::Crew(c) => ToolVisibility::Crew(c),
     }
 }
 
@@ -357,5 +395,118 @@ namespace = "/tools/{name}/"
         assert_eq!(registry.tool_count().await, 1);
         let entry = registry.lookup("my/echo").await.unwrap();
         assert_eq!(entry.owner, "my-svc");
+    }
+
+    #[tokio::test]
+    async fn tool_add_with_descriptor_stores_visibility() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, reg) =
+            ServiceManager::new_with_registry(dir.path().to_path_buf());
+        let token = mgr
+            .spawn_and_get_token(ServiceSpawnRequest {
+                name: "github-svc".into(),
+                binary: "/bin/g".into(),
+            })
+            .await
+            .unwrap();
+
+        mgr.handle_tool_add(IpcToolAddParams {
+            token: token.token_str.clone(),
+            tools: vec![IpcToolSpec {
+                name: "github/list-prs".into(),
+                descriptor: serde_json::json!({"description": "List PRs"}),
+                visibility: ToolVisibilitySpec::All,
+            }],
+        })
+        .await
+        .unwrap();
+
+        let entry = reg.lookup("github/list-prs").await.unwrap();
+        assert_eq!(entry.owner, "github-svc");
+        assert_eq!(entry.descriptor["description"], "List PRs");
+    }
+
+    #[tokio::test]
+    async fn tool_add_rejects_invalid_token() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, _) =
+            ServiceManager::new_with_registry(dir.path().to_path_buf());
+        let result = mgr
+            .handle_tool_add(IpcToolAddParams {
+                token: "bad-token".into(),
+                tools: vec![],
+            })
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn tool_remove_without_drain_removes_immediately() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, reg) =
+            ServiceManager::new_with_registry(dir.path().to_path_buf());
+        let token = mgr
+            .spawn_and_get_token(ServiceSpawnRequest {
+                name: "svc-a".into(),
+                binary: "/bin/svc-a".into(),
+            })
+            .await
+            .unwrap();
+        mgr.handle_tool_add(IpcToolAddParams {
+            token: token.token_str.clone(),
+            tools: vec![IpcToolSpec {
+                name: "x/y".into(),
+                descriptor: serde_json::json!({}),
+                visibility: ToolVisibilitySpec::All,
+            }],
+        })
+        .await
+        .unwrap();
+
+        mgr.handle_tool_remove(IpcToolRemoveParams {
+            token: token.token_str.clone(),
+            tools: vec!["x/y".into()],
+            reason: "test".into(),
+            drain: false,
+        })
+        .await
+        .unwrap();
+
+        assert!(reg.lookup("x/y").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn tool_remove_with_drain_removes_after_drain() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, reg) =
+            ServiceManager::new_with_registry(dir.path().to_path_buf());
+        let token = mgr
+            .spawn_and_get_token(ServiceSpawnRequest {
+                name: "svc-b".into(),
+                binary: "/bin/svc-b".into(),
+            })
+            .await
+            .unwrap();
+        mgr.handle_tool_add(IpcToolAddParams {
+            token: token.token_str.clone(),
+            tools: vec![IpcToolSpec {
+                name: "a/b".into(),
+                descriptor: serde_json::json!({}),
+                visibility: ToolVisibilitySpec::All,
+            }],
+        })
+        .await
+        .unwrap();
+
+        mgr.handle_tool_remove(IpcToolRemoveParams {
+            token: token.token_str.clone(),
+            tools: vec!["a/b".into()],
+            reason: "gone".into(),
+            drain: true,
+        })
+        .await
+        .unwrap();
+
+        assert!(reg.lookup("a/b").await.is_err());
     }
 }
