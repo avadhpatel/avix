@@ -1,3 +1,4 @@
+pub mod executor_factory;
 pub mod phase1;
 pub(crate) mod phase2;
 
@@ -7,7 +8,7 @@ use crate::error::AvixError;
 use crate::gateway::config::GatewayConfig;
 use crate::gateway::event_bus::AtpEventBus;
 use crate::gateway::server::GatewayServer;
-use crate::kernel::phase3_re_adopt;
+use crate::kernel::{phase3_re_adopt, KernelIpcServer, ProcHandler};
 use crate::memfs::{VfsPath, VfsRouter};
 use crate::process::table::ProcessTable;
 use crate::types::Pid;
@@ -35,6 +36,7 @@ pub struct Runtime {
     process_table: Arc<ProcessTable>,
     root: PathBuf,
     runtime_dir: PathBuf,
+    kernel_sock: PathBuf,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -52,6 +54,7 @@ impl Runtime {
         let vfs = VfsRouter::new();
         let process_table = Arc::new(ProcessTable::new());
         let runtime_dir = std::env::var("AVIX_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|_| root.join("run/avix"));
+        let kernel_sock = std::env::var("AVIX_KERNEL_SOCK").map(PathBuf::from).unwrap_or_else(|_| runtime_dir.join("kernel.sock"));
 
         // Phase 0: init
         log.push(BootLogEntry {
@@ -115,6 +118,7 @@ impl Runtime {
             process_table,
             root: root.to_path_buf(),
             runtime_dir,
+            kernel_sock,
         })
     }
 
@@ -141,8 +145,10 @@ impl Runtime {
 
     /// Starts the daemon: spawns kernel.agent, services, ATP gateway, and polls for hot reload.
     pub async fn start_daemon(mut self, port: u16, test_mode: bool) -> Result<(), AvixError> {
-        // Phase 2: spawn kernel.agent PID1
-        self.phase2_kernel().await?;
+        // Phase 2: spawn kernel.agent PID1 (skip in test_mode — gateway uses TestIpcRouter)
+        if !test_mode {
+            self.phase2_kernel().await?;
+        }
         self.boot_log.push(BootLogEntry {
             phase: BootPhase(2),
             message: "phase 2: kernel.agent spawned".into(),
@@ -156,7 +162,8 @@ impl Runtime {
         });
 
         // Phase 3.5: re-adopt orphaned agents
-        let agents_yaml_path = self.root.join("etc/avix/agents.yaml");
+        // VFS mounts /etc/avix → <root>/etc, so agents.yaml lives at <root>/etc/agents.yaml.
+        let agents_yaml_path = self.root.join("etc/agents.yaml");
         let master_key_bytes = hex::decode(&*self.master_key).map_err(|e| AvixError::ConfigParse(format!("invalid master key: {}", e)))?;
         phase3_re_adopt(self.process_table.clone(), agents_yaml_path, master_key_bytes).await?;
         self.boot_log.push(BootLogEntry {
@@ -181,7 +188,31 @@ impl Runtime {
     }
 
     async fn phase2_kernel(&mut self) -> Result<(), AvixError> {
-        tracing::info!("kernel mock PID1");
+        let master_key_bytes = hex::decode(&*self.master_key)
+            .map_err(|e| AvixError::ConfigParse(format!("invalid master key: {}", e)))?;
+        // VFS mounts /etc/avix → <root>/etc, so agents.yaml lives at <root>/etc/agents.yaml.
+        let agents_yaml_path = self.root.join("etc/agents.yaml");
+
+        // Resolve llm.svc socket path: env override or default under runtime_dir.
+        let llm_sock = std::env::var("AVIX_LLM_SOCK")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| self.runtime_dir.join("llm.sock"));
+
+        let factory = Arc::new(executor_factory::IpcExecutorFactory::new(
+            llm_sock,
+            Arc::clone(&self.process_table),
+        ));
+
+        let proc_handler = Arc::new(ProcHandler::new_with_factory(
+            Arc::clone(&self.process_table),
+            agents_yaml_path,
+            master_key_bytes,
+            self.runtime_dir.clone(),
+            factory,
+        ));
+        let kernel_server = KernelIpcServer::new(self.kernel_sock.clone(), proc_handler);
+        kernel_server.start().await?;
+        tracing::info!(sock = %self.kernel_sock.display(), "kernel IPC server started");
         Ok(())
     }
 

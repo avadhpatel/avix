@@ -53,29 +53,51 @@ pub struct Reply {
 pub struct Event {
     #[serde(rename = "type", skip_deserializing, default)]
     pub frame_type: String, // always "event"
+    /// Wire field name is `"event"` (dot notation), e.g. `"agent.output"`.
+    #[serde(rename = "event")]
     pub kind: EventKind,
+    /// Wire field name is `"sessionId"` (camelCase).
+    #[serde(rename = "sessionId")]
     pub owner_session: Option<String>,
     pub body: EventBody,
 }
 
+/// Event kind — matches the server's dot-notation wire format (e.g. `"agent.output"`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub enum EventKind {
+    #[serde(rename = "session.ready")]
     SessionReady,
+    #[serde(rename = "session.closing")]
     SessionClosing,
+    #[serde(rename = "token.expiring")]
     TokenExpiring,
+    #[serde(rename = "agent.spawned")]
+    AgentSpawned,
+    #[serde(rename = "agent.output")]
     AgentOutput,
+    #[serde(rename = "agent.status")]
     AgentStatus,
+    #[serde(rename = "agent.tool_call")]
     AgentToolCall,
+    #[serde(rename = "agent.tool_result")]
     AgentToolResult,
+    #[serde(rename = "agent.exit")]
     AgentExit,
+    #[serde(rename = "proc.signal")]
     ProcSignal,
+    #[serde(rename = "hil.request")]
     HilRequest,
+    #[serde(rename = "hil.resolved")]
     HilResolved,
+    #[serde(rename = "fs.changed")]
     FsChanged,
+    #[serde(rename = "tool.changed")]
     ToolChanged,
+    #[serde(rename = "cron.fired")]
     CronFired,
+    #[serde(rename = "sys.service")]
     SysService,
+    #[serde(rename = "sys.alert")]
     SysAlert,
 }
 
@@ -248,8 +270,9 @@ mod tests {
 
     #[test]
     fn event_hil_request_roundtrip() {
+        // Wire format uses "event" field with dot notation, "sessionId" for session.
         let json = r#"{
-            "type":"event","kind":"hil_request","owner_session":"sess-1",
+            "type":"event","event":"hil.request","sessionId":"sess-1",
             "body":{"hil_id":"h1","pid":10,"session_id":"sess-1",
                     "approval_token":"tok","prompt":"approve?","timeout_secs":600}
         }"#;
@@ -267,10 +290,10 @@ mod tests {
     #[test]
     fn event_kind_all_known_kinds_deserialise() {
         let kinds = [
-            ("session_ready", EventKind::SessionReady),
-            ("agent_output", EventKind::AgentOutput),
-            ("hil_request", EventKind::HilRequest),
-            ("sys_alert", EventKind::SysAlert),
+            ("session.ready", EventKind::SessionReady),
+            ("agent.output", EventKind::AgentOutput),
+            ("hil.request", EventKind::HilRequest),
+            ("sys.alert", EventKind::SysAlert),
         ];
         for (s, expected) in kinds {
             let v = format!("\"{}\"", s);

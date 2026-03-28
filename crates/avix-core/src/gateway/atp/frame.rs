@@ -78,11 +78,14 @@ impl AtpEvent {
 }
 
 /// A subscription request sent from client → gateway (§5.4).
+/// `id` and `token` are optional — the WS connection is already authenticated at upgrade time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AtpSubscribe {
     #[serde(rename = "type")]
     pub msg_type: String,
+    #[serde(default)]
     pub id: String,
+    #[serde(default)]
     pub token: String,
     /// Event names to subscribe to, or `["*"]` for all permitted events.
     pub events: Vec<String>,

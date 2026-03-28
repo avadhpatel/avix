@@ -1,11 +1,14 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tokio::sync::Mutex;
+use tracing::{debug, info, warn};
 
 use crate::error::AvixError;
+use crate::executor::{AgentExecutorFactory, SpawnParams};
 use crate::process::table::ProcessTable;
 use crate::process::entry::{ProcessEntry, ProcessKind, ProcessStatus};
 use crate::types::Pid;
@@ -47,16 +50,60 @@ pub struct ProcHandler {
     process_table: Arc<ProcessTable>,
     agents_yaml_path: PathBuf,
     master_key: Vec<u8>,
+    runtime_dir: PathBuf,
+    executor_factory: Option<Arc<dyn AgentExecutorFactory>>,
+    /// Abort handles for running executor tasks, keyed by Avix PID.
+    task_handles: Arc<Mutex<HashMap<u32, tokio::task::AbortHandle>>>,
 }
 
 impl ProcHandler {
-    /// Create a new proc handler with the given process table and agents.yaml path.
-    /// The path should be /etc/avix/agents.yaml (root-owned).
+    /// Create a new proc handler. No executor factory — spawn() allocates a PID
+    /// and updates the process table but does not launch an executor task.
+    /// Used in tests and contexts where executor launch is not needed.
     pub fn new(process_table: Arc<ProcessTable>, agents_yaml_path: PathBuf, master_key: Vec<u8>) -> Self {
         Self {
             process_table,
             agents_yaml_path,
             master_key,
+            runtime_dir: PathBuf::from("/run/avix"),
+            executor_factory: None,
+            task_handles: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Create a proc handler with an executor factory. `spawn()` will launch a
+    /// background `RuntimeExecutor` tokio task for each agent via the factory.
+    pub fn new_with_factory(
+        process_table: Arc<ProcessTable>,
+        agents_yaml_path: PathBuf,
+        master_key: Vec<u8>,
+        runtime_dir: PathBuf,
+        factory: Arc<dyn AgentExecutorFactory>,
+    ) -> Self {
+        Self {
+            process_table,
+            agents_yaml_path,
+            master_key,
+            runtime_dir,
+            executor_factory: Some(factory),
+            task_handles: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Expose the process table for use by other kernel subsystems (e.g. ipc_server).
+    pub fn process_table(&self) -> &Arc<ProcessTable> {
+        &self.process_table
+    }
+
+    /// Abort the background executor task for the given PID, if one is running.
+    /// Called by the IPC kill handler so the tokio task is forcibly stopped.
+    pub async fn abort_agent(&self, pid: u32) {
+        let mut handles = self.task_handles.lock().await;
+        if let Some(handle) = handles.remove(&pid) {
+            handle.abort();
+            info!(pid, "aborted executor task for killed agent");
+        } else {
+            warn!(pid, "no executor task found for agent (may have exited already)");
         }
     }
 
@@ -99,7 +146,7 @@ impl ProcHandler {
             agent_name: name.to_string(),
             spawned_by: caller_identity.to_string(),
         };
-        let _token = CapabilityToken::mint(
+        let token = CapabilityToken::mint(
             vec![
                 "fs/read".to_string(),
                 "fs/write".to_string(),
@@ -111,8 +158,28 @@ impl ProcHandler {
             &self.master_key,
         );
 
-        // TODO: spawn RuntimeExecutor as an in-process tokio task, passing the token
-        // and an IPC-backed tool registry connected to router.svc.
+        // Launch RuntimeExecutor as a background tokio task via the factory.
+        // If no factory is configured (e.g. tests, or a kernel that manages
+        // agents externally), skip launch and leave the status as Running so
+        // callers can still track the PID through the process table.
+        if let Some(factory) = &self.executor_factory {
+            let spawn_params = SpawnParams {
+                pid: Pid::new(pid),
+                agent_name: name.to_string(),
+                goal: goal.to_string(),
+                spawned_by: caller_identity.to_string(),
+                session_id: session_id.to_string(),
+                token,
+                system_prompt: None,
+                selected_model: String::new(), // factory resolves via llm.svc
+                denied_tools: vec![],
+                context_limit: 0,
+                runtime_dir: self.runtime_dir.clone(),
+            };
+            let abort_handle = factory.launch(spawn_params);
+            self.task_handles.lock().await.insert(pid, abort_handle);
+            info!(pid, "executor task launched");
+        }
 
         // Mark as running
         self.process_table.set_status(Pid::new(pid), ProcessStatus::Running).await?;
@@ -160,10 +227,12 @@ impl ProcHandler {
     }
 
     /// Allocate a new unique PID.
+    /// PID 1 is reserved for the kernel agent; user agents start from 2.
     async fn allocate_pid(&self) -> Result<u32, AvixError> {
-        // Simple allocation: find max PID + 1
         let entries = self.process_table.list_all().await;
-        let max_pid = entries.iter().map(|e| e.pid.as_u32()).max().unwrap_or(0);
+        // unwrap_or(1) ensures the first allocated PID is 2 even when the
+        // process table is empty (kernel PID 1 is not yet inserted).
+        let max_pid = entries.iter().map(|e| e.pid.as_u32()).max().unwrap_or(1);
         Ok(max_pid + 1)
     }
 
@@ -229,8 +298,71 @@ impl ProcHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use tempfile::TempDir;
+
+    /// Minimal factory that records how many times `launch` was called.
+    struct CountingFactory {
+        count: Arc<AtomicU32>,
+    }
+
+    impl AgentExecutorFactory for CountingFactory {
+        fn launch(&self, _params: SpawnParams) -> tokio::task::AbortHandle {
+            self.count.fetch_add(1, Ordering::SeqCst);
+            // Spawn a no-op task so we have a real abort handle.
+            tokio::spawn(async {}).abort_handle()
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_with_factory_launches_executor_task() {
+        let dir = TempDir::new().unwrap();
+        let table = Arc::new(ProcessTable::new());
+        let master_key = b"test-master-key-32-bytes-padded!".to_vec();
+        let count = Arc::new(AtomicU32::new(0));
+
+        let factory = Arc::new(CountingFactory { count: Arc::clone(&count) });
+        let handler = ProcHandler::new_with_factory(
+            table.clone(),
+            dir.path().join("agents.yaml"),
+            master_key,
+            dir.path().join("run/avix"),
+            factory,
+        );
+
+        let pid1 = handler.spawn("agent-a", "goal-a", "sess-1", "kernel").await.unwrap();
+        let pid2 = handler.spawn("agent-b", "goal-b", "sess-1", "kernel").await.unwrap();
+
+        // Factory should have been called once per spawn
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+
+        // Both pids registered and running
+        assert_eq!(table.get(Pid::new(pid1)).await.unwrap().status, ProcessStatus::Running);
+        assert_eq!(table.get(Pid::new(pid2)).await.unwrap().status, ProcessStatus::Running);
+
+        // Abort handles stored — abort_agent should remove them
+        handler.abort_agent(pid1).await;
+        {
+            let handles = handler.task_handles.lock().await;
+            assert!(!handles.contains_key(&pid1), "handle for pid1 should be gone after abort");
+            assert!(handles.contains_key(&pid2), "handle for pid2 should still be present");
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_without_factory_still_registers_process() {
+        let dir = TempDir::new().unwrap();
+        let table = Arc::new(ProcessTable::new());
+        let master_key = b"test-master-key-32-bytes-padded!".to_vec();
+        let handler = ProcHandler::new(table.clone(), dir.path().join("agents.yaml"), master_key);
+
+        let pid = handler.spawn("agent", "goal", "sess", "kernel").await.unwrap();
+        let entry = table.get(Pid::new(pid)).await.unwrap();
+        assert_eq!(entry.status, ProcessStatus::Running);
+        // No task handles stored
+        assert!(handler.task_handles.lock().await.is_empty());
+    }
 
     #[tokio::test]
     async fn spawn_creates_process_entry_and_persists() {

@@ -124,6 +124,7 @@ pub struct RuntimeExecutor {
     pub tool_list: Vec<serde_json::Value>,
     pub tool_budgets: ToolBudgets,
     hil_required_tools: Vec<String>,
+    #[allow(dead_code)]
     runtime_dir: PathBuf,
     // Day 18 fields
     llm_queue: Arc<std::sync::Mutex<Vec<LlmCompleteResponse>>>,

@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::process::Command;
 use tracing::{info, warn};
 
 use crate::error::AvixError;
@@ -10,7 +9,8 @@ use crate::process::entry::{ProcessEntry, ProcessKind, ProcessStatus};
 use crate::types::Pid;
 
 /// Kernel boot phase 3: re-adopt orphaned agents from agents.yaml.
-/// Checks which persisted agents are still alive, rewrites /proc/ files, sends SIGSTART.
+/// Any PID in agents.yaml that is not yet registered in the process table is re-adopted
+/// as Running. PIDs already present in the table are skipped (idempotent).
 /// Links: docs/dev_plans/PROJECT-SPAWN-001-dev-plan.md#detailed-implementation-guidance
 pub async fn phase3_re_adopt(
     process_table: Arc<ProcessTable>,
@@ -32,51 +32,37 @@ pub async fn phase3_re_adopt(
 
     let mut re_adopted = 0;
     for record in &agents_yaml.agents {
-        if is_pid_alive(record.pid).await {
-            info!(pid = record.pid, name = %record.name, "re-adopting alive agent");
-
-            // Create process entry
-            let entry = ProcessEntry {
-                pid: Pid::new(record.pid),
-                name: record.name.clone(),
-                kind: ProcessKind::Agent,
-                status: ProcessStatus::Running, // Assume running since alive
-                parent: None,
-                spawned_by_user: "kernel".to_string(), // TODO: store in yaml?
-                goal: record.goal.clone(),
-                spawned_at: record.spawned_at,
-                ..Default::default()
-            };
-
-            // Insert into process table
-            process_table.insert(entry).await;
-
-            // TODO: Rewrite /proc/<pid>/ files
-            // TODO: Send SIGSTART to resume IPC
-
-            re_adopted += 1;
-        } else {
-            warn!(pid = record.pid, name = %record.name, "agent not alive, skipping re-adopt");
+        // Liveness check: consult the kernel process table, not the host OS.
+        // Avix PIDs are virtual — they have no meaning as host OS process IDs.
+        if process_table.get(Pid::new(record.pid)).await.is_some() {
+            info!(pid = record.pid, name = %record.name, "agent already registered, skipping re-adopt");
+            continue;
         }
+
+        info!(pid = record.pid, name = %record.name, "re-adopting agent from agents.yaml");
+
+        let entry = ProcessEntry {
+            pid: Pid::new(record.pid),
+            name: record.name.clone(),
+            kind: ProcessKind::Agent,
+            status: ProcessStatus::Running,
+            parent: None,
+            spawned_by_user: "kernel".to_string(),
+            goal: record.goal.clone(),
+            spawned_at: record.spawned_at,
+            ..Default::default()
+        };
+
+        process_table.insert(entry).await;
+
+        // TODO: Rewrite /proc/<pid>/ files
+        // TODO: Send SIGSTART to resume IPC
+
+        re_adopted += 1;
     }
 
     info!(re_adopted, "re-adopted agents from agents.yaml");
     Ok(())
-}
-
-/// Check if a PID is alive by sending signal 0.
-/// Links: docs/architecture/08-llm-service.md#health-checks
-async fn is_pid_alive(pid: u32) -> bool {
-    // Use `kill -0` to check if process exists without sending a signal
-    match Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .status()
-        .await
-    {
-        Ok(status) => status.success(),
-        Err(_) => false,
-    }
 }
 
 #[cfg(test)]
@@ -85,47 +71,84 @@ mod tests {
     use tempfile::TempDir;
     use std::sync::Arc;
 
+    fn make_agents_yaml(agents: Vec<crate::kernel::proc::AgentRecord>) -> crate::kernel::proc::AgentsYaml {
+        crate::kernel::proc::AgentsYaml { agents }
+    }
+
+    fn make_record(pid: u32, name: &str) -> crate::kernel::proc::AgentRecord {
+        crate::kernel::proc::AgentRecord {
+            pid,
+            name: name.to_string(),
+            goal: "test goal".to_string(),
+            session_id: "sess-1".to_string(),
+            spawned_at: chrono::Utc::now(),
+        }
+    }
+
     #[tokio::test]
-    async fn re_adopt_recreates_process_entries_for_alive_pids() {
+    async fn re_adopt_registers_agents_not_in_process_table() {
         let dir = TempDir::new().unwrap();
         let yaml_path = dir.path().join("agents.yaml");
         let table = Arc::new(ProcessTable::new());
 
-        // Use the current process PID — guaranteed alive and signallable by this process
-        let alive_pid = std::process::id();
-
-        // Create a dummy agents.yaml with one agent
-        let agents = crate::kernel::proc::AgentsYaml {
-            agents: vec![crate::kernel::proc::AgentRecord {
-                pid: alive_pid,
-                name: "test-agent".to_string(),
-                goal: "test goal".to_string(),
-                session_id: "sess-1".to_string(),
-                spawned_at: chrono::Utc::now(),
-            }],
-        };
-        let yaml_str = serde_yaml::to_string(&agents).unwrap();
+        let yaml_str = serde_yaml::to_string(&make_agents_yaml(vec![
+            make_record(10, "agent-a"),
+            make_record(11, "agent-b"),
+        ])).unwrap();
         std::fs::write(&yaml_path, yaml_str).unwrap();
 
-        // Run re-adopt (empty key is fine for tests — no tokens are actually verified)
         phase3_re_adopt(table.clone(), yaml_path, vec![0u8; 32]).await.unwrap();
 
-        // Check process table
         let entries = table.list_by_kind(ProcessKind::Agent).await;
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].pid.as_u32(), alive_pid);
-        assert_eq!(entries[0].name, "test-agent");
-        assert_eq!(entries[0].goal, "test goal");
-        assert_eq!(entries[0].status, ProcessStatus::Running);
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|e| e.pid.as_u32() == 10 && e.name == "agent-a"));
+        assert!(entries.iter().any(|e| e.pid.as_u32() == 11 && e.name == "agent-b"));
+        assert!(entries.iter().all(|e| e.status == ProcessStatus::Running));
     }
 
     #[tokio::test]
-    async fn is_pid_alive_checks_process_existence() {
-        // Test with our own PID (should be alive)
-        let our_pid = std::process::id();
-        assert!(is_pid_alive(our_pid).await);
+    async fn re_adopt_skips_pids_already_in_process_table() {
+        let dir = TempDir::new().unwrap();
+        let yaml_path = dir.path().join("agents.yaml");
+        let table = Arc::new(ProcessTable::new());
 
-        // Test with a high PID (unlikely to exist)
-        assert!(!is_pid_alive(999999).await);
+        // Pre-register PID 20 so it's already in the table
+        table.insert(ProcessEntry {
+            pid: Pid::new(20),
+            name: "already-running".to_string(),
+            kind: ProcessKind::Agent,
+            status: ProcessStatus::Running,
+            goal: "original goal".to_string(),
+            spawned_by_user: "kernel".to_string(),
+            spawned_at: chrono::Utc::now(),
+            ..Default::default()
+        }).await;
+
+        let yaml_str = serde_yaml::to_string(&make_agents_yaml(vec![
+            make_record(20, "already-running"),
+            make_record(21, "new-agent"),
+        ])).unwrap();
+        std::fs::write(&yaml_path, yaml_str).unwrap();
+
+        phase3_re_adopt(table.clone(), yaml_path, vec![0u8; 32]).await.unwrap();
+
+        // PID 20 was already there (not duplicated), PID 21 was added
+        let entries = table.list_by_kind(ProcessKind::Agent).await;
+        assert_eq!(entries.len(), 2);
+        // PID 20 keeps its original entry (not replaced)
+        let e20 = entries.iter().find(|e| e.pid.as_u32() == 20).unwrap();
+        assert_eq!(e20.name, "already-running");
+        assert!(entries.iter().any(|e| e.pid.as_u32() == 21));
+    }
+
+    #[tokio::test]
+    async fn re_adopt_is_noop_when_agents_yaml_missing() {
+        let dir = TempDir::new().unwrap();
+        let yaml_path = dir.path().join("agents.yaml"); // does not exist
+        let table = Arc::new(ProcessTable::new());
+
+        phase3_re_adopt(table.clone(), yaml_path, vec![0u8; 32]).await.unwrap();
+
+        assert!(table.list_by_kind(ProcessKind::Agent).await.is_empty());
     }
 }
