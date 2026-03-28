@@ -20,6 +20,34 @@ use crate::types::{
 pub struct ServiceSpawnRequest {
     pub name: String,
     pub binary: String,
+    /// Whether the service requires `_caller` injection on every tool call.
+    pub caller_scoped: bool,
+    /// Max concurrent in-flight calls (from `service.unit`).
+    pub max_concurrent: u32,
+}
+
+impl ServiceSpawnRequest {
+    /// Convenience constructor with sensible defaults.
+    pub fn simple(name: impl Into<String>, binary: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            binary: binary.into(),
+            caller_scoped: false,
+            max_concurrent: 20,
+        }
+    }
+}
+
+impl ServiceSpawnRequest {
+    /// Convenience constructor: fill from a parsed `ServiceUnit`.
+    pub fn from_unit(unit: &super::unit::ServiceUnit) -> Self {
+        Self {
+            name: unit.name.clone(),
+            binary: unit.service.binary.clone(),
+            caller_scoped: unit.capabilities.caller_scoped,
+            max_concurrent: unit.service.max_concurrent,
+        }
+    }
 }
 
 pub struct IpcRegisterRequest {
@@ -68,6 +96,7 @@ struct ServiceRecord {
     token: ServiceToken,
     endpoint: Option<String>,
     registered_at: Option<chrono::DateTime<chrono::Utc>>,
+    caller_scoped: bool,
 }
 
 pub struct ServiceManager {
@@ -119,10 +148,21 @@ impl ServiceManager {
             token: token.clone(),
             endpoint: None,
             registered_at: None,
+            caller_scoped: req.caller_scoped,
         };
         self.services.write().await.insert(req.name.clone(), record);
         self.token_to_svc.write().await.insert(token_str, req.name);
         Ok(token)
+    }
+
+    /// Returns true if the named service was registered with `caller_scoped: true`.
+    pub async fn is_caller_scoped(&self, service_name: &str) -> bool {
+        self.services
+            .read()
+            .await
+            .get(service_name)
+            .map(|r| r.caller_scoped)
+            .unwrap_or(false)
     }
 
     pub async fn handle_ipc_register(
@@ -177,8 +217,14 @@ impl ServiceManager {
         let mut env = HashMap::new();
         #[cfg(unix)]
         {
-            env.insert("AVIX_KERNEL_SOCK".into(), format!("{}/kernel.sock", self.runtime_dir.display()));
-            env.insert("AVIX_ROUTER_SOCK".into(), format!("{}/router.sock", self.runtime_dir.display()));
+            env.insert(
+                "AVIX_KERNEL_SOCK".into(),
+                format!("{}/kernel.sock", self.runtime_dir.display()),
+            );
+            env.insert(
+                "AVIX_ROUTER_SOCK".into(),
+                format!("{}/router.sock", self.runtime_dir.display()),
+            );
             env.insert(
                 "AVIX_SVC_SOCK".into(),
                 format!("{}/services/{name}-{pid}.sock", self.runtime_dir.display()),
@@ -204,8 +250,8 @@ impl ServiceManager {
             return Ok(vec![]);
         }
         let mut units = Vec::new();
-        for entry in std::fs::read_dir(&services_dir)
-            .map_err(|e| AvixError::ConfigParse(e.to_string()))?
+        for entry in
+            std::fs::read_dir(&services_dir).map_err(|e| AvixError::ConfigParse(e.to_string()))?
         {
             let entry = entry.map_err(|e| AvixError::ConfigParse(e.to_string()))?;
             let unit_path = entry.path().join("service.unit");
@@ -216,10 +262,7 @@ impl ServiceManager {
         Ok(units)
     }
 
-    pub async fn handle_tool_add(
-        &self,
-        params: IpcToolAddParams,
-    ) -> Result<(), AvixError> {
+    pub async fn handle_tool_add(&self, params: IpcToolAddParams) -> Result<(), AvixError> {
         let svc_name = self.validate_token(&params.token).await?;
         if let Some(reg) = &self.tool_registry {
             let entries: Vec<ToolEntry> = params
@@ -240,10 +283,7 @@ impl ServiceManager {
         Ok(())
     }
 
-    pub async fn handle_tool_remove(
-        &self,
-        params: IpcToolRemoveParams,
-    ) -> Result<(), AvixError> {
+    pub async fn handle_tool_remove(&self, params: IpcToolRemoveParams) -> Result<(), AvixError> {
         let svc_name = self.validate_token(&params.token).await?;
         if let Some(reg) = &self.tool_registry {
             let refs: Vec<&str> = params.tools.iter().map(|s| s.as_str()).collect();
@@ -327,10 +367,7 @@ namespace = "/tools/{name}/"
         let dir = TempDir::new().unwrap();
         let mgr = ServiceManager::new_for_test(dir.path().to_path_buf());
         let token = mgr
-            .spawn_and_get_token(ServiceSpawnRequest {
-                name: "test-svc".into(),
-                binary: "/bin/test-svc".into(),
-            })
+            .spawn_and_get_token(ServiceSpawnRequest::simple("test-svc", "/bin/test-svc"))
             .await
             .unwrap();
 
@@ -360,14 +397,10 @@ namespace = "/tools/{name}/"
     #[tokio::test]
     async fn handle_ipc_register_scans_and_registers_tools() {
         let dir = TempDir::new().unwrap();
-        let (mgr, registry) =
-            ServiceManager::new_with_registry(dir.path().to_path_buf());
+        let (mgr, registry) = ServiceManager::new_with_registry(dir.path().to_path_buf());
 
         let token = mgr
-            .spawn_and_get_token(ServiceSpawnRequest {
-                name: "my-svc".into(),
-                binary: "/bin/my-svc".into(),
-            })
+            .spawn_and_get_token(ServiceSpawnRequest::simple("my-svc", "/bin/my-svc"))
             .await
             .unwrap();
 
@@ -400,13 +433,9 @@ namespace = "/tools/{name}/"
     #[tokio::test]
     async fn tool_add_with_descriptor_stores_visibility() {
         let dir = TempDir::new().unwrap();
-        let (mgr, reg) =
-            ServiceManager::new_with_registry(dir.path().to_path_buf());
+        let (mgr, reg) = ServiceManager::new_with_registry(dir.path().to_path_buf());
         let token = mgr
-            .spawn_and_get_token(ServiceSpawnRequest {
-                name: "github-svc".into(),
-                binary: "/bin/g".into(),
-            })
+            .spawn_and_get_token(ServiceSpawnRequest::simple("github-svc", "/bin/g"))
             .await
             .unwrap();
 
@@ -429,8 +458,7 @@ namespace = "/tools/{name}/"
     #[tokio::test]
     async fn tool_add_rejects_invalid_token() {
         let dir = TempDir::new().unwrap();
-        let (mgr, _) =
-            ServiceManager::new_with_registry(dir.path().to_path_buf());
+        let (mgr, _) = ServiceManager::new_with_registry(dir.path().to_path_buf());
         let result = mgr
             .handle_tool_add(IpcToolAddParams {
                 token: "bad-token".into(),
@@ -443,13 +471,9 @@ namespace = "/tools/{name}/"
     #[tokio::test]
     async fn tool_remove_without_drain_removes_immediately() {
         let dir = TempDir::new().unwrap();
-        let (mgr, reg) =
-            ServiceManager::new_with_registry(dir.path().to_path_buf());
+        let (mgr, reg) = ServiceManager::new_with_registry(dir.path().to_path_buf());
         let token = mgr
-            .spawn_and_get_token(ServiceSpawnRequest {
-                name: "svc-a".into(),
-                binary: "/bin/svc-a".into(),
-            })
+            .spawn_and_get_token(ServiceSpawnRequest::simple("svc-a", "/bin/svc-a"))
             .await
             .unwrap();
         mgr.handle_tool_add(IpcToolAddParams {
@@ -478,13 +502,9 @@ namespace = "/tools/{name}/"
     #[tokio::test]
     async fn tool_remove_with_drain_removes_after_drain() {
         let dir = TempDir::new().unwrap();
-        let (mgr, reg) =
-            ServiceManager::new_with_registry(dir.path().to_path_buf());
+        let (mgr, reg) = ServiceManager::new_with_registry(dir.path().to_path_buf());
         let token = mgr
-            .spawn_and_get_token(ServiceSpawnRequest {
-                name: "svc-b".into(),
-                binary: "/bin/svc-b".into(),
-            })
+            .spawn_and_get_token(ServiceSpawnRequest::simple("svc-b", "/bin/svc-b"))
             .await
             .unwrap();
         mgr.handle_tool_add(IpcToolAddParams {
@@ -508,5 +528,31 @@ namespace = "/tools/{name}/"
         .unwrap();
 
         assert!(reg.lookup("a/b").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn spawn_with_caller_scoped_sets_flag() {
+        let dir = TempDir::new().unwrap();
+        let mgr = ServiceManager::new_for_test(dir.path().to_path_buf());
+        mgr.spawn_and_get_token(ServiceSpawnRequest {
+            name: "scoped-svc".into(),
+            binary: "/bin/scoped".into(),
+            caller_scoped: true,
+            max_concurrent: 10,
+        })
+        .await
+        .unwrap();
+        assert!(mgr.is_caller_scoped("scoped-svc").await);
+        assert!(!mgr.is_caller_scoped("unknown-svc").await);
+    }
+
+    #[tokio::test]
+    async fn spawn_simple_defaults_not_caller_scoped() {
+        let dir = TempDir::new().unwrap();
+        let mgr = ServiceManager::new_for_test(dir.path().to_path_buf());
+        mgr.spawn_and_get_token(ServiceSpawnRequest::simple("plain-svc", "/bin/plain"))
+            .await
+            .unwrap();
+        assert!(!mgr.is_caller_scoped("plain-svc").await);
     }
 }

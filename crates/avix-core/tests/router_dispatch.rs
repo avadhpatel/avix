@@ -389,7 +389,45 @@ async fn dispatch_injects_caller() {
     });
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let (dispatcher, _) = build_dispatcher(&sock, "echo/ping", vec!["echo/ping".into()]).await;
+    // Build a caller-scoped dispatcher manually so `_caller` is injected.
+    let service_registry = Arc::new(ServiceRegistry::new());
+    service_registry
+        .register_with_meta("echo-svc", sock.to_str().unwrap(), true)
+        .await;
+    service_registry
+        .register_tool("echo/ping", "echo-svc")
+        .await;
+
+    let tool_registry = Arc::new(ToolRegistry::new());
+    tool_registry
+        .add(
+            "echo-svc",
+            vec![ToolEntry {
+                name: ToolName::parse("echo/ping").unwrap(),
+                owner: "echo-svc".into(),
+                state: ToolState::Available,
+                visibility: ToolVisibility::All,
+                descriptor: json!({}),
+            }],
+        )
+        .await
+        .unwrap();
+
+    let process_table = Arc::new(ProcessTable::new());
+    process_table
+        .insert(ProcessEntry {
+            pid: Pid::new(10),
+            name: "agent".into(),
+            kind: ProcessKind::Agent,
+            status: ProcessStatus::Running,
+            spawned_by_user: "alice".into(),
+            granted_tools: vec!["echo/ping".into()],
+            ..Default::default()
+        })
+        .await;
+
+    let dispatcher = RouterDispatcher::new(service_registry, tool_registry, process_table)
+        .with_call_timeout(Duration::from_millis(500));
 
     let resp = dispatcher
         .dispatch(make_request("echo/ping"), Pid::new(10), "alice", "tok")

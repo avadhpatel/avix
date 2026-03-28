@@ -44,22 +44,30 @@ async fn route_unknown_tool_returns_none() {
 
 #[test]
 fn caller_injected_into_params() {
-    use avix_core::router::inject_caller;
-    use avix_core::types::Pid;
+    use avix_core::router::CallerInfo;
     use serde_json::json;
     let mut params = json!({"path": "/etc/test.yaml"});
-    inject_caller(&mut params, Pid::new(57), "alice");
+    CallerInfo {
+        pid: 57,
+        user: "alice".into(),
+        token: "tok".into(),
+    }
+    .inject_into(&mut params);
     assert_eq!(params["_caller"]["pid"], 57);
     assert_eq!(params["_caller"]["user"], "alice");
 }
 
 #[test]
 fn caller_does_not_overwrite_existing_params() {
-    use avix_core::router::inject_caller;
-    use avix_core::types::Pid;
+    use avix_core::router::CallerInfo;
     use serde_json::json;
     let mut params = json!({"path": "/test"});
-    inject_caller(&mut params, Pid::new(57), "alice");
+    CallerInfo {
+        pid: 57,
+        user: "alice".into(),
+        token: "tok".into(),
+    }
+    .inject_into(&mut params);
     assert_eq!(params["path"], "/test");
 }
 
@@ -128,22 +136,30 @@ async fn caller_scoped_limiter_tracks_per_caller() {
 
 #[test]
 fn caller_injected_with_correct_pid_and_user() {
-    use avix_core::router::inject_caller;
-    use avix_core::types::Pid;
+    use avix_core::router::CallerInfo;
     use serde_json::json;
     let mut params = json!({});
-    inject_caller(&mut params, Pid::new(57), "alice");
+    CallerInfo {
+        pid: 57,
+        user: "alice".into(),
+        token: "tok".into(),
+    }
+    .inject_into(&mut params);
     assert_eq!(params["_caller"]["pid"], 57);
     assert_eq!(params["_caller"]["user"], "alice");
 }
 
 #[test]
 fn caller_injection_preserves_existing_fields() {
-    use avix_core::router::inject_caller;
-    use avix_core::types::Pid;
+    use avix_core::router::CallerInfo;
     use serde_json::json;
     let mut params = json!({"path": "/test", "content": "hello"});
-    inject_caller(&mut params, Pid::new(10), "bob");
+    CallerInfo {
+        pid: 10,
+        user: "bob".into(),
+        token: "tok".into(),
+    }
+    .inject_into(&mut params);
     assert_eq!(params["path"], "/test");
     assert_eq!(params["content"], "hello");
 }

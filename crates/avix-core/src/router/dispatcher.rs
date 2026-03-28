@@ -2,7 +2,7 @@
 ///
 /// Flow: validate tool → check capability → acquire in-flight guard →
 ///       check concurrency → resolve endpoint → inject _caller → forward via IPC.
-use super::{capability, inject_caller, ConcurrencyLimiter};
+use super::{caller::CallerInfo, capability, ConcurrencyLimiter};
 use crate::error::AvixError;
 use crate::ipc::{message::JsonRpcRequest, message::JsonRpcResponse, IpcClient};
 use crate::process::ProcessTable;
@@ -136,8 +136,16 @@ impl RouterDispatcher {
             }
         };
 
-        // 7. Inject _caller into params.
-        inject_caller(&mut request.params, caller_pid, caller_user);
+        // 7. Inject _caller into params if the service requires it (caller_scoped).
+        let svc_name = tool_entry.owner.clone();
+        if self.service_registry.is_caller_scoped(&svc_name).await {
+            CallerInfo {
+                pid: caller_pid.as_u32() as u64,
+                user: caller_user.to_string(),
+                token: _caller_token.to_string(),
+            }
+            .inject_into(&mut request.params);
+        }
 
         // 8. Forward via IpcClient.
         let client = IpcClient::new(endpoint).with_timeout(self.call_timeout);

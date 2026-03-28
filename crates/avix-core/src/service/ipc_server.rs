@@ -70,8 +70,7 @@ async fn handle_message(
     match msg {
         IpcMessage::Request(req) => {
             debug!(method = %req.method, id = %req.id, "service IPC request");
-            let resp =
-                dispatch_request(&req.id, &req.method, req.params, mgr, avix_root).await;
+            let resp = dispatch_request(&req.id, &req.method, req.params, mgr, avix_root).await;
             Some(resp)
         }
         IpcMessage::Notification(notif) => {
@@ -102,10 +101,7 @@ async fn dispatch_request(
                     return JsonRpcResponse::err(id, -32602, "missing name", None);
                 }
             };
-            let endpoint = params["endpoint"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
+            let endpoint = params["endpoint"].as_str().unwrap_or("").to_string();
             let tools = params["tools"]
                 .as_array()
                 .map(|a| {
@@ -117,7 +113,12 @@ async fn dispatch_request(
 
             match mgr
                 .handle_ipc_register(
-                    IpcRegisterRequest { token, name, endpoint, tools },
+                    IpcRegisterRequest {
+                        token,
+                        name,
+                        endpoint,
+                        tools,
+                    },
                     &avix_root,
                 )
                 .await
@@ -137,18 +138,12 @@ async fn dispatch_request(
         }
 
         "ipc.tool-add" => {
-            let tool_params: IpcToolAddParams =
-                match serde_json::from_value(params) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        return JsonRpcResponse::err(
-                            id,
-                            -32602,
-                            &format!("invalid params: {e}"),
-                            None,
-                        );
-                    }
-                };
+            let tool_params: IpcToolAddParams = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => {
+                    return JsonRpcResponse::err(id, -32602, &format!("invalid params: {e}"), None);
+                }
+            };
             match mgr.handle_tool_add(tool_params).await {
                 Ok(()) => JsonRpcResponse::ok(id, json!({ "added": true })),
                 Err(e) => {
@@ -159,18 +154,12 @@ async fn dispatch_request(
         }
 
         "ipc.tool-remove" => {
-            let remove_params: IpcToolRemoveParams =
-                match serde_json::from_value(params) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        return JsonRpcResponse::err(
-                            id,
-                            -32602,
-                            &format!("invalid params: {e}"),
-                            None,
-                        );
-                    }
-                };
+            let remove_params: IpcToolRemoveParams = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => {
+                    return JsonRpcResponse::err(id, -32602, &format!("invalid params: {e}"), None);
+                }
+            };
             match mgr.handle_tool_remove(remove_params).await {
                 Ok(()) => JsonRpcResponse::ok(id, json!({ "removed": true })),
                 Err(e) => {
@@ -270,10 +259,10 @@ mod tests {
         let mgr = Arc::new(mgr);
 
         let token = mgr
-            .spawn_and_get_token(crate::service::lifecycle::ServiceSpawnRequest {
-                name: "test-svc".into(),
-                binary: "/bin/test-svc".into(),
-            })
+            .spawn_and_get_token(crate::service::lifecycle::ServiceSpawnRequest::simple(
+                "test-svc",
+                "/bin/test-svc",
+            ))
             .await
             .unwrap();
 

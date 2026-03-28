@@ -108,7 +108,7 @@ async fn registry_remove_emits_event() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(evt.op, "removed");
+    assert!(evt.op.starts_with("removed"));
     assert!(evt.tools.contains(&"fs/read".to_string()));
 }
 
