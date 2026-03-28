@@ -106,31 +106,18 @@ async fn bootstrap_completes_within_700ms() {
     assert!(start.elapsed().as_millis() < 700);
 }
 
+/// Built-in service PIDs are assigned when `start_daemon` calls `phase3_services`,
+/// not during `bootstrap_with_root`.  At bootstrap time the map is empty.
 #[tokio::test]
 #[serial]
-async fn built_in_services_get_low_pids() {
+async fn service_pid_is_none_before_daemon_start() {
     let tmp = tempdir().unwrap();
     write_minimal_server_config(tmp.path());
     let runtime = Runtime::bootstrap_with_root(tmp.path()).await.unwrap();
-    let router_pid = runtime.service_pid("router").unwrap();
-    assert!(
-        router_pid.as_u32() <= 9,
-        "router should have PID ≤ 9, got {}",
-        router_pid
-    );
-}
-
-#[tokio::test]
-#[serial]
-async fn llm_service_pid_present_after_bootstrap() {
-    let tmp = tempdir().unwrap();
-    write_minimal_server_config(tmp.path());
-    let runtime = Runtime::bootstrap_with_root(tmp.path()).await.unwrap();
-    let llm_pid = runtime.service_pid("llm");
-    assert!(
-        llm_pid.is_some(),
-        "expected llm service to have a PID after bootstrap"
-    );
+    // Services haven't been started yet — all return None.
+    assert!(runtime.service_pid("router").is_none());
+    assert!(runtime.service_pid("llm").is_none());
+    assert!(runtime.service_pid("exec").is_none());
 }
 
 // ── Finding A: Phase 1 VFS tree initialization ────────────────────────────────

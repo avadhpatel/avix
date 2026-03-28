@@ -4,14 +4,23 @@ pub(crate) mod phase2;
 
 use crate::auth::atp_token::ATPTokenStore;
 use crate::auth::service::AuthService;
+use crate::config::LlmConfig;
 use crate::error::AvixError;
+use crate::exec_svc::ExecIpcServer;
 use crate::gateway::config::GatewayConfig;
 use crate::gateway::event_bus::AtpEventBus;
 use crate::gateway::server::GatewayServer;
 use crate::kernel::{phase3_re_adopt, KernelIpcServer, ProcHandler};
+use crate::llm_svc::routing::RoutingEngine;
+use crate::llm_svc::service::LlmService;
 use crate::memfs::{VfsPath, VfsRouter};
 use crate::process::table::ProcessTable;
+use crate::router::{RouterDispatcher, RouterIpcServer, ServiceRegistry};
+use crate::service::lifecycle::{ServiceManager, ServiceSpawnRequest};
+use crate::service::process::ServiceProcess;
+use crate::service::watchdog::{ServiceWatchdog, WatchdogEntry};
 use crate::types::Pid;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -50,7 +59,7 @@ impl std::fmt::Debug for Runtime {
 impl Runtime {
     pub async fn bootstrap_with_root(root: &Path) -> Result<Self, AvixError> {
         let mut log = Vec::new();
-        let mut service_pids = std::collections::HashMap::new();
+        let service_pids = std::collections::HashMap::new();
         let vfs = VfsRouter::new();
         let process_table = Arc::new(ProcessTable::new());
         let runtime_dir = std::env::var("AVIX_RUNTIME_DIR")
@@ -96,24 +105,9 @@ impl Runtime {
             message: "phase 2: config + master key + persistent mounts".into(),
         });
 
-        // Phase 3: start built-in services
-        let builtins = [
-            "logger",
-            "memfs",
-            "auth",
-            "router",
-            "tool-registry",
-            "llm",
-            "exec",
-            "mcp-bridge",
-            "gateway",
-        ];
-        for (i, svc) in builtins.iter().enumerate() {
-            service_pids.insert(svc.to_string(), Pid::new((i + 1) as u32));
-        }
         log.push(BootLogEntry {
             phase: BootPhase(3),
-            message: "phase 3: services started".into(),
+            message: "phase 3: pending service start".into(),
         });
 
         Ok(Runtime {
@@ -229,7 +223,126 @@ impl Runtime {
     }
 
     async fn phase3_services(&mut self) -> Result<(), AvixError> {
-        tracing::info!("services mock");
+        // Shared registries used by the router and service manager.
+        let (service_manager, tool_registry) =
+            ServiceManager::new_with_registry(self.runtime_dir.clone());
+        let service_manager = Arc::new(service_manager);
+        let service_registry = Arc::new(ServiceRegistry::new());
+
+        // ── router.svc ────────────────────────────────────────────────────────
+        let router_sock = self.runtime_dir.join("router.sock");
+        let dispatcher = Arc::new(RouterDispatcher::new(
+            Arc::clone(&service_registry),
+            Arc::clone(&tool_registry),
+            Arc::clone(&self.process_table),
+        ));
+        RouterIpcServer::new(router_sock.clone(), Arc::clone(&dispatcher))
+            .start()
+            .await?;
+        tracing::info!(sock = %router_sock.display(), "router.svc started");
+
+        // ── exec.svc ─────────────────────────────────────────────────────────
+        let exec_sock = self.runtime_dir.join("exec.sock");
+        ExecIpcServer::new(exec_sock.clone()).start().await?;
+        tracing::info!(sock = %exec_sock.display(), "exec.svc started");
+
+        // ── llm.svc (optional — requires etc/llm.yaml) ────────────────────────
+        let llm_yaml_path = self.root.join("etc/llm.yaml");
+        if llm_yaml_path.exists() {
+            match std::fs::read_to_string(&llm_yaml_path)
+                .map_err(|e| AvixError::ConfigParse(format!("failed to read etc/llm.yaml: {e}")))
+                .and_then(|s| LlmConfig::from_str(&s))
+            {
+                Ok(llm_config) => {
+                    let routing = Arc::new(RoutingEngine::from_config(&llm_config));
+                    let llm_svc = Arc::new(LlmService::new(
+                        llm_config,
+                        HashMap::new(),
+                        routing,
+                        HashMap::new(),
+                    ));
+                    let llm_sock = std::env::var("AVIX_LLM_SOCK")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|_| self.runtime_dir.join("llm.sock"));
+                    let sock_str = llm_sock.to_string_lossy().to_string();
+                    tokio::spawn(async move {
+                        if let Err(e) = llm_svc.run(&sock_str).await {
+                            tracing::warn!(error = %e, "llm.svc exited");
+                        }
+                    });
+                    tracing::info!(sock = %llm_sock.display(), "llm.svc started");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "invalid etc/llm.yaml — llm.svc not started");
+                }
+            }
+        } else {
+            tracing::warn!("etc/llm.yaml not found — llm.svc not started");
+        }
+
+        // ── installed third-party services ───────────────────────────────────
+        let watchdog_entries = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+
+        match ServiceManager::discover_installed(&self.root) {
+            Ok(units) => {
+                for unit in units {
+                    let token = match service_manager
+                        .spawn_and_get_token(ServiceSpawnRequest::from_unit(&unit))
+                        .await
+                    {
+                        Ok(t) => t,
+                        Err(e) => {
+                            tracing::warn!(name = %unit.name, error = %e, "failed to allocate token for service");
+                            continue;
+                        }
+                    };
+
+                    match ServiceProcess::spawn(
+                        &unit,
+                        &token,
+                        &self.kernel_sock,
+                        &router_sock,
+                        &self.runtime_dir,
+                    )
+                    .await
+                    {
+                        Ok(process) => {
+                            tracing::info!(
+                                name = %unit.name,
+                                pid = token.pid.as_u32(),
+                                "installed service started"
+                            );
+                            watchdog_entries.write().await.insert(
+                                unit.name.clone(),
+                                WatchdogEntry {
+                                    unit,
+                                    process,
+                                    restart_count: 0,
+                                },
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(name = %unit.name, error = %e, "failed to start service");
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "discover_installed failed — no third-party services started");
+            }
+        }
+
+        // Start watchdog for installed services.
+        // Dropping ServiceWatchdog detaches the handle; the tokio task continues running.
+        let _watchdog = ServiceWatchdog::start(
+            watchdog_entries,
+            Arc::clone(&service_manager),
+            self.kernel_sock.clone(),
+            router_sock,
+            self.runtime_dir.clone(),
+        );
+
+        tracing::info!("phase 3: built-in services started");
         Ok(())
     }
 
