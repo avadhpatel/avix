@@ -1,21 +1,23 @@
 # 07 — Services
 
-> Service lifecycle, built-in services, identity, multi-user security, and dynamic tools.
+> Service lifecycle, installation, tool registration, caller injection, restart watchdog,
+> and service secrets. Reflects implementation as of svc-gaps A–H.
 
 ---
 
 ## Overview
 
-Services are the deterministic backbone of Avix. They are always-available OS processes that
-expose tools via IPC. A service requires no LLM — if a deterministic program can solve it,
-it is a service.
+Services are the deterministic backbone of Avix. They are always-available OS processes
+that expose tools via IPC. A service requires no LLM — if a deterministic program can
+solve it, it is a service.
 
 Services are **language-agnostic host processes**. Any language that can open a socket and
 speak JSON-RPC 2.0 with 4-byte length-prefix framing can implement a service.
 
 All services live under `AVIX_ROOT/services/`. Built-in services are compiled into the
-`avix` binary. Installed services are added via ATP `sys.install` or `avix service install`.
-**At runtime the kernel treats built-in and installed services identically.**
+`avix` binary. Installed services are added via `avix service install` or the ATP
+`sys/install` syscall. **At runtime the kernel treats built-in and installed services
+identically.**
 
 ---
 
@@ -26,9 +28,35 @@ A service is any OS process that:
 1. Reads `AVIX_SVC_TOKEN`, `AVIX_KERNEL_SOCK`, `AVIX_ROUTER_SOCK`, `AVIX_SVC_SOCK` from env
 2. Connects to `AVIX_KERNEL_SOCK` and sends `ipc.register`
 3. Listens on `AVIX_SVC_SOCK` for incoming tool calls
-4. Speaks JSON-RPC 2.0 with 4-byte length-prefix framing
+4. Speaks JSON-RPC 2.0 with 4-byte little-endian length-prefix framing
 
 See `03-ipc.md` for the full wire protocol.
+
+---
+
+## Service Lifecycle
+
+```
+avix start
+    │
+    ├─ ServiceManager::spawn_and_get_token()  → issues ServiceToken (PID + token str)
+    │
+    ├─ ServiceProcess::spawn()               → forks binary, injects env vars
+    │       AVIX_SVC_TOKEN    = svc-token-<uuid>
+    │       AVIX_KERNEL_SOCK  = /run/avix/kernel.sock
+    │       AVIX_ROUTER_SOCK  = /run/avix/router.sock
+    │       AVIX_SVC_SOCK     = /run/avix/services/<name>-<pid>.sock
+    │
+    ├─ Service starts, binds AVIX_SVC_SOCK
+    │
+    ├─ Service → ipc.register → kernel
+    │       Kernel validates token, records endpoint, scans *.tool.yaml from
+    │       AVIX_ROOT/services/<name>/tools/ and registers descriptors in ToolRegistry
+    │
+    ├─ Service optionally calls ipc.tool-add / ipc.tool-remove at runtime
+    │
+    └─ ServiceWatchdog polls every 5 s — restarts if policy = always | on-failure
+```
 
 ---
 
@@ -41,38 +69,184 @@ See `03-ipc.md` for the full wire protocol.
 | `memfs.svc` | VFS abstraction. Driver-swappable. | `fs:read`, `fs:write` |
 | `logger.svc` | Structured log sink. | `fs:write` |
 | `watcher.svc` | File event bus. | `fs:read`, `fs:watch` |
-| `scheduler.svc` | Crontab runner. Loads `/etc/avix/crontab.yaml`, fires agents on schedule. | `fs:read`, `proc:spawn` |
-| `memory.svc` | Agent memory: episodic store + semantic store + retrieval. | `fs:read`, `fs:write` |
-| `tool-registry.svc` | Scans `/tools/**/*.tool.yaml`. | `fs:read` |
+| `scheduler.svc` | Crontab runner. Loads `/etc/avix/crontab.yaml`. | `fs:read`, `proc:spawn` |
+| `memory.svc` | Agent memory: episodic + semantic + retrieval. | `fs:read`, `fs:write` |
 | `jobs.svc` | Long-running job broker. | `fs:read`, `fs:write` |
 | `exec.svc` | Code execution + runtime discovery. | `exec:python`, `exec:js`, `exec:shell` |
 | `mcp-bridge.svc` | MCP protocol adapter. | `fs:read` |
-| `gateway.svc` | ATP WebSocket server. Ports 7700/7701. | `auth:session` |
-| `gui.svc` | Browser UI server. | `fs:read`, `auth:session` |
-| `shell.svc` | TTY interface. | `fs:read`, `fs:write`, `auth:session` |
+| `gateway.svc` | ATP WebSocket server. | `auth:session` |
 | `llm.svc` | All AI inference. Owns all provider calls. | `llm:inference` |
 
 **`llm.svc` is special:** `RuntimeExecutor` never calls provider APIs directly. All AI
-inference goes through `llm.svc` via IPC (`llm/complete`, `llm/embed`, etc.).
+inference goes through `llm.svc` via IPC.
 
 ---
 
-## Service Identity
+## service.unit Format (TOML)
 
-Services run as first-class kernel-managed processes with a `ServiceToken` (`AVIX_SVC_TOKEN`)
-analogous to an agent's `CapabilityToken`. This token:
+Every installed service ships a `service.unit` file at the root of its package. The
+parser lives at `crates/avix-core/src/service/unit.rs`.
 
-- Identifies the service in all IPC calls
-- Scopes VFS writes to `/services/<name>/workspace/`
-- Is issued at service start, held in memory, **never written to disk**
+```toml
+name    = "github-svc"
+version = "1.2.0"
 
-Services expose their current status in `/proc/services/<name>/status.yaml`.
+[unit]
+description = "GitHub integration service"
+author      = "example.com/github-svc"
+after       = ["auth.svc", "memfs.svc"]
+requires    = ["auth.svc"]
+
+[service]
+binary         = "/services/github-svc/bin/github-svc"
+language       = "rust"
+restart        = "on-failure"   # always | on-failure | never
+restart_delay  = "5s"           # parsed by parse_duration()
+max_concurrent = 20             # dispatcher concurrency limit
+queue_max      = 100
+queue_timeout  = "5s"
+run_as         = "service"      # service | user | root
+
+[capabilities]
+caller_scoped = true            # inject _caller into every tool call
+host_access   = "network"       # none | network | filesystem | all
+
+[tools]
+namespace = "/tools/github/"
+provides  = []                  # explicit tool list (empty = scan tools/ dir)
+
+[jobs]
+enabled = false
+```
+
+### RestartPolicy values
+
+| Value | Behaviour |
+|-------|-----------|
+| `always` | Restart on any exit |
+| `on-failure` | Restart on any exit (simplified — all exits treated as failure) |
+| `never` | Do not restart |
+
+---
+
+## Tool Descriptor Files (`*.tool.yaml`)
+
+Services place typed tool descriptors in `AVIX_ROOT/services/<name>/tools/`. The
+`ToolScanner` reads these at `ipc.register` time and populates the `ToolRegistry`.
+Implementation: `crates/avix-core/src/tool_registry/scanner.rs`.
+
+```yaml
+name:        github/list-prs
+description: List open pull requests for a repository.
+status:
+  state: available          # available | degraded | unavailable
+  reason: null
+ipc:
+  transport: local-ipc
+  endpoint:  github-svc
+  method:    github.list-prs
+streaming: false
+job:       false
+capabilities_required: [github:read]
+visibility: all             # all | {user: alice} | {crew: engineering}
+input:
+  repo: { type: string, required: true }
+output:
+  prs: { type: array }
+```
+
+`ToolVisibilitySpec` controls which users see the tool in their tool list:
+- `all` — visible to every user
+- `{user: alice}` — visible only to user `alice`
+- `{crew: engineering}` — visible only to members of crew `engineering`
+
+---
+
+## IPC Wire Protocol
+
+### `ipc.register` (service → kernel at startup)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "method": "ipc.register",
+  "params": {
+    "_token":   "svc-token-<uuid>",
+    "name":     "github-svc",
+    "endpoint": "/run/avix/services/github-svc-42.sock",
+    "tools":    []
+  }
+}
+```
+
+On success, the kernel:
+1. Validates the token against the `ServiceManager` token map
+2. Records the endpoint in `ServiceRegistry`
+3. Scans `AVIX_ROOT/services/<name>/tools/*.tool.yaml`
+4. Registers all discovered `ToolEntry` records in `ToolRegistry`
+5. Stamps `registered_at` on the `ServiceRecord`
+
+### `ipc.tool-add` (service → kernel, runtime update)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "2",
+  "method": "ipc.tool-add",
+  "params": {
+    "_token": "svc-token-<uuid>",
+    "tools": [
+      {
+        "name":       "github/list-prs",
+        "descriptor": { "description": "List open PRs", "streaming": false },
+        "visibility": "all"
+      }
+    ]
+  }
+}
+```
+
+Typed by `IpcToolAddParams` / `IpcToolSpec` in `service/lifecycle.rs`.
+
+### `ipc.tool-remove` (service → kernel, runtime update)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "3",
+  "method": "ipc.tool-remove",
+  "params": {
+    "_token": "svc-token-<uuid>",
+    "tools":  ["github/list-prs"],
+    "reason": "GitHub API unreachable",
+    "drain":  true
+  }
+}
+```
+
+Typed by `IpcToolRemoveParams` in `service/lifecycle.rs`.
+
+`drain: true` marks all named tools `Unavailable`, waits for all in-flight
+`ToolCallGuard` permits to drain, then removes. `drain: false` removes immediately.
+
+The kernel pushes a `tool.changed` ATP event to all subscribed clients when tools change.
 
 ---
 
 ## Multi-User Security — `_caller` Injection
 
-When multiple users call the same service, the router injects `_caller` into every tool call:
+When multiple users call the same service, the router injects a `_caller` object into
+every tool call's params. Implementation: `crates/avix-core/src/router/caller.rs`,
+`router/dispatcher.rs`, `router/registry.rs`.
+
+### How it works
+
+1. `service.unit` declares `caller_scoped = true` under `[capabilities]`
+2. At spawn, `ServiceManager` records `caller_scoped: true` on the `ServiceRecord`
+3. When the router dispatches a call, it checks
+   `ServiceRegistry::is_caller_scoped(svc_name)` — set via `register_with_meta()`
+4. If scoped, `CallerInfo::inject_into(&mut request.params)` adds `_caller`
 
 ```json
 {
@@ -81,207 +255,267 @@ When multiple users call the same service, the router injects `_caller` into eve
   "params": {
     "repo": "org/myrepo",
     "_caller": {
-      "pid": 57,
-      "user": "alice",
+      "pid":   57,
+      "user":  "alice",
       "token": "eyJ..."
     }
   }
 }
 ```
 
-Services that serve multiple users declare `caller_scoped: true` in `service.unit` and use
-`_caller.user` to scope per-user behavior (e.g., resolve the correct credential from
-`/secrets/alice/`).
+Services use `_caller.user` to scope per-user behaviour (e.g., resolve the correct
+credential from `/secrets/user/<user>/`).
 
-**The kernel enforces tool ACLs before the call reaches the service** — unauthorized calls
-never arrive. Services can trust `_caller` as authoritative.
+**The kernel enforces tool ACLs before the call reaches the service** — unauthorized
+calls never arrive. Services can trust `_caller` as authoritative.
 
----
+### Key types
 
-## Tool Namespace — /tools/
-
-`/tools/` contains only `.tool.yaml` descriptor files. No executable code lives here.
-The in-memory registry (held by `tool-registry.svc`) reflects currently available state.
-
-### Tool Descriptor Format
-
-```yaml
-name:        read
-path:        /tools/fs/read
-owner:       memfs.svc
-description: Read file contents from the active storage backend.
-status:
-  state: available           # available | degraded | unavailable
-  reason: null
-ipc:
-  transport: local-ipc
-  endpoint:  memfs
-  method:    fs.read
-streaming:   false
-job:         false
-capabilities_required: [fs:read]
-input:
-  path: { type: string, required: true }
-output:
-  content: { type: string }
-```
-
----
-
-## Dynamic Tool Add/Remove
-
-A service can add or remove tools at runtime (API availability, auth state, feature flags):
-
-```json
-// Add tools
-{ "jsonrpc": "2.0", "method": "ipc.tool-add",
-  "params": {
-    "_token": "<svc_token>",
-    "tools": [{ "name": "github/list-prs", "descriptor": {...}, "visibility": "all" }]
-  }
-}
-
-// Remove tools
-{ "jsonrpc": "2.0", "method": "ipc.tool-remove",
-  "params": {
-    "_token": "<svc_token>",
-    "tools": ["github/list-prs"],
-    "reason": "API unreachable",
-    "drain": true
-  }
+```rust
+// crates/avix-core/src/router/caller.rs
+pub struct CallerInfo {
+    pub pid:   u64,
+    pub user:  String,
+    pub token: String,
 }
 ```
 
-`drain: true` waits for in-flight calls to complete before removing.
-
-The kernel pushes a `tool.changed` ATP event to all subscribed clients when tools change.
-
-**Tool states:** `available` | `degraded` | `unavailable`
-
-**Category 2 tools** (`agent/`, `pipe/`, `cap/`, `job/`) are registered by `RuntimeExecutor`
-at agent spawn via `ipc.tool-add` and deregistered at exit via `ipc.tool-remove`. They are
-**never hard-coded** in any service's tool list.
-
----
-
----
-
-## scheduler.svc — Crontab Runner
-
-`scheduler.svc` loads `/etc/avix/crontab.yaml` at startup and monitors it for changes.
-When a job fires it spawns the configured agent and pushes a `cron.fired` ATP event.
-
-### `/etc/avix/crontab.yaml` Schema
-
-```yaml
-apiVersion: avix/v1
-kind: CrontabFile
-spec:
-  timezone: UTC                # default timezone for all jobs
-  jobs:
-    - id: daily-report
-      schedule: "0 8 * * *"   # standard 5-field cron expression
-      user: alice
-      agentTemplate: reporter  # agent name in /bin/ or /users/<user>/bin/
-      goal: "Generate daily analytics report"
-      args: {}                 # passed to agent at spawn
-      timeout: 3600            # seconds; 0 = no timeout
-      timezone: America/New_York  # per-job override
-      onFailure: alert         # ignore | alert | retry
-      retryPolicy:
-        maxAttempts: 3
-        backoffSec: 60
+```rust
+// crates/avix-core/src/router/registry.rs
+impl ServiceRegistry {
+    pub async fn register_with_meta(&self, name: &str, endpoint: &str, caller_scoped: bool);
+    pub async fn is_caller_scoped(&self, name: &str) -> bool;
+}
 ```
 
-The `cron.fired` ATP event (owner-scoped, min role `user`) is pushed to the owning
-user's sessions when a job triggers.
-
 ---
 
-## Service Installation
+## Service Installation (`ServiceInstaller`)
 
-### Via ATP Command
+Implementation: `crates/avix-core/src/service/installer.rs`.
+
+### 7-Step Installation Pipeline
+
+1. **Fetch** — `file://` path copy or `https://` URL download via `reqwest`
+2. **Verify checksum** — SHA-256, format `"sha256:<hex>"`; error on mismatch
+3. **Extract tarball** — strips top-level directory; sets `0o755` on `bin/` entries (Unix)
+4. **Validate manifest** — errors if no `service.unit` found in the tarball
+5. **Conflict check** — errors if `AVIX_ROOT/services/<name>/` already exists
+6. **Copy to install dir** — walks extracted tree with `walkdir`, copies all files
+7. **Write receipt** — writes `.install.json` (`InstallReceipt`) with name, version,
+   install timestamp, source URL, and tool list
+
+### ATP Command
 
 ```json
 {
   "type": "cmd", "domain": "sys", "op": "install",
   "body": {
-    "type": "service",
-    "source": "https://pkg.avix.dev/github-svc-1.2.0.tar.gz",
-    "checksum": "sha256:abc123..."
+    "source":    "https://pkg.avix.dev/github-svc-1.2.0.tar.gz",
+    "checksum":  "sha256:abc123...",
+    "autostart": true
   }
 }
 ```
 
-Installation flow:
-
-1. Download and verify checksum
-2. Verify package signature
-3. Conflict check (name, tool paths, ports)
-4. Extract to `AVIX_ROOT/services/<name>/`
-5. Write `service.unit`
-6. Write `.install.json` receipt
-7. Spawn process with env vars
-8. `kernel/ipc/register`
-9. `tool-registry.svc` rescan
-10. Return `{ pid, tools[], status }`
+Requires `auth:admin` capability. Implemented in `syscall/domain/sys_.rs`.
 
 ---
 
-## service.unit Format
+## Service CLI Commands
 
-```yaml
-[service]
-name:           github-svc
-version:        1.2.0
-description:    GitHub integration service
-author:         github.com/example/github-svc
+```bash
+# Install from local package or URL
+avix service install <path-or-url> [--checksum sha256:…] [--no-start]
 
-[exec]
-command:        /services/github-svc/bin/github-svc
-env:
-  GITHUB_TOKEN_PATH: /secrets/{caller}/github-token.enc
+# List all installed services (offline — reads service.unit files from disk)
+avix service list [--root ~/avix-data]
 
-[tools]
-namespace:      github
-manifest:       /services/github-svc/tools/
+# Show service status from /proc/services/<name>/status.yaml
+avix service status <name> [--root ~/avix-data]
 
-[limits]
-max_concurrent: 20
-queue_max:      100
-queue_timeout:  5s
+# Lifecycle control (sends signals via ATP)
+avix service start   <name>
+avix service stop    <name>
+avix service restart <name>
 
-[deps]
-after:          auth.svc, memfs.svc
-requires:       auth.svc
+# Remove service from disk (--force kills first)
+avix service uninstall <name> [--force] [--root ~/avix-data]
 
-[meta]
-caller_scoped:  true
+# Stream logs
+avix service logs <name> [--follow]
 ```
 
 ---
 
-## Kernel Syscalls for Services
+## Restart Watchdog (`ServiceWatchdog`)
 
-Services interact with the kernel via `kernel/ipc/` syscalls:
+Implementation: `crates/avix-core/src/service/watchdog.rs`.
 
-| Syscall | Description |
-|---------|-------------|
-| `kernel/ipc/register` | Register service at startup |
-| `kernel/ipc/deregister` | Unregister on shutdown |
-| `kernel/ipc/lookup` | Find another service's endpoint |
-| `kernel/ipc/tool-add` | Add tools dynamically |
-| `kernel/ipc/tool-remove` | Remove tools dynamically |
+The watchdog is a background Tokio task that monitors registered service processes and
+restarts them according to their `RestartPolicy`.
+
+```rust
+pub struct ServiceWatchdog {
+    entries: Arc<RwLock<HashMap<String, WatchdogEntry>>>,
+    _handle: JoinHandle<()>,
+}
+
+pub struct WatchdogEntry {
+    pub unit:          ServiceUnit,
+    pub process:       ServiceProcess,
+    pub restart_count: u32,
+}
+```
+
+### Restart Loop (5-second poll)
+
+For each registered service:
+
+1. Check `process.is_running()` — skip if still alive
+2. Apply `RestartPolicy`:
+   - `Always` / `OnFailure` → restart after `restart_delay`
+   - `Never` → skip
+3. Call `ServiceManager::respawn_token(name)` — issues a fresh `ServiceToken` with new PID
+4. Call `ServiceProcess::spawn(&unit, &token, ...)` — re-forks the binary
+5. Increment `entry.restart_count`
+
+`restart_count` is available via `watchdog.restart_count("svc-name").await`.
+
+---
+
+## Service Secrets (`SecretStore` + `kernel/secret/get`)
+
+### On-Disk Storage
+
+Secrets are stored encrypted at:
+
+```
+AVIX_ROOT/secrets/<owner-type>/<owner-name>/<secret-name>.enc
+```
+
+Examples:
+```
+secrets/service/github-svc/app-key.enc
+secrets/user/alice/gh-token.enc
+```
+
+Each `.enc` file contains **hex-encoded** AES-256-GCM ciphertext (12-byte nonce
+prepended). The file is never valid plaintext.
+
+Implementation: `crates/avix-core/src/secrets/store.rs` (`SecretStore` struct).
+
+```rust
+pub struct SecretStore {
+    root:       PathBuf,
+    master_key: [u8; 32],   // derived from AVIX_MASTER_KEY
+}
+
+impl SecretStore {
+    pub fn new(root: &Path, key: &[u8]) -> Self;
+    pub fn set(&self, owner: &str, name: &str, value: &str) -> Result<(), SecretsError>;
+    pub fn get(&self, owner: &str, name: &str)              -> Result<String, SecretsError>;
+    pub fn delete(&self, owner: &str, name: &str)           -> Result<(), SecretsError>;
+    pub fn list(&self, owner: &str)                         -> Vec<String>;
+}
+```
+
+Owner format: `"service:<name>"` or `"user:<name>"`.
+
+### `kernel/secret/get` Syscall
+
+```json
+{
+  "method": "kernel/secret/get",
+  "params": { "owner": "service:github-svc", "name": "app-key" }
+}
+```
+
+Permission rules:
+- Caller must have `kernel/secret/get` in granted tools
+- `service:*` owners: caller's `issued_to.agent_name` must match, **or** caller has `auth:admin`
+- `user:*` owners: any authorised caller may read
+
+### Secrets CLI Commands
+
+```bash
+# All require AVIX_MASTER_KEY in env (direct filesystem operation, no ATP needed)
+avix secret set <name> <value> --for-service <svc>  [--root ~/avix-data]
+avix secret set <name> <value> --for-user    <user> [--root ~/avix-data]
+avix secret list  --for-service <svc>
+avix secret list  --for-user    <user>
+avix secret delete <name> --for-service <svc>
+```
+
+---
+
+## Service Status File
+
+The kernel writes `/proc/services/<name>/status.yaml` at service spawn:
+
+```yaml
+name:          github-svc
+version:       1.2.0
+pid:           42
+state:         Running    # Starting | Running | Degraded | Stopping | Stopped | Failed
+endpoint:      /run/avix/services/github-svc-42.sock
+tools:         [github/list-prs, github/create-pr]
+restart_count: 0
+```
+
+---
+
+## Dynamic Tool States
+
+| State | Meaning |
+|-------|---------|
+| `Available` | Tool is healthy and callable |
+| `Degraded` | Tool is operational but degraded (e.g., rate-limited) |
+| `Unavailable` | Tool is not callable; dispatcher returns `EUNAVAIL (-32005)` |
+
+`Unavailable` is set during `drain: true` removal while in-flight calls complete.
+
+---
+
+## RouterDispatcher — 8-Step Dispatch Flow
+
+Implementation: `crates/avix-core/src/router/dispatcher.rs`.
+
+| Step | Action | Error on failure |
+|------|--------|-----------------|
+| 1 | Look up tool in `ToolRegistry` | `ENOTFOUND (-32601)` |
+| 2 | Reject if `ToolState::Unavailable` | `EUNAVAIL (-32005)` |
+| 3 | Check caller capability | `EPERM (-32002)` |
+| 4 | Acquire `ToolCallGuard` | `EUNAVAIL (-32005)` |
+| 5 | Acquire global concurrency slot | `EBUSY (-32008)` |
+| 6 | Resolve owning service → endpoint | `EUNAVAIL (-32005)` |
+| 7 | Inject `_caller` if `caller_scoped` | — |
+| 8 | Forward via `IpcClient::call()` | `ETIMEOUT (-32007)` |
 
 ---
 
 ## Filesystem Ownership for Services
 
-| Path | Owner | Agent writable? |
-|------|-------|:--------------:|
-| `/services/<name>/workspace/` | Service | Yes |
-| `/services/<name>/bin/` | System (installer) | No |
-| `/proc/services/<name>/status.yaml` | Kernel | No |
+| Path | Owner | Writable by service? |
+|------|-------|:-------------------:|
+| `AVIX_ROOT/services/<name>/` | Installer / kernel | No |
+| `AVIX_ROOT/services/<name>/workspace/` | Service | Yes |
+| `AVIX_ROOT/proc/services/<name>/status.yaml` | Kernel | No |
+| `AVIX_ROOT/secrets/service/<name>/` | Admin CLI / kernel | No (kernel-injected) |
 
-Services write their own workspace. Kernel writes the status file. Neither writes into
-the other's tree.
+---
+
+## Kernel Syscalls Relevant to Services
+
+| Syscall | Description |
+|---------|-------------|
+| `sys/install` | Install a service package from URL or local path (`auth:admin` required) |
+| `kernel/secret/get` | Retrieve an encrypted secret (service or user owner) |
+
+IPC-layer methods (called by the service binary directly, not through the syscall table):
+
+| Method | Description |
+|--------|-------------|
+| `ipc.register` | Register at startup — validates token, scans tool descriptors |
+| `ipc.tool-add` | Add or update tools dynamically at runtime |
+| `ipc.tool-remove` | Remove tools, optionally draining in-flight calls |

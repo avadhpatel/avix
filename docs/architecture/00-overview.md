@@ -121,7 +121,7 @@ These are hard rules. Violating any of them is a bug.
 | 04-atp.md | Avix Terminal Protocol over WebSocket |
 | 05-capabilities.md | CapabilityToken, HIL, role hierarchy, session model |
 | 06-agents.md | RuntimeExecutor, spawn, turn loop, proc file writes |
-| 07-services.md | Service lifecycle, built-in services, tool registration |
+| 07-services.md | Service lifecycle, `service.unit` TOML, installation pipeline, `_caller` injection, restart watchdog, secrets |
 | 08-llm-service.md | llm.svc multi-modality, provider routing |
 | 09-runtime-executor-tools.md | Tool categories, 7-step turn loop, HIL scenarios |
 

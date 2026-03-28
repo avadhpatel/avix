@@ -29,6 +29,7 @@ deterministic software. The capability token system is the trust boundary.
 **Authoritative references** (read these before implementing any subsystem):
 
 - `docs/architecture/` — all architecture docs (00–09)
+- `docs/architecture/07-services.md` — service lifecycle, `service.unit` TOML, installation, `_caller` injection, watchdog, secrets
 - `docs/architecture/08-llm-service.md` — llm.svc multi-modality spec
 - `docs/architecture/09-runtime-executor-tools.md` — RuntimeExecutor tool exposure model
 
@@ -282,6 +283,9 @@ a running system is `avix config init` → `avix start`.
 | Holding `AVIX_MASTER_KEY` after Phase 2 | Zero the env var immediately after reading |
 | Registering Category 2 tools in a service | Register them in `RuntimeExecutor` at spawn |
 | Calling LLM from kernel code | Kernel calls are deterministic; LLM is stateless |
+| Writing `service.unit` as YAML | `service.unit` uses **TOML** format — see `docs/architecture/07-services.md` |
+| Constructing `ServiceSpawnRequest { name, binary }` literals | Use `ServiceSpawnRequest::simple(name, binary)` or `ServiceSpawnRequest::from_unit(&unit)` |
+| Injecting `_caller` unconditionally | Only inject when `ServiceRegistry::is_caller_scoped(svc)` returns true |
 
 ---
 
@@ -338,3 +342,19 @@ docs/dev_plans/
 
 Files in `docs/dev_plans/` are considered temporary working documents and may be removed
 once the work is complete and incorporated into `docs/architecture/`.
+
+### Completed Plan Sets
+
+**svc-gaps A–H** (service authoring) — fully implemented and incorporated into
+`docs/architecture/07-services.md`. Plan files can be removed.
+
+| Gap | What was built |
+|-----|---------------|
+| svc-gap-A | `ServiceUnit` TOML parser, `InstallReceipt`, `parse_duration` |
+| svc-gap-B | `ServiceProcess` spawn + env injection, `ServiceStatus`, `discover_installed` |
+| svc-gap-C | `ToolDescriptor`, `ToolScanner`, wire into `handle_ipc_register` |
+| svc-gap-D | `ServiceInstaller` 7-step pipeline, `sys/install` syscall handler |
+| svc-gap-E | `avix service install/list/status/start/stop/restart/uninstall/logs` CLI |
+| svc-gap-F | `ipc.tool-add` / `ipc.tool-remove` typed wire params + `drain` semantics |
+| svc-gap-G | `CallerInfo`, `caller_scoped` in `ServiceRecord` + `ServiceRegistry`, dispatcher injection |
+| svc-gap-H | `ServiceWatchdog`, `SecretStore` (disk-backed), `kernel/secret/get`, `avix secret` CLI |

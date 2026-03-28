@@ -219,6 +219,39 @@ Supported providers: Anthropic, OpenAI, Ollama, Stability AI, ElevenLabs.
 
 All share `avix-client-core` ATP lib.
 
+### Service Management
+
+```bash
+# Install a service from a local package or URL
+avix service install ./github-svc-1.2.0.tar.gz --checksum sha256:abc123
+avix service install https://pkg.avix.dev/github-svc-1.2.0.tar.gz
+
+# Manage running services
+avix service list                         # offline — reads service.unit files
+avix service status github-svc            # reads /proc/services/<name>/status.yaml
+avix service start   github-svc
+avix service stop    github-svc
+avix service restart github-svc
+avix service uninstall github-svc [--force]
+```
+
+### Secret Management
+
+Secrets are stored as AES-256-GCM encrypted blobs in `AVIX_ROOT/secrets/`. Admin
+operations require `AVIX_MASTER_KEY` in the environment.
+
+```bash
+export AVIX_MASTER_KEY=<your-32-byte-key>
+
+# Per-service secrets (used by the service via kernel/secret/get)
+avix secret set github-app-key ghp_abc123 --for-service github-svc
+avix secret list --for-service github-svc
+
+# Per-user secrets
+avix secret set gh-token tok-xyz --for-user alice
+avix secret delete gh-token --for-user alice
+```
+
 ## Repository Layout (Workspace Structure)
 
 ```
