@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use avix_core::llm_client::{LlmClient, LlmCompleteRequest, LlmCompleteResponse, StopReason};
 use serde_json::json;
+use uuid::Uuid;
 
 struct MockLlmClient {
     response: LlmCompleteResponse,
@@ -29,6 +30,7 @@ async fn llm_client_complete_returns_response() {
         tools: vec![],
         system: None,
         max_tokens: 1000,
+        turn_id: Uuid::nil(),
     };
     let resp = client.complete(req).await.unwrap();
     assert_eq!(resp.stop_reason, StopReason::EndTurn);
@@ -64,6 +66,7 @@ fn llm_complete_request_serialises() {
         tools: vec![json!({"name": "fs__read"})],
         system: Some("You are a researcher.".into()),
         max_tokens: 2000,
+        turn_id: Uuid::nil(),
     };
     let v = serde_json::to_value(&req).unwrap();
     assert_eq!(v["model"], "claude-opus-4");

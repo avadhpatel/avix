@@ -4,6 +4,7 @@ use super::{
     AvixTranscribeRequest, AvixTranscribeResponse, EmbedInput, EmbedUsage, ImageOutput,
     MultipartRequest, ProviderAdapter, SpeechEndpoint, TranscribeSegment, UsageSummary,
 };
+use crate::llm_client::{StopReason, StreamChunk};
 use crate::types::{tool::ToolName, Modality};
 use base64::Engine as _;
 use serde_json::{json, Value};
@@ -329,6 +330,90 @@ impl ProviderAdapter for OpenAiAdapter {
             dimensions,
             usage: EmbedUsage { input_tokens },
         })
+    }
+
+    // ── Streaming (OpenAI Chat Completions SSE) ──────────────────────────────
+
+    /// Parse one OpenAI Chat Completions SSE `data:` line.
+    ///
+    /// Wire format of each chunk:
+    /// ```json
+    /// {"id":"…","choices":[{"delta":{"content":"…"},"finish_reason":null}]}
+    /// {"id":"…","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x","type":"function","function":{"name":"fs__read","arguments":""}}]},"finish_reason":null}]}
+    /// {"id":"…","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}
+    /// ```
+    fn parse_stream_event(
+        &self,
+        _event_name: Option<&str>,
+        data: &str,
+    ) -> Result<Option<StreamChunk>, AdapterError> {
+        let v: Value =
+            serde_json::from_str(data).map_err(|e| AdapterError::ParseError(e.to_string()))?;
+
+        let choice = match v["choices"].as_array().and_then(|a| a.first()) {
+            Some(c) => c,
+            None => return Ok(None),
+        };
+
+        let delta = &choice["delta"];
+
+        // Text content delta
+        if let Some(text) = delta["content"].as_str() {
+            if !text.is_empty() {
+                return Ok(Some(StreamChunk::TextDelta {
+                    text: text.to_string(),
+                }));
+            }
+        }
+
+        // Tool call deltas
+        if let Some(tool_calls) = delta["tool_calls"].as_array() {
+            for tc in tool_calls {
+                let index = tc["index"].as_u64().unwrap_or(0).to_string();
+
+                // New tool call starting (has id + name)
+                if let Some(id) = tc["id"].as_str() {
+                    let mangled = tc["function"]["name"].as_str().unwrap_or("");
+                    let name = ToolName::unmangle(mangled)
+                        .map(|tn| tn.as_str().to_string())
+                        .unwrap_or_else(|_| mangled.replace("__", "/"));
+                    return Ok(Some(StreamChunk::ToolCallStart {
+                        call_id: id.to_string(),
+                        name,
+                    }));
+                }
+
+                // Argument fragment
+                if let Some(args_delta) = tc["function"]["arguments"].as_str() {
+                    if !args_delta.is_empty() {
+                        return Ok(Some(StreamChunk::ToolCallArgsDelta {
+                            call_id: index,
+                            args_delta: args_delta.to_string(),
+                        }));
+                    }
+                }
+            }
+        }
+
+        // Finish reason → Done
+        let finish_reason = choice["finish_reason"].as_str().unwrap_or("");
+        if !finish_reason.is_empty() && finish_reason != "null" {
+            let stop_reason = match finish_reason {
+                "tool_calls" => StopReason::ToolUse,
+                "length" => StopReason::MaxTokens,
+                "stop_sequence" => StopReason::StopSequence,
+                _ => StopReason::EndTurn,
+            };
+            let input_tokens = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+            let output_tokens = v["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
+            return Ok(Some(StreamChunk::Done {
+                stop_reason,
+                input_tokens,
+                output_tokens,
+            }));
+        }
+
+        Ok(None)
     }
 }
 

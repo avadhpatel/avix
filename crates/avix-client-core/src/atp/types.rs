@@ -99,6 +99,9 @@ pub enum EventKind {
     SysService,
     #[serde(rename = "sys.alert")]
     SysAlert,
+    /// Incremental token delta from a streaming LLM turn.
+    #[serde(rename = "agent.output.chunk")]
+    AgentOutputChunk,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +109,7 @@ pub enum EventKind {
 pub enum EventBody {
     SessionReady(SessionReadyBody),
     AgentOutput(AgentOutputBody),
+    AgentOutputChunk(AgentOutputChunkBody),
     AgentStatus(AgentStatusBody),
     AgentExit(AgentExitBody),
     HilRequest(HilRequestBody),
@@ -133,6 +137,18 @@ pub struct SessionReadyBody {
 pub struct AgentOutputBody {
     pub pid: u64,
     pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentOutputChunkBody {
+    pub pid: u64,
+    /// UUID correlating all chunks from one LLM turn.
+    pub turn_id: String,
+    pub text_delta: String,
+    /// Monotonically increasing per turn for ordering / dedup.
+    pub seq: u64,
+    /// True on the last chunk of a turn.
+    pub is_final: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

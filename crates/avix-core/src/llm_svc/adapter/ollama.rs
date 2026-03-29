@@ -5,6 +5,7 @@ use super::{
     AvixTranscribeRequest, AvixTranscribeResponse, ImageOutput, MultipartRequest, ProviderAdapter,
     SpeechEndpoint,
 };
+use crate::llm_client::StreamChunk;
 use crate::types::Modality;
 use serde_json::Value;
 
@@ -94,6 +95,14 @@ impl ProviderAdapter for OllamaAdapter {
         _raw: Value,
     ) -> Result<AvixTranscribeResponse, AdapterError> {
         Err(AdapterError::UnsupportedModality(Modality::Transcription))
+    }
+
+    fn parse_stream_event(
+        &self,
+        event_name: Option<&str>,
+        data: &str,
+    ) -> Result<Option<StreamChunk>, AdapterError> {
+        self.inner.parse_stream_event(event_name, data)
     }
 }
 

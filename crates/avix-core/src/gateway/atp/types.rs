@@ -62,6 +62,9 @@ pub enum AtpEventKind {
     SysService,
     #[serde(rename = "sys.alert")]
     SysAlert,
+    /// Incremental token delta emitted during a streaming LLM turn.
+    #[serde(rename = "agent.output.chunk")]
+    AgentOutputChunk,
 }
 
 #[cfg(test)]

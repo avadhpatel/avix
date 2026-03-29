@@ -7,6 +7,7 @@ pub mod ipc_server;
 pub mod oauth2_refresh;
 pub mod routing;
 pub mod service;
+pub mod sse;
 pub mod usage;
 
 pub use http_client::DirectHttpLlmClient;

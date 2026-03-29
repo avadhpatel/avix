@@ -228,6 +228,7 @@ mod tests {
             tools: vec![],
             system: None,
             max_tokens: 256,
+            turn_id: uuid::Uuid::nil(),
         };
 
         let resp = client.complete(req).await.unwrap();
@@ -252,6 +253,7 @@ mod tests {
             tools: vec![],
             system: Some("You are a helpful assistant.".to_string()),
             max_tokens: 256,
+            turn_id: uuid::Uuid::nil(),
         };
 
         let resp = client.complete(req).await.unwrap();
@@ -273,6 +275,7 @@ mod tests {
             })],
             system: None,
             max_tokens: 256,
+            turn_id: uuid::Uuid::nil(),
         };
 
         let resp = client.complete(req).await.unwrap();
@@ -306,6 +309,7 @@ mod tests {
             tools: vec![],
             system: None,
             max_tokens: 256,
+            turn_id: uuid::Uuid::nil(),
         };
 
         let resp = client.complete(req).await.unwrap();
@@ -351,6 +355,7 @@ mod tests {
             tools: vec![],
             system: None,
             max_tokens: 16,
+            turn_id: uuid::Uuid::nil(),
         };
         let resp = client.complete(req).await.unwrap();
         assert_eq!(resp.input_tokens, 0);
@@ -381,6 +386,7 @@ mod tests {
             ],
             system: None,
             max_tokens: 256,
+            turn_id: uuid::Uuid::nil(),
         };
 
         let resp = client.complete(req).await.unwrap();
@@ -401,6 +407,7 @@ mod tests {
             tools: vec![],
             system: None,
             max_tokens: 256,
+            turn_id: uuid::Uuid::nil(),
         };
 
         let resp = client.complete(req).await.unwrap();

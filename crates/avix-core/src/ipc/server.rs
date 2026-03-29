@@ -3,6 +3,7 @@ use crate::ipc::{frame, message::IpcMessage, message::JsonRpcResponse};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::UnixListener;
 use tokio::sync::watch;
 
@@ -71,6 +72,47 @@ impl IpcServer {
     /// The socket path this server is bound to.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Start serving with a **bi-directional** handler.
+    ///
+    /// Unlike `serve()`, the handler receives the `OwnedWriteHalf` directly so
+    /// it can write any number of frames before returning.  This is used by
+    /// `LlmIpcServer` to stream `llm.stream.chunk` notifications followed by a
+    /// final `JsonRpcResponse` on the same connection — one logical call, one
+    /// connection (ADR-05 spirit preserved).
+    pub async fn serve_bidir<F, Fut>(mut self, handler: F) -> Result<(), AvixError>
+    where
+        F: Fn(IpcMessage, OwnedWriteHalf) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let handler = Arc::new(handler);
+        let mut join_set = tokio::task::JoinSet::new();
+
+        loop {
+            tokio::select! {
+                res = self.listener.accept() => {
+                    match res {
+                        Ok((conn, _)) => {
+                            let h = handler.clone();
+                            join_set.spawn(handle_connection_bidir(conn, h));
+                        }
+                        Err(e) => {
+                            tracing::warn!("IpcServer (bidir) accept error: {e}");
+                        }
+                    }
+                }
+                _ = self.shutdown_rx.changed() => {
+                    if *self.shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+            }
+            while join_set.try_join_next().is_some() {}
+        }
+
+        while join_set.join_next().await.is_some() {}
+        Ok(())
     }
 
     /// Start serving. Runs until the associated `IpcServerHandle::cancel` is called.
@@ -144,4 +186,31 @@ where
         }
     }
     // Connection drops here, closing both halves.
+}
+
+async fn handle_connection_bidir<F, Fut>(conn: tokio::net::UnixStream, handler: Arc<F>)
+where
+    F: Fn(IpcMessage, OwnedWriteHalf) -> Fut + Send + Sync,
+    Fut: Future<Output = ()> + Send,
+{
+    let (mut read_half, write_half) = conn.into_split();
+
+    let raw: serde_json::Value = match frame::read_from(&mut read_half).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("IpcServer: failed to read frame (bidir): {e}");
+            return;
+        }
+    };
+
+    let msg = match IpcMessage::from_value(raw) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!("IpcServer: failed to parse IPC message (bidir): {e}");
+            return;
+        }
+    };
+
+    handler(msg, write_half).await;
+    // Connection closes when write_half is dropped inside the handler.
 }

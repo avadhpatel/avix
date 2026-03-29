@@ -2,11 +2,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tracing::{info, warn};
+use futures::StreamExt;
+use tokio::net::unix::OwnedWriteHalf;
+use tracing::{debug, info, warn};
 
 use crate::config::LlmConfig;
 use crate::error::AvixError;
-use crate::ipc::message::{IpcMessage, JsonRpcResponse};
+use crate::ipc::frame;
+use crate::ipc::message::{IpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::ipc::{IpcServer, IpcServerHandle};
 use crate::llm_client::LlmClient;
 use crate::llm_svc::adapter::ProviderAdapter;
@@ -37,6 +40,10 @@ impl LlmIpcServer {
     /// Bind the socket, remove any stale file from a previous run, and start
     /// serving in a background task.  Returns an `IpcServerHandle` that can
     /// be dropped to shut the server down gracefully.
+    ///
+    /// Regular `llm/*` requests use request-response (ADR-05).
+    /// `llm/stream_complete` requests keep the connection open, writing
+    /// `llm.stream.chunk` notifications followed by a final response.
     pub async fn start(self) -> Result<IpcServerHandle, AvixError> {
         let (server, handle) = IpcServer::bind(self.sock_path.clone()).await?;
         info!(sock = %self.sock_path.display(), "llm IPC server bound");
@@ -44,9 +51,9 @@ impl LlmIpcServer {
         let svc = self.service;
         tokio::spawn(async move {
             if let Err(e) = server
-                .serve(move |msg| {
+                .serve_bidir(move |msg, write_half| {
                     let s = Arc::clone(&svc);
-                    async move { handle_message(msg, s).await }
+                    async move { handle_message_bidir(msg, s, write_half).await }
                 })
                 .await
             {
@@ -58,11 +65,91 @@ impl LlmIpcServer {
     }
 }
 
-async fn handle_message(msg: IpcMessage, svc: Arc<LlmService>) -> Option<JsonRpcResponse> {
+/// Bi-directional handler: routes to streaming or regular path based on method.
+async fn handle_message_bidir(
+    msg: IpcMessage,
+    svc: Arc<LlmService>,
+    mut write_half: OwnedWriteHalf,
+) {
     match msg {
-        IpcMessage::Request(req) => Some(svc.dispatch(&req).await),
-        IpcMessage::Notification(_) => None,
+        IpcMessage::Request(ref req) if req.method == "llm/stream_complete" => {
+            handle_stream_complete(req.clone(), svc, &mut write_half).await;
+        }
+        IpcMessage::Request(req) => {
+            let resp = svc.dispatch(&req).await;
+            if let Err(e) = frame::write_to(&mut write_half, &resp).await {
+                warn!(error = %e, "llm IPC: failed to write response");
+            }
+        }
+        IpcMessage::Notification(_) => {}
     }
+}
+
+/// Streaming handler: calls `LlmService::stream_complete`, writes chunk
+/// notifications on the open connection, then a final `JsonRpcResponse`.
+async fn handle_stream_complete(
+    req: JsonRpcRequest,
+    svc: Arc<LlmService>,
+    write_half: &mut OwnedWriteHalf,
+) {
+    let stream_result = svc.dispatch_stream(&req).await;
+    let mut stream = match stream_result {
+        Ok(s) => s,
+        Err(e) => {
+            let resp = JsonRpcResponse::err(&req.id, -32603, &e.to_string(), None);
+            let _ = frame::write_to(write_half, &resp).await;
+            return;
+        }
+    };
+
+    let mut input_tokens = 0u32;
+    let mut output_tokens = 0u32;
+    let mut stop_reason_str = "end_turn".to_string();
+
+    while let Some(chunk_result) = stream.next().await {
+        match chunk_result {
+            Ok(chunk) => {
+                use crate::llm_client::StreamChunk;
+                if let StreamChunk::Done {
+                    stop_reason,
+                    input_tokens: it,
+                    output_tokens: ot,
+                } = &chunk
+                {
+                    input_tokens = *it;
+                    output_tokens = *ot;
+                    stop_reason_str =
+                        serde_json::to_value(stop_reason).unwrap_or_default().as_str().unwrap_or("end_turn").to_string();
+                }
+
+                let notif = JsonRpcNotification::new(
+                    "llm.stream.chunk",
+                    serde_json::json!({ "stream_id": &req.id, "chunk": serde_json::to_value(&chunk).unwrap_or_default() }),
+                );
+                if let Err(e) = frame::write_to(write_half, &notif).await {
+                    debug!(error = %e, "llm stream: client disconnected mid-stream");
+                    return;
+                }
+            }
+            Err(e) => {
+                let resp = JsonRpcResponse::err(&req.id, -32603, &e.to_string(), None);
+                let _ = frame::write_to(write_half, &resp).await;
+                return;
+            }
+        }
+    }
+
+    // Final response summarises the completed stream.
+    let resp = JsonRpcResponse::ok(
+        &req.id,
+        serde_json::json!({
+            "done": true,
+            "stop_reason": stop_reason_str,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+        }),
+    );
+    let _ = frame::write_to(write_half, &resp).await;
 }
 
 #[cfg(test)]
@@ -169,16 +256,37 @@ spec:
     }
 
     #[tokio::test]
-    async fn notification_returns_none() {
+    async fn notification_is_silently_ignored() {
+        // Notifications are silently dropped — the bidir handler returns ()
+        // without writing any frame.  We verify this indirectly: send a
+        // notification to the running server and confirm the connection closes
+        // cleanly with no response frame.
+        let dir = TempDir::new().unwrap();
+        let sock = dir.path().join("llm_notif.sock");
         let config = make_minimal_config();
         let routing = Arc::new(RoutingEngine::from_config(&config));
-        let svc = Arc::new(LlmService::new(config, HashMap::new(), routing, HashMap::new()));
+        let _handle =
+            LlmIpcServer::new(sock.clone(), config, HashMap::new(), routing, HashMap::new())
+                .start()
+                .await
+                .unwrap();
 
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        use crate::ipc::frame;
+        let mut conn = tokio::net::UnixStream::connect(&sock).await.unwrap();
         let notif = IpcMessage::Notification(JsonRpcNotification::new(
             "llm/ping",
             serde_json::json!({}),
         ));
-        let result = handle_message(notif, svc).await;
-        assert!(result.is_none(), "notifications should return None");
+        frame::write_to(&mut conn, &notif).await.unwrap();
+
+        // Server should close the write side without sending a response.
+        // Reading should return an error or empty (connection closed).
+        let read_result: Result<serde_json::Value, _> = frame::read_from(&mut conn).await;
+        assert!(
+            read_result.is_err(),
+            "server should close connection after notification without a response"
+        );
     }
 }

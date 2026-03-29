@@ -40,6 +40,7 @@ pub fn event_scope(kind: &AtpEventKind) -> (Role, bool) {
         AtpEventKind::SysService => (Role::Admin, false),
         AtpEventKind::SysAlert => (Role::Operator, false),
         AtpEventKind::AgentSpawned => (Role::User, true),
+        AtpEventKind::AgentOutputChunk => (Role::User, true),
     }
 }
 
@@ -129,6 +130,31 @@ impl AtpEventBus {
             AtpEventKind::AgentOutput,
             session_id,
             serde_json::json!({ "pid": pid, "text": text }),
+        );
+        self.publish(ev, owner_scoped.then(|| session_id.to_string()), min_role);
+    }
+
+    /// Publish an incremental token delta from a streaming LLM turn.
+    pub fn agent_output_chunk(
+        &self,
+        session_id: &str,
+        pid: u32,
+        turn_id: &str,
+        text_delta: &str,
+        seq: u64,
+        is_final: bool,
+    ) {
+        let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentOutputChunk);
+        let ev = AtpEvent::new(
+            AtpEventKind::AgentOutputChunk,
+            session_id,
+            serde_json::json!({
+                "pid": pid,
+                "turn_id": turn_id,
+                "text_delta": text_delta,
+                "seq": seq,
+                "is_final": is_final,
+            }),
         );
         self.publish(ev, owner_scoped.then(|| session_id.to_string()), min_role);
     }

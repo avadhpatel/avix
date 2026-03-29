@@ -12,6 +12,7 @@ pub use openai::OpenAiAdapter;
 pub use stability::StabilityAdapter;
 pub use xai::XaiAdapter;
 
+use crate::llm_client::StreamChunk;
 use crate::types::Modality;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -209,6 +210,58 @@ pub trait ProviderAdapter: Send + Sync {
     ) -> Result<AvixCompleteResponse, AdapterError>;
     fn parse_tool_call(&self, raw: &serde_json::Value) -> Result<AvixToolCall, AdapterError>;
     fn format_tool_result(&self, result: &AvixToolResult) -> serde_json::Value;
+
+    // ── Streaming (llm/stream_complete) ─────────────────────────────────────
+
+    /// HTTP path for the non-streaming text completion endpoint.
+    ///
+    /// OpenAI-compatible providers use `/v1/chat/completions`.
+    /// Anthropic uses `/v1/messages`.
+    fn complete_path(&self) -> &str {
+        "/v1/chat/completions"
+    }
+
+    /// HTTP path for the **streaming** text completion endpoint.
+    ///
+    /// Defaults to the same path as `complete_path()`.
+    /// Override when the streaming and non-streaming endpoints differ
+    /// (e.g. OpenAI Responses API vs Chat Completions).
+    fn stream_complete_path(&self) -> &str {
+        self.complete_path()
+    }
+
+    /// Build the JSON request body for a **streaming** completion.
+    ///
+    /// Default: delegates to `build_complete_request()` and adds
+    /// `"stream": true`.  Override for providers whose streaming
+    /// endpoint accepts a different request shape.
+    fn build_stream_request(&self, req: &AvixCompleteRequest) -> serde_json::Value {
+        let mut body = self.build_complete_request(req);
+        body["stream"] = serde_json::json!(true);
+        body
+    }
+
+    /// Parse one SSE **data line** from a streaming completion response
+    /// into a `StreamChunk`.
+    ///
+    /// `event_name` is the value of the preceding `event:` line (if any).
+    /// `data` is the raw string after the `data: ` prefix.
+    ///
+    /// Returns:
+    /// - `Ok(Some(chunk))` — a chunk to yield downstream.
+    /// - `Ok(None)` — this data line should be skipped (e.g. a keepalive).
+    /// - `Err(_)` — unrecoverable parse error.
+    ///
+    /// Default implementation returns an error; providers that support
+    /// streaming must override this.
+    fn parse_stream_event(
+        &self,
+        event_name: Option<&str>,
+        data: &str,
+    ) -> Result<Option<StreamChunk>, AdapterError> {
+        let _ = (event_name, data);
+        Err(AdapterError::UnsupportedModality(Modality::Text))
+    }
 
     // ── Image (llm/generate-image) ───────────────────────────────────────────
 

@@ -2,6 +2,7 @@ use super::{
     AdapterError, AvixCompleteRequest, AvixCompleteResponse, AvixToolCall, AvixToolDescriptor,
     AvixToolResult, ProviderAdapter, UsageSummary,
 };
+use crate::llm_client::{StopReason, StreamChunk};
 use crate::types::{tool::ToolName, Modality};
 use serde_json::{json, Value};
 
@@ -114,6 +115,107 @@ impl ProviderAdapter for AnthropicAdapter {
         })
     }
 
+    fn complete_path(&self) -> &str {
+        "/v1/messages"
+    }
+
+    fn build_stream_request(&self, req: &AvixCompleteRequest) -> Value {
+        let mut body = self.build_complete_request(req);
+        body["stream"] = json!(true);
+        body
+    }
+
+    /// Parse one Anthropic Messages API SSE event into a `StreamChunk`.
+    ///
+    /// Anthropic SSE events have an explicit `event:` line followed by a
+    /// `data:` line containing JSON.  The relevant events are:
+    ///
+    /// | event                 | action                            |
+    /// |-----------------------|-----------------------------------|
+    /// | `content_block_start` | text block → nothing; tool_use → `ToolCallStart` |
+    /// | `content_block_delta` | `text_delta` → `TextDelta`; `input_json_delta` → `ToolCallArgsDelta` |
+    /// | `content_block_stop`  | tool block → `ToolCallComplete`   |
+    /// | `message_delta`       | `Done` with stop_reason + usage   |
+    /// | everything else       | skipped                           |
+    fn parse_stream_event(
+        &self,
+        event_name: Option<&str>,
+        data: &str,
+    ) -> Result<Option<StreamChunk>, AdapterError> {
+        let v: Value =
+            serde_json::from_str(data).map_err(|e| AdapterError::ParseError(e.to_string()))?;
+
+        match event_name {
+            Some("content_block_start") => {
+                let block = &v["content_block"];
+                if block["type"].as_str() == Some("tool_use") {
+                    let call_id = block["id"].as_str().unwrap_or("").to_string();
+                    let mangled = block["name"].as_str().unwrap_or("");
+                    let name = ToolName::unmangle(mangled)
+                        .map(|tn| tn.as_str().to_string())
+                        .unwrap_or_else(|_| mangled.replace("__", "/"));
+                    return Ok(Some(StreamChunk::ToolCallStart { call_id, name }));
+                }
+                Ok(None)
+            }
+            Some("content_block_delta") => {
+                let delta = &v["delta"];
+                match delta["type"].as_str() {
+                    Some("text_delta") => {
+                        let text = delta["text"].as_str().unwrap_or("").to_string();
+                        if text.is_empty() {
+                            Ok(None)
+                        } else {
+                            Ok(Some(StreamChunk::TextDelta { text }))
+                        }
+                    }
+                    Some("input_json_delta") => {
+                        // The index lets us identify which tool call this belongs to,
+                        // but Anthropic sends tool calls sequentially so we use the
+                        // index to look up the call_id (stored upstream).
+                        // We surface the delta with a sentinel call_id; the executor
+                        // resolves it by index.
+                        let index = v["index"].as_u64().unwrap_or(0).to_string();
+                        let args_delta =
+                            delta["partial_json"].as_str().unwrap_or("").to_string();
+                        if args_delta.is_empty() {
+                            Ok(None)
+                        } else {
+                            Ok(Some(StreamChunk::ToolCallArgsDelta {
+                                call_id: index,
+                                args_delta,
+                            }))
+                        }
+                    }
+                    _ => Ok(None),
+                }
+            }
+            Some("content_block_stop") => {
+                // Only meaningful for tool_use blocks.  We emit ToolCallComplete
+                // keyed by the block index; the executor resolves the call_id.
+                let index = v["index"].as_u64().unwrap_or(0).to_string();
+                Ok(Some(StreamChunk::ToolCallComplete { call_id: index }))
+            }
+            Some("message_delta") => {
+                let delta = &v["delta"];
+                let stop_reason = match delta["stop_reason"].as_str().unwrap_or("end_turn") {
+                    "tool_use" => StopReason::ToolUse,
+                    "max_tokens" => StopReason::MaxTokens,
+                    "stop_sequence" => StopReason::StopSequence,
+                    _ => StopReason::EndTurn,
+                };
+                let input_tokens = v["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32;
+                let output_tokens = v["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32;
+                Ok(Some(StreamChunk::Done {
+                    stop_reason,
+                    input_tokens,
+                    output_tokens,
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn format_tool_result(&self, result: &AvixToolResult) -> Value {
         let mut content_block = json!({
             "type": "tool_result",
@@ -135,6 +237,7 @@ impl ProviderAdapter for AnthropicAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm_client::StreamChunk;
     use serde_json::json;
 
     fn make_adapter() -> AnthropicAdapter {
@@ -271,5 +374,86 @@ mod tests {
         assert!(body.get("tools").is_none());
         // max_tokens defaults to 4096
         assert_eq!(body["max_tokens"], 4096);
+    }
+
+    #[test]
+    fn test_complete_path_is_messages() {
+        let adapter = make_adapter();
+        assert_eq!(adapter.complete_path(), "/v1/messages");
+        assert_eq!(adapter.stream_complete_path(), "/v1/messages");
+    }
+
+    #[test]
+    fn test_build_stream_request_adds_stream_true() {
+        let adapter = make_adapter();
+        let req = AvixCompleteRequest {
+            provider: None,
+            model: "claude-3-haiku-20240307".into(),
+            messages: vec![json!({"role": "user", "content": "hi"})],
+            system: None,
+            max_tokens: Some(256),
+            temperature: None,
+            stream: None,
+            stop_sequences: None,
+            tools: vec![],
+            metadata: make_metadata(),
+        };
+        let body = adapter.build_stream_request(&req);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["model"], "claude-3-haiku-20240307");
+    }
+
+    #[test]
+    fn test_parse_stream_event_text_delta() {
+        let adapter = make_adapter();
+        let data = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
+        let chunk = adapter
+            .parse_stream_event(Some("content_block_delta"), data)
+            .unwrap();
+        assert!(matches!(chunk, Some(StreamChunk::TextDelta { text }) if text == "Hello"));
+    }
+
+    #[test]
+    fn test_parse_stream_event_tool_call_start() {
+        let adapter = make_adapter();
+        let data = r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_abc","name":"fs__read","input":{}}}"#;
+        let chunk = adapter
+            .parse_stream_event(Some("content_block_start"), data)
+            .unwrap();
+        assert!(
+            matches!(&chunk, Some(StreamChunk::ToolCallStart { call_id, name }) if call_id == "toolu_abc" && name == "fs/read")
+        );
+    }
+
+    #[test]
+    fn test_parse_stream_event_tool_args_delta() {
+        let adapter = make_adapter();
+        let data = r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}"#;
+        let chunk = adapter
+            .parse_stream_event(Some("content_block_delta"), data)
+            .unwrap();
+        assert!(
+            matches!(&chunk, Some(StreamChunk::ToolCallArgsDelta { call_id, args_delta }) if call_id == "1" && args_delta.contains("path"))
+        );
+    }
+
+    #[test]
+    fn test_parse_stream_event_done() {
+        let adapter = make_adapter();
+        let data = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42}}"#;
+        let chunk = adapter
+            .parse_stream_event(Some("message_delta"), data)
+            .unwrap();
+        assert!(
+            matches!(chunk, Some(StreamChunk::Done { stop_reason, output_tokens, .. }) if stop_reason == StopReason::EndTurn && output_tokens == 42)
+        );
+    }
+
+    #[test]
+    fn test_parse_stream_event_unknown_event_returns_none() {
+        let adapter = make_adapter();
+        let data = r#"{"type":"ping"}"#;
+        let chunk = adapter.parse_stream_event(Some("ping"), data).unwrap();
+        assert!(chunk.is_none());
     }
 }

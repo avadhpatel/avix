@@ -42,7 +42,7 @@ cron               = { version = "0.12" }
 tokio-tungstenite  = { version = "0.24", features = ["native-tls"] }
 clap               = { version = "4", features = ["derive"] }
 autoagents         = { version = "0.3.6" }
-reqwest            = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+reqwest            = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
 axum               = { version = "0.7", features = ["ws"] }
 tower              = { version = "0.4" }
 tracing-appender   = { version = "0.2" }

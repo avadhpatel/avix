@@ -3,6 +3,7 @@ use super::{
     AdapterError, AvixCompleteRequest, AvixCompleteResponse, AvixToolCall, AvixToolDescriptor,
     AvixToolResult, ProviderAdapter,
 };
+use crate::llm_client::StreamChunk;
 use crate::types::Modality;
 use serde_json::Value;
 
@@ -58,6 +59,14 @@ impl ProviderAdapter for XaiAdapter {
 
     fn format_tool_result(&self, result: &AvixToolResult) -> Value {
         self.inner.format_tool_result(result)
+    }
+
+    fn parse_stream_event(
+        &self,
+        event_name: Option<&str>,
+        data: &str,
+    ) -> Result<Option<StreamChunk>, AdapterError> {
+        self.inner.parse_stream_event(event_name, data)
     }
 }
 

@@ -7,10 +7,11 @@ use tokio::sync::Mutex;
 
 use crate::error::AvixError;
 use crate::gateway::event_bus::AtpEventBus;
+use crate::llm_client::StreamChunk;
 use crate::kernel::resource_request::{
     KernelResourceHandler, ResourceGrant, ResourceItem, ResourceRequest, Urgency,
 };
-use crate::llm_client::LlmCompleteResponse;
+use crate::llm_client::{LlmCompleteResponse, StopReason};
 use crate::llm_svc::adapter::AvixToolCall;
 use crate::memfs::{VfsPath, VfsRouter};
 use crate::memory_svc::{
@@ -1295,6 +1296,115 @@ impl RuntimeExecutor {
         tracing::info!(pid = ?self.pid, "token renewed (mock)");
     }
 
+    /// Execute a single LLM turn, preferring streaming when the client supports it.
+    ///
+    /// On each `TextDelta` chunk an `agent.output.chunk` ATP event is emitted so
+    /// connected TUI/CLI clients see tokens as they arrive.  A synthetic
+    /// `LlmCompleteResponse` is built from the accumulated stream data so the
+    /// existing `interpret_stop_reason` logic can work unchanged.
+    async fn run_turn_streaming(
+        &self,
+        req: crate::llm_client::LlmCompleteRequest,
+        client: &dyn crate::llm_client::LlmClient,
+        turn_id: uuid::Uuid,
+    ) -> Result<LlmCompleteResponse, AvixError> {
+        use futures::StreamExt as _;
+
+        let stream = client.stream_complete(req.clone()).await;
+
+        // Fall back to non-streaming when the client doesn't support it.
+        let mut stream = match stream {
+            Ok(s) => s,
+            Err(_) => {
+                return client
+                    .complete(req)
+                    .await
+                    .map_err(|e| AvixError::ConfigParse(e.to_string()));
+            }
+        };
+
+        let turn_id_str = turn_id.to_string();
+        let mut accumulated_text = String::new();
+        // call_id → (name, accumulated_args_json)
+        let mut pending_calls: HashMap<String, (String, String)> = HashMap::new();
+        let mut stop_reason = StopReason::EndTurn;
+        let mut input_tokens = 0u32;
+        let mut output_tokens = 0u32;
+        let mut seq: u64 = 0;
+
+        while let Some(chunk) = stream.next().await {
+            match chunk.map_err(|e| AvixError::ConfigParse(e.to_string()))? {
+                StreamChunk::TextDelta { text } => {
+                    accumulated_text.push_str(&text);
+                    if let Some(bus) = &self.event_bus {
+                        bus.agent_output_chunk(
+                            &self.session_id,
+                            self.pid.as_u32(),
+                            &turn_id_str,
+                            &text,
+                            seq,
+                            false,
+                        );
+                    }
+                    seq += 1;
+                }
+                StreamChunk::ToolCallStart { call_id, name } => {
+                    pending_calls.insert(call_id, (name, String::new()));
+                }
+                StreamChunk::ToolCallArgsDelta { call_id, args_delta } => {
+                    if let Some(entry) = pending_calls.get_mut(&call_id) {
+                        entry.1.push_str(&args_delta);
+                    }
+                }
+                StreamChunk::ToolCallComplete { .. } => {} // args already accumulated
+                StreamChunk::Done {
+                    stop_reason: sr,
+                    input_tokens: it,
+                    output_tokens: ot,
+                } => {
+                    stop_reason = sr;
+                    input_tokens = it;
+                    output_tokens = ot;
+                }
+            }
+        }
+
+        // Emit turn-end marker so TUI can stop the streaming indicator.
+        if let Some(bus) = &self.event_bus {
+            bus.agent_output_chunk(
+                &self.session_id,
+                self.pid.as_u32(),
+                &turn_id_str,
+                "",
+                seq,
+                true,
+            );
+        }
+
+        // Build synthetic content array matching the shape `interpret_stop_reason` expects.
+        let mut content: Vec<serde_json::Value> = Vec::new();
+        if !accumulated_text.is_empty() {
+            content.push(serde_json::json!({"type": "text", "text": accumulated_text}));
+        }
+        for (call_id, (name, args_str)) in &pending_calls {
+            let input = serde_json::from_str::<serde_json::Value>(args_str)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            content.push(serde_json::json!({
+                "type": "tool_use",
+                "id": call_id,
+                "name": name,
+                "input": input,
+            }));
+        }
+
+        Ok(LlmCompleteResponse {
+            content,
+            stop_reason,
+            input_tokens,
+            output_tokens,
+        })
+    }
+
     /// Run the turn loop against a real LLM client.
     pub async fn run_with_client(
         &mut self,
@@ -1320,18 +1430,17 @@ impl RuntimeExecutor {
                 ));
             }
 
+            let turn_id = uuid::Uuid::new_v4();
             let req = crate::llm_client::LlmCompleteRequest {
                 model: String::new(), // client picks its default
                 messages: messages.clone(),
                 tools: self.current_tool_list(),
                 system: Some(system.clone()),
                 max_tokens: 4096,
+                turn_id,
             };
 
-            let response = client
-                .complete(req)
-                .await
-                .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+            let response = self.run_turn_streaming(req, client, turn_id).await?;
 
             tracing::debug!(response = ?response, "RuntimeExecutor LLM Response");
 

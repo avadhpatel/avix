@@ -1,7 +1,7 @@
 use crate::config::{LlmConfig, ProviderAuth};
 use crate::error::AvixError;
 use crate::ipc::message::{JsonRpcErrorCode, JsonRpcRequest, JsonRpcResponse};
-use crate::llm_client::{LlmClient, LlmCompleteRequest};
+use crate::llm_client::{LlmClient, LlmCompleteRequest, StreamChunk};
 use crate::llm_svc::adapter::{
     AvixEmbedRequest, AvixImageRequest, AvixSpeechRequest, AvixTranscribeRequest, EmbedInput,
     ProviderAdapter,
@@ -10,6 +10,7 @@ use crate::llm_svc::http_client::DirectHttpLlmClient;
 use crate::llm_svc::routing::RoutingEngine;
 use crate::llm_svc::usage::UsageTracker;
 use crate::types::Modality;
+use futures::stream::BoxStream;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -160,6 +161,49 @@ impl LlmService {
         }
     }
 
+    /// Streaming version of dispatch — calls the provider's `stream_complete`
+    /// and returns a `BoxStream` of `StreamChunk`s.
+    pub(crate) async fn dispatch_stream(
+        &self,
+        req: &JsonRpcRequest,
+    ) -> Result<BoxStream<'static, anyhow::Result<StreamChunk>>, AvixError> {
+        let params = &req.params;
+        let provider_name = params["provider"].as_str().map(str::to_string);
+        let model = params["model"]
+            .as_str()
+            .unwrap_or("claude-haiku-4-5-20251001")
+            .to_string();
+
+        let provider_config = self
+            .routing
+            .resolve(Modality::Text, provider_name.as_deref())
+            .await?;
+        let pname = provider_config.name.clone();
+
+        let turn_id = params["turn_id"]
+            .as_str()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+            .unwrap_or_else(uuid::Uuid::new_v4);
+        let llm_req = LlmCompleteRequest {
+            model,
+            messages: params["messages"].as_array().cloned().unwrap_or_default(),
+            tools: params["tools"].as_array().cloned().unwrap_or_default(),
+            system: params["system"].as_str().map(str::to_string),
+            max_tokens: params["max_tokens"].as_u64().unwrap_or(4096) as u32,
+            turn_id,
+        };
+
+        let client = self
+            .text_clients
+            .get(&pname)
+            .ok_or_else(|| AvixError::NoProviderAvailable(format!("no text client for {pname}")))?;
+
+        client
+            .stream_complete(llm_req)
+            .await
+            .map_err(|e| AvixError::AdapterError(e.to_string()))
+    }
+
     async fn handle_complete(
         &self,
         params: &serde_json::Value,
@@ -178,12 +222,19 @@ impl LlmService {
         let pname = provider_config.name.clone();
 
         // Build LlmCompleteRequest — all keys are snake_case on the wire.
+        // Propagate the turn_id from params if present (sent by IpcLlmClient);
+        // fall back to a fresh UUID so the service always has one.
+        let turn_id = params["turn_id"]
+            .as_str()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+            .unwrap_or_else(uuid::Uuid::new_v4);
         let llm_req = LlmCompleteRequest {
             model: model.clone(),
             messages: params["messages"].as_array().cloned().unwrap_or_default(),
             tools: params["tools"].as_array().cloned().unwrap_or_default(),
             system: params["system"].as_str().map(str::to_string),
             max_tokens: params["max_tokens"].as_u64().unwrap_or(4096) as u32,
+            turn_id,
         };
 
         // Use the injected text client for this provider

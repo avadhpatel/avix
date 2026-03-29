@@ -42,6 +42,9 @@ async fn dispatch_event(
 
     // Log the received event
     let summary = match &event.body {
+        EventBody::AgentOutputChunk(body) => {
+            format!("AgentOutputChunk pid={} seq={}", body.pid, body.seq)
+        }
         EventBody::AgentOutput(body) => format!("AgentOutput pid={}", body.pid),
         EventBody::AgentStatus(body) => {
             format!("AgentStatus pid={} status={:?}", body.pid, body.status)
@@ -55,6 +58,7 @@ async fn dispatch_event(
     let log_event = TuiEvent::ReceivedAtp {
         kind: event.kind.clone(),
         pid: match &event.body {
+            EventBody::AgentOutputChunk(body) => Some(body.pid),
             EventBody::AgentOutput(body) => Some(body.pid),
             EventBody::AgentStatus(body) => Some(body.pid),
             EventBody::AgentExit(body) => Some(body.pid),
@@ -67,6 +71,17 @@ async fn dispatch_event(
     let _ = action_tx.send(Action::LogEvent(log_event)).await;
 
     match event.kind {
+        EventKind::AgentOutputChunk => {
+            if let EventBody::AgentOutputChunk(body) = event.body {
+                // Only forward non-final deltas — final chunk is an empty sentinel.
+                if !body.is_final && !body.text_delta.is_empty() {
+                    debug!("Agent output chunk: pid={} seq={}", body.pid, body.seq);
+                    let _ = action_tx
+                        .send(Action::UpdateAgentOutput(body.pid, body.text_delta))
+                        .await;
+                }
+            }
+        }
         EventKind::AgentOutput => {
             if let EventBody::AgentOutput(body) = event.body {
                 debug!("Agent output: pid={}", body.pid);

@@ -22,7 +22,8 @@ impl JsonRpcNotification {
 
 /// Either a full request (has `id`) or a notification (no `id`).
 /// Used by IpcServer to distinguish the two wire shapes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum IpcMessage {
     Request(JsonRpcRequest),
     Notification(JsonRpcNotification),
