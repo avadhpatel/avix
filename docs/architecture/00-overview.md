@@ -17,6 +17,69 @@ software written in any language. The capability token is the file descriptor ta
 
 ---
 
+## System Architecture
+
+```mermaid
+graph TB
+    subgraph EXTERNAL["External Layer (ATP over WebSocket/TLS)"]
+        CLI[avix CLI]
+        TUI[TUI Dashboard]
+        TAURI[Tauri Desktop App]
+        WEB[Web Client]
+    end
+
+    subgraph GATEWAY["gateway.svc — Protocol Bridge"]
+        GW[GatewayServer\nWebSocket listener\nports 7700 / 7701]
+        BUS[AtpEventBus\nbroadcast channel]
+        GW <--> BUS
+    end
+
+    subgraph KERNEL["Kernel Layer"]
+        KSOCK[kernel.sock\nKernelIpcServer]
+        PROC[ProcHandler\nkernel/proc/spawn etc.]
+        FACTORY[IpcExecutorFactory\nlaunches RuntimeExecutors]
+        KSOCK --> PROC --> FACTORY
+        FACTORY --> BUS
+    end
+
+    subgraph AGENTS["Agent Layer"]
+        RE1[RuntimeExecutor PID 57\nLLM turn loop]
+        RE2[RuntimeExecutor PID 58]
+        RE1 --> BUS
+        RE2 --> BUS
+    end
+
+    subgraph ROUTER["router.svc — Tool Dispatch Backbone"]
+        RSOCK[router.sock\nRouterIpcServer]
+    end
+
+    subgraph SERVICES["Service Layer (JSON-RPC 2.0 over IPC)"]
+        LLM[llm.svc\nllm.sock]
+        FS[memfs.svc]
+        EXEC[exec.svc]
+        MCP[mcp-bridge.svc]
+        THIRD[third-party services]
+    end
+
+    subgraph VFS["MemFS (VfsRouter)"]
+        PROC_FS[/proc/pid/status.yaml\n/proc/pid/resolved.yaml]
+        ETC_FS[/etc/avix/]
+        USER_FS[/users/]
+    end
+
+    CLI & TUI & TAURI & WEB -->|ATP WebSocket| GW
+    GW -->|JSON-RPC 2.0 IPC| KSOCK
+    GW -->|JSON-RPC 2.0 IPC| RSOCK
+    RE1 -->|JSON-RPC 2.0 IPC| RSOCK
+    RE1 -->|JSON-RPC 2.0 IPC via IpcLlmClient| LLM
+    RSOCK --> LLM & FS & EXEC & MCP & THIRD
+    FACTORY -->|spawns| RE1 & RE2
+    PROC --> VFS
+    RE1 --> VFS
+```
+
+---
+
 ## Linux ↔ Avix Mapping
 
 | Linux concept     | Avix equivalent                                                              |
@@ -116,11 +179,11 @@ These are hard rules. Violating any of them is a bug.
 |-----|-------|
 | 00-overview.md | **This file** — design philosophy, mapping, invariants |
 | 01-filesystem.md | VFS trees, disk layout, write protection, mount system |
-| 02-bootstrap.md | Boot phases 0–4, VFS init, config init |
-| 03-ipc.md | IPC protocol, wire format, error codes |
-| 04-atp.md | Avix Terminal Protocol over WebSocket |
+| 02-bootstrap.md | Boot phases 0–4, VFS init, config init, component wiring |
+| 03-ipc.md | IPC protocol, wire format, component topology, message flows |
+| 04-atp.md | Avix Terminal Protocol, gateway bridge, event delivery chain |
 | 05-capabilities.md | CapabilityToken, HIL, role hierarchy, session model |
-| 06-agents.md | RuntimeExecutor, spawn, turn loop, proc file writes |
+| 06-agents.md | RuntimeExecutor, spawn, turn loop, ATP event emission |
 | 07-services.md | Service lifecycle, `service.unit` TOML, installation pipeline, `_caller` injection, restart watchdog, secrets |
 | 08-llm-service.md | llm.svc multi-modality, provider routing |
 | 09-runtime-executor-tools.md | Tool categories, 7-step turn loop, HIL scenarios |

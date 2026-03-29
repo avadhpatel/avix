@@ -26,6 +26,65 @@ IPC results back into ATP events. The internal world never speaks ATP.
 
 ---
 
+## Gateway: The Protocol Bridge
+
+`gateway.svc` sits at the boundary between the external ATP world and the internal
+IPC world. It is the only component that speaks both protocols.
+
+```mermaid
+graph LR
+    subgraph EXT["External (ATP / WebSocket)"]
+        C1[Client A\nTUI / CLI]
+        C2[Client B\nDesktop App]
+        C3[Client C\nWeb]
+    end
+
+    subgraph GW["gateway.svc"]
+        WS[WebSocket\nlistener\n7700 user\n7701 admin]
+        ACL[ACL Pipeline\n5-step validation]
+        BUS[AtpEventBus\nbroadcast channel\ncap 1024]
+        EP[Event pump\nper connection]
+        WS --> ACL
+        BUS --> EP --> WS
+    end
+
+    subgraph INT["Internal (IPC / JSON-RPC 2.0)"]
+        KSOCK[kernel.sock]
+        RSOCK[router.sock]
+        FACTORY[IpcExecutorFactory\n— publishes events]
+        RE[RuntimeExecutor\n— publishes events]
+        FACTORY --> BUS
+        RE --> BUS
+    end
+
+    C1 & C2 & C3 <-->|"WebSocket frames\n(ATP JSON)"| WS
+    ACL -->|"JSON-RPC 2.0\nfresh connection per call"| KSOCK
+    ACL -->|"JSON-RPC 2.0\nfresh connection per call"| RSOCK
+```
+
+### Inbound (Client → Avix)
+
+ATP `cmd` frames arrive over WebSocket. The gateway:
+1. Validates the bearer token (HMAC-SHA256 + expiry)
+2. Checks the session ID, role, and port ACLs
+3. Translates to a JSON-RPC 2.0 call on `kernel.sock` or `router.sock`
+4. Returns the IPC result as an ATP `reply` frame
+
+### Outbound (Avix → Client)
+
+Events are published to `AtpEventBus` (a tokio `broadcast::Sender<BusEvent>` with
+capacity 1024) from two sources:
+- **`IpcExecutorFactory`** — publishes `agent.status`, `agent.output`, and `agent.exit`
+  when an executor starts, finishes a turn, or exits
+- **`RuntimeExecutor`** — publishes `agent.tool_call` and `agent.tool_result`
+  mid-turn as tool calls are dispatched and results collected
+
+Each WebSocket connection has an independent `broadcast::Receiver` subscribed to the bus.
+A per-connection event pump task reads from the receiver, applies a three-gate filter
+(`EventFilter`), and sends matching events as ATP `event` frames over WebSocket.
+
+---
+
 ## Endpoints and Configuration
 
 | Port | Purpose | Accessible by |
@@ -226,6 +285,21 @@ The 11 ATP command domains map directly to kernel IPC namespaces:
 
 Each command passes through a five-step ACL pipeline before dispatch:
 
+```mermaid
+flowchart LR
+    CMD[ATP cmd frame] --> V1
+    V1{1. Token valid?\nHMAC-SHA256 + expiry} -->|fail| E1[EAUTH / EEXPIRED]
+    V1 -->|pass| V2
+    V2{2. Session ID\nmatches token?} -->|fail| E2[ESESSION]
+    V2 -->|pass| V3
+    V3{3. Role ≥ domain\nminimum?} -->|fail| E3[EPERM]
+    V3 -->|pass| V4
+    V4{4. Admin port\nif required?} -->|fail| E4[EPERM]
+    V4 -->|pass| V5
+    V5{5. Filesystem\nhard vetoes} -->|/secrets/** write| E5[EPERM]
+    V5 -->|pass| DISPATCH[Dispatch to\nkernel IPC]
+```
+
 1. **Token validation** — HMAC-SHA256 + expiry check; `EAUTH`/`EEXPIRED` on failure
 2. **Session ID check** — token's `session_id` must match the connection's session; `ESESSION` on mismatch
 3. **Domain × role matrix** — minimum role per domain enforced; `EPERM` on failure
@@ -239,26 +313,30 @@ seen before on the same WebSocket connection returns `EPARSE` immediately.
 
 ## Server-Push Events
 
-The 16 server-push event kinds with their scoping rules:
+The 20 server-push event kinds with their scoping rules:
 
-| Event | Min role | Owner-scoped¹ | When emitted |
-|-------|----------|:---:|---|
-| `session.ready` | `guest` | yes | WebSocket upgrade succeeded; first frame sent to client |
-| `session.closing` | `guest` | yes | Session is being terminated |
-| `token.expiring` | `guest` | yes | Bearer token will expire within renewal window |
-| `agent.output` | `user` | yes | LLM turn produces text output |
-| `agent.status` | `user` | yes | Agent status changed (running/paused/stopped/crashed) |
-| `agent.tool_call` | `user` | yes | Agent is dispatching a tool call |
-| `agent.tool_result` | `user` | yes | Tool call result received |
-| `agent.exit` | `user` | yes | Agent process exited |
-| `proc.signal` | `user` | yes | Signal delivered to agent |
-| `hil.request` | `user` | yes | Human input required |
-| `hil.resolved` | `user` | yes | HIL request approved, denied, or timed out |
-| `fs.changed` | `user` | yes | Watched VFS path was modified |
-| `tool.changed` | `guest` | no | Service added or removed a tool (system-wide) |
-| `cron.fired` | `user` | yes | Scheduled cron job triggered |
-| `sys.service` | `admin` | no | System service lifecycle event |
-| `sys.alert` | `operator` | no | System-wide alert |
+| Event | Min role | Owner-scoped¹ | When emitted | Source |
+|-------|----------|:---:|---|---|
+| `session.ready` | `guest` | yes | WebSocket upgrade succeeded | gateway |
+| `session.closing` | `guest` | yes | Session is being terminated | gateway |
+| `token.expiring` | `guest` | yes | Bearer token within renewal window | gateway |
+| `agent.output` | `user` | yes | LLM turn complete — final text | IpcExecutorFactory |
+| `agent.status` | `user` | yes | Agent status changed | IpcExecutorFactory |
+| `agent.tool_call` | `user` | yes | Agent dispatching a tool call | RuntimeExecutor |
+| `agent.tool_result` | `user` | yes | Tool call result received | RuntimeExecutor |
+| `agent.exit` | `user` | yes | Agent process exited (exit code in body) | IpcExecutorFactory |
+| `agent.spawned` | `user` | yes | New agent process started | kernel |
+| `proc.signal` | `user` | yes | Signal delivered to agent | kernel |
+| `proc.start` | `user` | yes | Process started | kernel |
+| `proc.output` | `user` | yes | Process stdout/stderr output | kernel |
+| `proc.exit` | `user` | yes | Process exited | kernel |
+| `hil.request` | `user` | yes | Human input required | kernel |
+| `hil.resolved` | `user` | yes | HIL approved, denied, or timed out | kernel |
+| `fs.changed` | `user` | yes | Watched VFS path was modified | memfs.svc |
+| `tool.changed` | `guest` | no | Service added or removed a tool | kernel |
+| `cron.fired` | `user` | yes | Scheduled cron job triggered | scheduler.svc |
+| `sys.service` | `admin` | no | System service lifecycle event | kernel |
+| `sys.alert` | `operator` | no | System-wide alert | kernel |
 
 ¹ Owner-scoped events are delivered only to the session that owns the event. Users with
 `operator` role or above can receive events from any session.
@@ -267,11 +345,76 @@ The 16 server-push event kinds with their scoping rules:
 
 The gateway enforces three gates before delivering an event to a connection:
 
+```mermaid
+flowchart LR
+    EVENT[BusEvent from\nAtpEventBus] --> G1
+    G1{Role gate:\nconn.role ≥\nevent.min_role?} -->|no| DROP1[drop]
+    G1 -->|yes| G2
+    G2{Ownership gate:\nis owner-scoped?\nconn.session == owner?} -->|no| DROP2[drop]
+    G2 -->|yes| G3
+    G3{Subscription gate:\nevent kind in\nconn.subscribed?} -->|no| DROP3[drop]
+    G3 -->|yes| DELIVER[send ATP event\nframe over WebSocket]
+```
+
 1. **Role gate** — connection's role must meet event's minimum role requirement
 2. **Ownership gate** — for owner-scoped events, `owner_session` must match (unless `operator+`)
 3. **Subscription gate** — event kind must be in the connection's subscribed list (or `"*"`)
 
 Events not passing all three gates are silently dropped per-connection.
+
+---
+
+## Agent Spawn and Output Event Flow
+
+The full path from `proc.spawn` command to `agent.output` event reaching the client:
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant GW as gateway.svc
+    participant BUS as AtpEventBus
+    participant K as kernel.sock
+    participant F as IpcExecutorFactory
+    participant RE as RuntimeExecutor
+    participant LLM as llm.svc
+
+    C->>GW: ATP cmd {domain:proc, op:spawn, body:{agent, goal}}
+    GW->>GW: 5-step ACL validation
+    GW->>K: JSON-RPC kernel/proc/spawn
+    K->>K: assign PID, issue CapabilityToken
+    K->>K: write /proc/57/status.yaml
+    K-->>GW: {ok:true, pid:57}
+    GW-->>C: ATP reply {ok:true, body:{pid:57}}
+
+    K->>F: launch(SpawnParams{pid:57, session_id, goal})
+    Note over F: tokio::spawn background task
+    F->>RE: RuntimeExecutor::spawn_with_registry()
+    F->>RE: executor.with_event_bus(event_bus)
+    F->>BUS: agent_status(session, 57, "running")
+    BUS-->>C: ATP event {agent.status, pid:57, status:running}
+
+    loop LLM turn loop
+        RE->>LLM: JSON-RPC llm/complete (IpcLlmClient)
+        LLM-->>RE: LlmCompleteResponse
+        alt has tool calls
+            loop each tool call
+                RE->>BUS: agent_tool_call(session, 57, call_id, tool, args)
+                BUS-->>C: ATP event {agent.tool_call, ...}
+                RE->>RE: dispatch_via_router() or dispatch_category2()
+                RE->>BUS: agent_tool_result(session, 57, call_id, tool, result)
+                BUS-->>C: ATP event {agent.tool_result, ...}
+            end
+        else task complete (no tool calls)
+            RE-->>F: Ok(TurnResult{text:"..."})
+            F->>BUS: agent_output(session, 57, text)
+            BUS-->>C: ATP event {agent.output, pid:57, text:"..."}
+            F->>BUS: agent_status(session, 57, "stopped")
+            BUS-->>C: ATP event {agent.status, pid:57, status:stopped}
+            F->>BUS: agent_exit(session, 57, 0)
+            BUS-->>C: ATP event {agent.exit, pid:57, exitCode:0}
+        end
+    end
+```
 
 ---
 
@@ -353,39 +496,31 @@ Attachment types:
 
 When an agent needs human approval, the full flow is:
 
-```
-1. Agent calls a tool requiring approval (or sends SIGESCALATE)
-2. RuntimeExecutor sends ResourceRequest to kernel
-3. Kernel: HilManager.open()
-   a. Mints ApprovalToken and registers it in ApprovalTokenStore
-   b. Writes /proc/<pid>/hil-queue/<hil-id>.yaml
-   c. Pushes hil.request ATP event to owning session's clients
-   d. Starts hil_timeout_secs countdown (default: 600s)
-4. Kernel sends SIGPAUSE to agent → agent suspends
+```mermaid
+sequenceDiagram
+    participant A as Agent (RuntimeExecutor)
+    participant K as Kernel (HilManager)
+    participant BUS as AtpEventBus
+    participant C as Human Client
 
-Human client receives hil.request event:
-5. Client sends signal.send SIGRESUME with approvalToken in payload:
+    A->>K: ResourceRequest (tool requires approval)
+    K->>K: HilManager.open()
+    K->>K: mint ApprovalToken (single-use)
+    K->>K: write /proc/57/hil-queue/hil-001.yaml
+    K->>BUS: hil_request(session, hil-001, kind)
+    BUS-->>C: ATP event {hil.request, hilId, approvalToken}
+    K->>A: SIGPAUSE signal (agent suspends)
 
-   { "type": "cmd", "domain": "signal", "op": "send", "id": "req-005",
-     "token": "eyJ...",
-     "body": {
-       "signal": "SIGRESUME",
-       "target": <pid>,
-       "payload": {
-         "approvalToken": "<token-from-hil-request-body>",
-         "hilId": "<hil-id>",
-         "decision": "approved",
-         "note": "Looks good, send it"
-       }
-     }
-   }
+    Note over C: Human reads hil.request event
 
-6. gateway.svc routes to HilManager.resolve():
-   a. Atomically consumes ApprovalToken → EUSED if already consumed
-   b. Updates /proc/<pid>/hil-queue/<hil-id>.yaml state
-   c. Pushes hil.resolved ATP event
-7. Kernel delivers SIGRESUME { decision: "approved" } to agent
-8. Agent resumes
+    C->>K: ATP cmd {domain:signal, op:send, signal:SIGRESUME\n  payload:{approvalToken, hilId, decision:approved}}
+    K->>K: HilManager.resolve()
+    K->>K: atomically consume ApprovalToken\n(EUSED if already consumed)
+    K->>K: update /proc/57/hil-queue/hil-001.yaml → approved
+    K->>BUS: hil_resolved(session, hil-001, approved)
+    BUS-->>C: ATP event {hil.resolved, outcome:approved}
+    K->>A: SIGRESUME {decision:approved}
+    Note over A: agent resumes
 ```
 
 **Timeout path:** If no response arrives within `hil_timeout_secs`, `HilManager` automatically:
@@ -400,30 +535,34 @@ Human client receives hil.request event:
 
 ## Connection Lifecycle
 
-```
-Client → POST /atp/auth/login
-       → Receive token + sessionId
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant GW as gateway.svc
 
-Client → WebSocket GET /atp
-         Authorization: Bearer <token>
-       → gateway validates token (or 401)
-       → Connection established
-       → Server immediately sends session.ready event
+    C->>GW: POST /atp/auth/login {identity, credential}
+    GW-->>C: {token, expiresAt, sessionId}
 
-Client → { "type": "subscribe", "events": ["*"] }
-       → Now receives all permitted events
+    C->>GW: WebSocket GET /atp\nAuthorization: Bearer <token>
+    GW->>GW: validate token (reject with 401 if invalid)
+    GW-->>C: 101 Switching Protocols
+    GW->>C: ATP event {session.ready, sessionId}
 
-Client → Send cmd frames
-       → Receive reply frames (one per cmd)
-       → Receive event frames (async, filtered by subscription)
+    C->>GW: ATP subscribe {events:["*"]}
+    Note over GW: EventFilter updated — connection now receives events
 
-Connection keep-alive:
-  → Server sends WebSocket Ping every 30 seconds
-  → Client must reply with Pong within 10 seconds
-  → No Pong after 40s total → connection closed
+    loop active session
+        C->>GW: ATP cmd frames
+        GW-->>C: ATP reply frames (one per cmd)
+        GW-->>C: ATP event frames (async, filtered by subscription)
+        GW->>C: WebSocket Ping (every 30s)
+        C->>GW: WebSocket Pong (within 10s)
+    end
 
-Disconnect → Per-connection EventFilter and ReplayGuard cleaned up
-             → In-progress HIL events remain pending until hil_timeout_secs
+    Note over GW: No Pong after 40s → close connection
+    GW->>C: ATP event {session.closing}
+    GW->>GW: clean up EventFilter, ReplayGuard
+    Note over GW: In-progress HIL events remain until hil_timeout_secs
 ```
 
 ---

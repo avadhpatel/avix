@@ -17,6 +17,67 @@ service registration, signal delivery, and kernel syscall goes through IPC. It i
 
 ---
 
+## Component Topology
+
+```mermaid
+graph TB
+    subgraph CLIENTS["External Clients (ATP)"]
+        CLI[CLI / TUI / Desktop]
+    end
+
+    subgraph GATEWAY["gateway.svc"]
+        GW[GatewayServer]
+    end
+
+    subgraph KERNEL["Kernel"]
+        KSOCK["kernel.sock\n(KernelIpcServer)"]
+        KHAND[ProcHandler\nSignalHandler\nCapHandler etc.]
+        KSOCK --> KHAND
+    end
+
+    subgraph ROUTER["router.svc"]
+        RSOCK["router.sock\n(RouterIpcServer)"]
+        DISPATCH[RouterDispatcher\nservice lookup + forwarding]
+        RSOCK --> DISPATCH
+    end
+
+    subgraph AGENTS["Agents"]
+        RE1["RuntimeExecutor\nPID 57\n(IpcLlmClient)"]
+        RE2["RuntimeExecutor\nPID 58"]
+        ASOCK1["agents/57.sock\n(signal delivery)"]
+        ASOCK2["agents/58.sock"]
+        RE1 --- ASOCK1
+        RE2 --- ASOCK2
+    end
+
+    subgraph SERVICES["Services"]
+        LLM["llm.svc\nllm.sock"]
+        FS["memfs.svc"]
+        EXEC["exec.svc\nexec.sock"]
+        MCP["mcp-bridge.svc"]
+        THIRD["third-party\n*.svc.sock"]
+    end
+
+    CLI -->|"ATP WebSocket"| GW
+    GW -->|"JSON-RPC 2.0\nkernel/proc/spawn etc."| KSOCK
+    GW -->|"JSON-RPC 2.0\ntool dispatch"| RSOCK
+
+    RE1 -->|"JSON-RPC 2.0\nllm/complete"| LLM
+    RE1 -->|"JSON-RPC 2.0\ntool calls"| RSOCK
+    RE2 -->|"JSON-RPC 2.0\ntool calls"| RSOCK
+
+    DISPATCH -->|"JSON-RPC 2.0\n+ _caller injection"| LLM
+    DISPATCH --> FS
+    DISPATCH --> EXEC
+    DISPATCH --> MCP
+    DISPATCH --> THIRD
+
+    KHAND -->|"JSON-RPC 2.0 notification\nsignal delivery"| ASOCK1
+    KHAND --> ASOCK2
+```
+
+---
+
 ## Transport
 
 Platform-native local sockets:
@@ -49,6 +110,12 @@ Every message — in both directions, on all platforms — uses the same framing
 
 Read 4 bytes → parse length → read exactly N bytes → parse JSON.
 Maximum frame size: 65536 bytes (configurable in `kernel.yaml`).
+
+```mermaid
+packet-beta
+  0-31: "payload length (uint32, little-endian)"
+  32-63: "JSON-RPC 2.0 payload (variable, up to 65536 bytes)"
+```
 
 ---
 
@@ -126,9 +193,61 @@ The caller polls or subscribes to job events rather than holding the connection 
 
 ---
 
+## Tool Call Dispatch Flow
+
+The full path of an agent tool call from LLM response to result:
+
+```mermaid
+sequenceDiagram
+    participant LLM as llm.svc
+    participant RE as RuntimeExecutor
+    participant BUS as AtpEventBus
+    participant ROUTER as router.svc
+    participant SVC as target service
+
+    LLM-->>RE: LlmCompleteResponse (tool_use blocks)
+    RE->>RE: interpret_stop_reason() → DispatchTools(calls)
+    loop for each tool call
+        RE->>BUS: agent_tool_call(session, pid, call_id, tool, args)
+        Note over BUS: broadcasts agent.tool_call ATP event
+        RE->>ROUTER: JSON-RPC 2.0 request\nmethod: "tool/name"\n+ _caller injection
+        Note over RE,ROUTER: fresh Unix socket connection\n4-byte length prefix + JSON
+        ROUTER->>ROUTER: lookup service by tool name
+        ROUTER->>SVC: JSON-RPC 2.0 request\n(forwarded + _caller injected)
+        SVC-->>ROUTER: JSON-RPC 2.0 result
+        ROUTER-->>RE: JSON-RPC 2.0 result
+        RE->>BUS: agent_tool_result(session, pid, call_id, tool, result)
+        Note over BUS: broadcasts agent.tool_result ATP event
+    end
+    RE->>LLM: next LlmCompleteRequest\n(conversation + tool_results appended)
+```
+
+---
+
 ## Service Startup Sequence
 
 Every service — in any language — follows this protocol:
+
+```mermaid
+sequenceDiagram
+    participant OS as Host OS
+    participant SVC as Service Process
+    participant KERNEL as kernel.sock
+    participant ROUTER as router.sock
+
+    OS->>SVC: spawn with env:\n AVIX_KERNEL_SOCK\n AVIX_ROUTER_SOCK\n AVIX_SVC_SOCK\n AVIX_SVC_TOKEN
+    SVC->>SVC: bind() on AVIX_SVC_SOCK
+    SVC->>KERNEL: ipc.register\n{token, name, endpoint, tools[]}
+    KERNEL-->>SVC: {ok: true}
+    Note over SVC: now registered — router knows tool → socket mapping
+    loop on incoming connection
+        ROUTER->>SVC: JSON-RPC 2.0 tool call\n(with _caller injected)
+        SVC-->>ROUTER: JSON-RPC 2.0 result
+    end
+    KERNEL->>SVC: signal notification\n{method:"signal", params:{signal:"SIGTERM"}}
+    SVC->>SVC: finish in-flight calls → exit
+    SVC->>KERNEL: ipc.deregister (or kernel detects exit)
+```
 
 **1. Read environment:**
 
@@ -212,8 +331,17 @@ Avix name:  fs/read
 Wire name:  fs__read   (__ = double underscore)
 ```
 
+```mermaid
+graph LR
+    A["fs/read\n(Avix canonical name)"] -->|"mangle at provider adapter boundary"| B["fs__read\n(LLM provider wire format)"]
+    B -->|"unmangle on response"| A
+```
+
 **No Avix tool name ever contains `__`.** This is reserved exclusively for wire mangling.
 `ToolName::parse` rejects any name containing `__`. Adapters translate at the boundary.
+
+The mangling only happens between `RuntimeExecutor` and the LLM provider API inside `llm.svc`.
+All other IPC — router calls, service-to-service — uses the canonical `/` form.
 
 ---
 
@@ -270,5 +398,5 @@ All 32 kernel syscalls require `kernel:root` capability. All are synchronous.
 | `lookup` | Find a service endpoint by name |
 | `list` | List registered services |
 | `health` | Check service health |
-| `tool-add` | Dynamically add tools to a service |
-| `tool-remove` | Dynamically remove tools from a service |
+| `tool-add` | Dynamically add tools to a service (used by RuntimeExecutor at spawn) |
+| `tool-remove` | Dynamically remove tools from a service (used by RuntimeExecutor at exit) |

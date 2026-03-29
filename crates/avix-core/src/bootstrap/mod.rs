@@ -46,6 +46,9 @@ pub struct Runtime {
     root: PathBuf,
     runtime_dir: PathBuf,
     kernel_sock: PathBuf,
+    /// Shared event bus — created at bootstrap so phase2_kernel and phase4_atp_gateway
+    /// both reference the same instance.
+    event_bus: Arc<AtpEventBus>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -119,6 +122,7 @@ impl Runtime {
             root: root.to_path_buf(),
             runtime_dir,
             kernel_sock,
+            event_bus: Arc::new(AtpEventBus::default()),
         })
     }
 
@@ -201,6 +205,7 @@ impl Runtime {
 
         let factory = Arc::new(executor_factory::IpcExecutorFactory::new(
             Arc::clone(&self.process_table),
+            Arc::clone(&self.event_bus),
         ));
 
         let proc_handler = Arc::new(ProcHandler::new_with_factory(
@@ -351,7 +356,7 @@ impl Runtime {
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         let auth_svc = Arc::new(AuthService::new(auth_config));
         let token_store = Arc::new(ATPTokenStore::new(self.master_key.as_ref().clone()));
-        let event_bus = Arc::new(AtpEventBus::default());
+        let event_bus = Arc::clone(&self.event_bus);
         let config = GatewayConfig {
             user_addr: format!("0.0.0.0:{}", port)
                 .parse()

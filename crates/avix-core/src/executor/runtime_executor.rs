@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 use crate::error::AvixError;
+use crate::gateway::event_bus::AtpEventBus;
 use crate::kernel::resource_request::{
     KernelResourceHandler, ResourceGrant, ResourceItem, ResourceRequest, Urgency,
 };
@@ -154,6 +155,8 @@ pub struct RuntimeExecutor {
     memory_context: Option<String>,
     /// Conversation history: list of (role, content) pairs, stored for session auto-log.
     pub conversation_history: Vec<(String, String)>,
+    /// Event bus — when set, agent_tool_call / agent_tool_result events are published live.
+    event_bus: Option<Arc<AtpEventBus>>,
 
     // ── status tracking fields ────────────────────────────────────────────────
     /// When this agent was spawned (used for wallTimeSec in status.yaml).
@@ -221,6 +224,7 @@ impl RuntimeExecutor {
             runtime_dir: params.runtime_dir.clone(),
             memory_context: None,
             conversation_history: Vec::new(),
+            event_bus: None,
             spawned_at: chrono::Utc::now(),
             context_used: 0,
             context_limit: params.context_limit,
@@ -245,6 +249,12 @@ impl RuntimeExecutor {
         let mut executor = Self::spawn_with_registry(params, registry).await?;
         executor.kernel = Some(kernel);
         Ok(executor)
+    }
+
+    /// Attach an `AtpEventBus` so tool-call and tool-result events are published live.
+    pub fn with_event_bus(mut self, bus: Arc<AtpEventBus>) -> Self {
+        self.event_bus = Some(bus);
+        self
     }
 
     /// Attach a `KernelResourceHandler` so `cap/request-tool` and token renewal
@@ -1407,12 +1417,35 @@ impl RuntimeExecutor {
                         // Track lifetime tool call count
                         self.tool_calls_total = self.tool_calls_total.saturating_add(1);
 
+                        // Publish agent_tool_call event before dispatch
+                        if let Some(bus) = &self.event_bus {
+                            bus.agent_tool_call(
+                                &self.session_id,
+                                self.pid.as_u32(),
+                                &call.call_id,
+                                &call.name,
+                                &call.args,
+                            );
+                        }
+
                         // Cat2: handled locally; Cat1/3: forwarded to router.svc
                         let result = if self.is_cat2_tool(&call.name) {
                             self.dispatch_category2(call).await?
                         } else {
                             self.dispatch_via_router(call).await?
                         };
+
+                        // Publish agent_tool_result event after dispatch
+                        if let Some(bus) = &self.event_bus {
+                            bus.agent_tool_result(
+                                &self.session_id,
+                                self.pid.as_u32(),
+                                &call.call_id,
+                                &call.name,
+                                &result.to_string(),
+                            );
+                        }
+
                         tool_results.push(serde_json::json!({
                             "type": "tool_result",
                             "tool_use_id": call.call_id,

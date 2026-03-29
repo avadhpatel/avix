@@ -202,6 +202,40 @@ impl AtpEventBus {
         );
         self.publish(ev, owner_scoped.then(|| session_id.to_string()), min_role);
     }
+
+    pub fn agent_tool_call(
+        &self,
+        session_id: &str,
+        pid: u32,
+        call_id: &str,
+        tool_name: &str,
+        args: &serde_json::Value,
+    ) {
+        let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentToolCall);
+        let ev = AtpEvent::new(
+            AtpEventKind::AgentToolCall,
+            session_id,
+            serde_json::json!({ "pid": pid, "callId": call_id, "tool": tool_name, "args": args }),
+        );
+        self.publish(ev, owner_scoped.then(|| session_id.to_string()), min_role);
+    }
+
+    pub fn agent_tool_result(
+        &self,
+        session_id: &str,
+        pid: u32,
+        call_id: &str,
+        tool_name: &str,
+        result: &str,
+    ) {
+        let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentToolResult);
+        let ev = AtpEvent::new(
+            AtpEventKind::AgentToolResult,
+            session_id,
+            serde_json::json!({ "pid": pid, "callId": call_id, "tool": tool_name, "result": result }),
+        );
+        self.publish(ev, owner_scoped.then(|| session_id.to_string()), min_role);
+    }
 }
 
 impl Default for AtpEventBus {

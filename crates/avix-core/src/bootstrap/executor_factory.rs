@@ -6,6 +6,7 @@ use crate::executor::factory::AgentExecutorFactory;
 use crate::executor::runtime_executor::MockToolRegistry;
 use crate::executor::runtime_executor::RuntimeExecutor;
 use crate::executor::spawn::SpawnParams;
+use crate::gateway::event_bus::AtpEventBus;
 use crate::llm_client::IpcLlmClient;
 use crate::process::entry::ProcessStatus;
 use crate::process::table::ProcessTable;
@@ -19,16 +20,22 @@ use crate::types::Pid;
 ///   2. Creates an `IpcLlmClient` pointed at that socket.
 ///   3. Builds a `RuntimeExecutor` via `spawn_with_registry`.
 ///   4. Runs `run_with_client` inside a detached tokio task.
-///   5. Updates the process table status to `Stopped` (success) or `Crashed` (error).
-///   6. Returns the task's `AbortHandle` so `kernel/proc/kill` can stop it.
+///   5. Publishes `agent_output`, `agent_status`, and `agent_exit` ATP events.
+///   6. Updates the process table status to `Stopped` (success) or `Crashed` (error).
+///   7. Returns the task's `AbortHandle` so `kernel/proc/kill` can stop it.
 pub struct IpcExecutorFactory {
     /// Shared process table — used to update agent status on exit.
     process_table: Arc<ProcessTable>,
+    /// Event bus — used to publish agent output/status/exit events to ATP clients.
+    event_bus: Arc<AtpEventBus>,
 }
 
 impl IpcExecutorFactory {
-    pub fn new(process_table: Arc<ProcessTable>) -> Self {
-        Self { process_table }
+    pub fn new(process_table: Arc<ProcessTable>, event_bus: Arc<AtpEventBus>) -> Self {
+        Self {
+            process_table,
+            event_bus,
+        }
     }
 }
 
@@ -38,6 +45,7 @@ impl AgentExecutorFactory for IpcExecutorFactory {
         // an agent is launched phase-3 will have started llm.svc at this path.
         let llm_sock = params.runtime_dir.join("llm.sock");
         let process_table = Arc::clone(&self.process_table);
+        let event_bus = Arc::clone(&self.event_bus);
 
         let pid = params.pid;
         let goal = params.goal.clone();
@@ -48,27 +56,39 @@ impl AgentExecutorFactory for IpcExecutorFactory {
             let llm_client = IpcLlmClient::new(
                 llm_sock.to_string_lossy().to_string(),
                 pid.as_u32(),
-                session_id,
+                session_id.clone(),
             );
 
-            let mut executor = match RuntimeExecutor::spawn_with_registry(params, registry).await {
-                Ok(e) => e,
-                Err(err) => {
-                    warn!(pid = pid.as_u32(), error = %err, "executor spawn failed");
-                    let _ = process_table.set_status(pid, ProcessStatus::Crashed).await;
-                    return;
-                }
-            };
+            let mut executor =
+                match RuntimeExecutor::spawn_with_registry(params, registry).await {
+                    Ok(e) => e,
+                    Err(err) => {
+                        warn!(pid = pid.as_u32(), error = %err, "executor spawn failed");
+                        let _ = process_table.set_status(pid, ProcessStatus::Crashed).await;
+                        event_bus.agent_status(&session_id, pid.as_u32(), "crashed");
+                        event_bus.agent_exit(&session_id, pid.as_u32(), 1);
+                        return;
+                    }
+                };
+
+            // Wire the event bus so tool-call/result events are published mid-turn.
+            executor = executor.with_event_bus(Arc::clone(&event_bus));
 
             info!(pid = pid.as_u32(), "executor started");
+            event_bus.agent_status(&session_id, pid.as_u32(), "running");
 
             match executor.run_with_client(&goal, &llm_client).await {
-                Ok(_) => {
+                Ok(result) => {
                     info!(pid = pid.as_u32(), "executor finished");
+                    event_bus.agent_output(&session_id, pid.as_u32(), &result.text);
+                    event_bus.agent_status(&session_id, pid.as_u32(), "stopped");
+                    event_bus.agent_exit(&session_id, pid.as_u32(), 0);
                     let _ = process_table.set_status(pid, ProcessStatus::Stopped).await;
                 }
                 Err(err) => {
                     warn!(pid = pid.as_u32(), error = %err, "executor crashed");
+                    event_bus.agent_status(&session_id, pid.as_u32(), "crashed");
+                    event_bus.agent_exit(&session_id, pid.as_u32(), 1);
                     let _ = process_table
                         .set_status(Pid::new(pid.as_u32()), ProcessStatus::Crashed)
                         .await;

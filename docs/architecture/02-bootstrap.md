@@ -1,6 +1,7 @@
 # 02 — Bootstrap
 
-> Boot phases 0–4, VFS skeleton initialisation, config init, and deployment modes.
+> Boot phases 0–4, VFS skeleton initialisation, config init, deployment modes,
+> and the component wiring that happens at each phase.
 
 ---
 
@@ -18,8 +19,91 @@ Run `avix config init` before first start to generate all config files. There is
 
 ## Boot Phases
 
-Avix boots in five phases. Phases 0–2 run inside a single process (fused bootstrap).
-The Pivot splits core services into sidecars. Phase 4 starts the service and agent layers.
+Avix boots in five phases. The shared `AtpEventBus` is created at `Runtime` construction
+so that `IpcExecutorFactory` (phase 2) and `GatewayServer` (phase 4) reference the same
+broadcast channel — agent output events published by the executor reach ATP clients.
+
+```mermaid
+sequenceDiagram
+    participant ENV as Environment
+    participant RT as Runtime::bootstrap_with_root()
+    participant P1 as Phase 1
+    participant P2 as Phase 2 (phase2_kernel)
+    participant P3 as Phase 3 (phase3_services)
+    participant P35 as Phase 3.5 (re-adopt)
+    participant P4 as Phase 4 (phase4_atp_gateway)
+
+    ENV->>RT: AVIX_ROOT, AVIX_MASTER_KEY
+    RT->>RT: check auth.conf exists (abort if missing)
+    RT->>P1: phase1::run(&vfs) — write VFS skeleton
+    P1-->>RT: /proc/, /kernel/defaults/, /kernel/limits/ created
+    RT->>RT: load etc/signing.key → master_key
+    RT->>RT: phase2::mount_persistent_trees() — mount /etc/avix, /users, /secrets
+    RT->>RT: create Arc<AtpEventBus> (shared — lives for full daemon lifetime)
+    RT-->>P2: start_daemon() called
+    P2->>P2: IpcExecutorFactory::new(process_table, event_bus)
+    P2->>P2: ProcHandler::new_with_factory(...)
+    P2->>P2: KernelIpcServer::start() on kernel.sock
+    P2-->>RT: kernel IPC ready
+    RT->>P3: phase3_services()
+    P3->>P3: RouterIpcServer::start() on router.sock
+    P3->>P3: ExecIpcServer::start() on exec.sock
+    P3->>P3: LlmIpcServer::start() on llm.sock (if llm.yaml exists)
+    P3->>P3: discover_installed() → spawn third-party services
+    P3->>P3: ServiceWatchdog::start()
+    P3-->>RT: services ready
+    RT->>P35: phase3_re_adopt() — re-adopt orphaned agents from agents.yaml
+    P35-->>RT: orphaned agents re-adopted
+    RT->>P4: phase4_atp_gateway(port)
+    P4->>P4: AuthService::new(), ATPTokenStore::new()
+    P4->>P4: Arc::clone(&self.event_bus) — same bus as executor factory
+    P4->>P4: GatewayServer::new(config, auth_svc, token_store, event_bus)
+    P4->>P4: tokio::spawn(server.run())
+    P4-->>RT: ATP gateway listening on port 7700/7701
+    RT->>RT: poll reload-pending every 5s
+```
+
+### Component Wiring by Phase
+
+```mermaid
+graph LR
+    subgraph BOOT["boot_with_root()"]
+        MK[master_key\nfrom etc/signing.key]
+        VFS[VfsRouter\nin-memory MemFS]
+        PT[Arc ProcessTable]
+        EB[Arc AtpEventBus\n— created ONCE here]
+    end
+
+    subgraph P2["phase2_kernel()"]
+        FACTORY[IpcExecutorFactory\nprocess_table + event_bus]
+        PROC[ProcHandler]
+        KSRV[KernelIpcServer\nkernel.sock]
+        FACTORY --> PROC --> KSRV
+    end
+
+    subgraph P3["phase3_services()"]
+        ROUTER[RouterIpcServer\nrouter.sock]
+        EXEC[ExecIpcServer\nexec.sock]
+        LLM[LlmIpcServer\nllm.sock]
+        WD[ServiceWatchdog]
+    end
+
+    subgraph P4["phase4_atp_gateway()"]
+        AUTH[AuthService]
+        TSTORE[ATPTokenStore]
+        GW[GatewayServer\nport 7700/7701]
+    end
+
+    EB -->|Arc::clone| FACTORY
+    EB -->|Arc::clone| GW
+    PT --> FACTORY
+    MK --> TSTORE
+    VFS --> P3
+```
+
+---
+
+## Boot Phase Details
 
 ### Environment Variables
 
@@ -98,28 +182,19 @@ Phase 1 also starts:
 **Implementation note:** All Phase 1 VFS writes call `MemFs::write()` directly — no syscall
 layer, no agent permissions. These are kernel-internal writes.
 
-### Phase 2 — Read Config
+### Phase 2 — Read Config + Kernel IPC
 
 - Read `AVIX_ROOT/etc/kernel.yaml`
 - Hot-swap memfs driver if `storage.driver ≠ local`
 - Read `AVIX_ROOT/etc/auth.conf` — replace bootstrap auth with full policy
 - Load `AVIX_MASTER_KEY` from configured source → held in memory only; **env var zeroed immediately**
 - Validate — halt with structured error on any failure
+- Create `IpcExecutorFactory` (with shared `AtpEventBus`)
+- Start `KernelIpcServer` on `kernel.sock`
 
-### The Pivot — Re-exec Handoff
+### Phase 3 — Service Boot
 
-```
-avix runtime forks:
-  router.svc  → PID 2  (inherits router.sock fd)
-  auth.svc    → PID 3  (inherits serialised auth state)
-  logger.svc  → PID 4  (inherits open log fd)
-  memfs.svc   → PID 5  (inherits all open file handles)
-
-runtime becomes supervisor (PID 1):
-  owns: process table, signal dispatch, re-exec of failed built-ins
-```
-
-### Phase 4 — Service Boot
+Built-in and installed services start in dependency order:
 
 ```
 Ring-1 (built-in, checksum-verified):
@@ -149,6 +224,36 @@ Agents:
 ```
 
 Installed services fail independently — a broken service does not prevent boot.
+
+### Phase 3.5 — Re-adopt Orphaned Agents
+
+The kernel reads `agents.yaml` and re-adopts any agent processes that were running before
+a restart. Re-adopted agents are added to the process table; their `/proc/` state files
+are still on disk from the prior session.
+
+### Phase 4 — ATP Gateway
+
+- Parse `auth.conf`, create `AuthService` and `ATPTokenStore`
+- Clone the shared `AtpEventBus` (same instance as `IpcExecutorFactory`)
+- Create `GatewayServer` with both
+- `tokio::spawn(server.run(test_mode))` — gateway is now live on ports 7700/7701
+
+The shared `AtpEventBus` is the critical link: agent output events published by
+`IpcExecutorFactory` during agent execution are immediately available to all connected
+ATP clients through the broadcast channel.
+
+### The Pivot — Re-exec Handoff
+
+```
+avix runtime forks:
+  router.svc  → PID 2  (inherits router.sock fd)
+  auth.svc    → PID 3  (inherits serialised auth state)
+  logger.svc  → PID 4  (inherits open log fd)
+  memfs.svc   → PID 5  (inherits all open file handles)
+
+runtime becomes supervisor (PID 1):
+  owns: process table, signal dispatch, re-exec of failed built-ins
+```
 
 ---
 
@@ -342,8 +447,6 @@ sees a password prompt — "passwordless feel" achieved via OS keychain, not an 
 
 ---
 
----
-
 ## avix config reload
 
 Reloads `kernel.yaml` and `auth.conf` from disk into a running avix instance without
@@ -385,3 +488,6 @@ winning value for every parameter and the source that provided it.
 - `phase1::run` must complete and be logged before Phase 2 (`AVIX_MASTER_KEY` loading) starts.
 - `avix config init` uses a `write_if_absent(path, content)` helper — only writes if the file
   does not already exist, ensuring idempotency without needing a `--force` flag.
+- `AtpEventBus` is created in `bootstrap_with_root` and held on `Runtime`. Both
+  `IpcExecutorFactory` (phase 2) and `GatewayServer` (phase 4) receive `Arc::clone` of the
+  same instance. This is the critical wiring that allows agent output to reach ATP clients.

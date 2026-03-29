@@ -176,6 +176,40 @@ Category 3 (transparent) behaviours run automatically within the loop:
 - Snapshot triggers on `SIGSAVE`
 - Tool chain depth enforcement
 
+```mermaid
+flowchart TD
+    START([run_with_client\ncalled]) --> REFRESH[refresh_tool_list]
+    REFRESH --> RENEW[maybe_renew_token]
+    RENEW --> EXPIRY{token expired?}
+    EXPIRY -->|yes| ERR_EXPIRE[Err: token expired]
+    EXPIRY -->|no| LLM_CALL[llm/complete via IpcLlmClient\nJSON-RPC 2.0 → llm.sock]
+    LLM_CALL --> RESP[LlmCompleteResponse]
+    RESP --> INTERPRET[interpret_stop_reason]
+    INTERPRET --> STOP_REASON{stop reason?}
+    STOP_REASON -->|end_turn / max_tokens| RETURN[Ok TurnResult text]
+    STOP_REASON -->|summarise| SUMMARISE[Ok TurnResult\nsummarised text]
+    STOP_REASON -->|tool_use| CHAIN{chain_count >\nmax_tool_chain?}
+    CHAIN -->|yes| ERR_CHAIN[Err: chain limit exceeded]
+    CHAIN -->|no| FOR_EACH[for each tool call]
+    FOR_EACH --> CAP_CHECK{capability\nvalidation}
+    CAP_CHECK -->|denied| TOOL_ERR[inject error result]
+    CAP_CHECK -->|pass| HIL_CHECK{HIL required\nfor this tool?}
+    HIL_CHECK -->|yes, no kernel| TOOL_DENY[inject HIL pending result]
+    HIL_CHECK -->|no| EMIT_CALL[agent_tool_call ATP event]
+    EMIT_CALL --> DISPATCH{cat2 tool?}
+    DISPATCH -->|yes| CAT2[dispatch_category2\nlocal kernel call]
+    DISPATCH -->|no| ROUTER[dispatch_via_router\nJSON-RPC 2.0 → router.sock]
+    CAT2 & ROUTER --> RESULT[tool result]
+    RESULT --> EMIT_RESULT[agent_tool_result ATP event]
+    EMIT_RESULT --> TOOL_ERR
+    TOOL_ERR --> MORE_CALLS{more calls?}
+    MORE_CALLS -->|yes| FOR_EACH
+    MORE_CALLS -->|no| APPEND[append tool_results to messages]
+    APPEND --> REFRESH
+
+    RETURN --> FACTORY[IpcExecutorFactory\npublishes agent_output\nagent_status stopped\nagent_exit 0]
+```
+
 ---
 
 ## Signals
@@ -209,7 +243,60 @@ Signals are delivered as JSON-RPC notifications on the agent's per-PID socket
 
 ---
 
+## ATP Event Emission
+
+`RuntimeExecutor` and `IpcExecutorFactory` publish events to `AtpEventBus` throughout
+the agent lifecycle. The bus is a tokio `broadcast::Sender` — all connected WebSocket
+clients with the right subscription and role receive these events in real time.
+
+```mermaid
+sequenceDiagram
+    participant F as IpcExecutorFactory
+    participant RE as RuntimeExecutor
+    participant BUS as AtpEventBus
+    participant C as ATP Clients
+
+    F->>RE: spawn_with_registry()
+    F->>RE: .with_event_bus(bus)
+    F->>BUS: agent_status(session, pid, "running")
+    BUS-->>C: event: agent.status {status:running}
+
+    loop LLM turns
+        RE->>BUS: agent_tool_call(session, pid, call_id, tool, args)
+        BUS-->>C: event: agent.tool_call
+        Note over RE: dispatch to router.svc / llm.svc
+        RE->>BUS: agent_tool_result(session, pid, call_id, tool, result)
+        BUS-->>C: event: agent.tool_result
+    end
+
+    F->>BUS: agent_output(session, pid, text)
+    BUS-->>C: event: agent.output {text:"..."}
+    F->>BUS: agent_status(session, pid, "stopped")
+    BUS-->>C: event: agent.status {status:stopped}
+    F->>BUS: agent_exit(session, pid, 0)
+    BUS-->>C: event: agent.exit {exitCode:0}
+```
+
+On crash, `IpcExecutorFactory` publishes `agent.status = "crashed"` and `agent.exit(1)`
+instead of the success path.
+
+---
+
 ## Agent Status Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: kernel/proc/spawn\nassign PID
+    pending --> running: SIGSTART\nwrite /proc/pid/status.yaml
+    running --> paused: SIGPAUSE\n(HIL or manual)
+    paused --> running: SIGRESUME
+    running --> stopped: SIGKILL\n(deregister cat2 tools)
+    running --> completed: task complete\n(LLM returns no tool calls)
+    running --> crashed: runtime error
+    stopped --> [*]
+    completed --> [*]
+    crashed --> [*]
+```
 
 ```
 kernel.proc/spawn
