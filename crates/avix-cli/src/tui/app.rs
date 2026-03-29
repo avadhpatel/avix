@@ -90,12 +90,8 @@ async fn dispatch_event(
         EventKind::AgentExit => {
             if let EventBody::AgentExit(body) = event.body {
                 debug!("Agent exited: pid={}", body.pid);
-                // Add notification
-                let notif = Notification::from_agent_exit(
-                    body.pid,
-                    &body.session_id,
-                    body.reason.as_deref(),
-                );
+                let session_id = event.owner_session.as_deref().unwrap_or("");
+                let notif = Notification::from_agent_exit(body.pid, session_id, None);
                 notifications.add(notif).await;
                 let _ = persistence::save_notifications(&notifications.all().await);
             }

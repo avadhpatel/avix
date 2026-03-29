@@ -132,15 +132,12 @@ pub struct SessionReadyBody {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentOutputBody {
     pub pid: u64,
-    pub session_id: String,
     pub text: String,
-    pub turn: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentStatusBody {
     pub pid: u64,
-    pub session_id: String,
     pub status: AgentStatus,
 }
 
@@ -156,9 +153,8 @@ pub enum AgentStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentExitBody {
     pub pid: u64,
-    pub session_id: String,
+    #[serde(rename = "exitCode")]
     pub exit_code: i32,
-    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
