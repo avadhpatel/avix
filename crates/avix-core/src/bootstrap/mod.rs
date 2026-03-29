@@ -12,7 +12,7 @@ use crate::gateway::event_bus::AtpEventBus;
 use crate::gateway::server::GatewayServer;
 use crate::kernel::{phase3_re_adopt, KernelIpcServer, ProcHandler};
 use crate::llm_svc::routing::RoutingEngine;
-use crate::llm_svc::service::LlmService;
+use crate::llm_svc::LlmIpcServer;
 use crate::memfs::{VfsPath, VfsRouter};
 use crate::process::table::ProcessTable;
 use crate::router::{RouterDispatcher, RouterIpcServer, ServiceRegistry};
@@ -199,13 +199,7 @@ impl Runtime {
         // VFS mounts /etc/avix → <root>/etc, so agents.yaml lives at <root>/etc/agents.yaml.
         let agents_yaml_path = self.root.join("etc/agents.yaml");
 
-        // Resolve llm.svc socket path: env override or default under runtime_dir.
-        let llm_sock = std::env::var("AVIX_LLM_SOCK")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| self.runtime_dir.join("llm.sock"));
-
         let factory = Arc::new(executor_factory::IpcExecutorFactory::new(
-            llm_sock,
             Arc::clone(&self.process_table),
         ));
 
@@ -255,22 +249,24 @@ impl Runtime {
             {
                 Ok(llm_config) => {
                     let routing = Arc::new(RoutingEngine::from_config(&llm_config));
-                    let llm_svc = Arc::new(LlmService::new(
+                    let llm_sock = self.runtime_dir.join("llm.sock");
+                    match LlmIpcServer::new(
+                        llm_sock.clone(),
                         llm_config,
                         HashMap::new(),
                         routing,
                         HashMap::new(),
-                    ));
-                    let llm_sock = std::env::var("AVIX_LLM_SOCK")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|_| self.runtime_dir.join("llm.sock"));
-                    let sock_str = llm_sock.to_string_lossy().to_string();
-                    tokio::spawn(async move {
-                        if let Err(e) = llm_svc.run(&sock_str).await {
-                            tracing::warn!(error = %e, "llm.svc exited");
+                    )
+                    .start()
+                    .await
+                    {
+                        Ok(_handle) => {
+                            tracing::info!(sock = %llm_sock.display(), "llm.svc started");
                         }
-                    });
-                    tracing::info!(sock = %llm_sock.display(), "llm.svc started");
+                        Err(e) => {
+                            tracing::warn!(error = %e, "llm.svc failed to start");
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "invalid etc/llm.yaml — llm.svc not started");

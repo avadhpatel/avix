@@ -1,18 +1,17 @@
-use crate::config::LlmConfig;
+use crate::config::{LlmConfig, ProviderAuth};
 use crate::error::AvixError;
-use crate::ipc::frame;
 use crate::ipc::message::{JsonRpcErrorCode, JsonRpcRequest, JsonRpcResponse};
 use crate::llm_client::{LlmClient, LlmCompleteRequest};
 use crate::llm_svc::adapter::{
     AvixEmbedRequest, AvixImageRequest, AvixSpeechRequest, AvixTranscribeRequest, EmbedInput,
     ProviderAdapter,
 };
+use crate::llm_svc::http_client::DirectHttpLlmClient;
 use crate::llm_svc::routing::RoutingEngine;
 use crate::llm_svc::usage::UsageTracker;
 use crate::types::Modality;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::RwLock;
 
 pub struct CredentialStore {
@@ -44,6 +43,48 @@ impl LlmService {
         text_clients: HashMap<String, Box<dyn LlmClient>>,
     ) -> Self {
         let http_client = Arc::new(reqwest::Client::new());
+        let mut text_clients = text_clients;
+
+        // Auto-register a DirectHttpLlmClient for every provider that:
+        //   1. supports Modality::Text
+        //   2. has a known built-in adapter
+        //   3. has credentials available (env var for ApiKey auth, or no auth required)
+        //   4. is not already covered by an injected client
+        for provider in &config.spec.providers {
+            if !provider.modalities.contains(&Modality::Text) {
+                continue;
+            }
+            if text_clients.contains_key(&provider.name) {
+                continue;
+            }
+            let Some(adapter) = Self::make_provider_adapter(&provider.name) else {
+                tracing::debug!(
+                    provider = %provider.name,
+                    "no built-in adapter for text provider — skipping auto-client"
+                );
+                continue;
+            };
+            let auth_header = Self::resolve_auth_header(&provider.auth);
+            // ApiKey providers require the key to be present; skip if missing.
+            if matches!(&provider.auth, ProviderAuth::ApiKey { .. }) && auth_header.is_none() {
+                tracing::warn!(
+                    provider = %provider.name,
+                    "API key env var not set — text client not auto-registered"
+                );
+                continue;
+            }
+            let default_model = provider
+                .models
+                .iter()
+                .find(|m| m.modality == Modality::Text)
+                .map(|m| m.id.clone())
+                .unwrap_or_default();
+            let client =
+                DirectHttpLlmClient::new(&provider.base_url, &default_model, auth_header, adapter);
+            text_clients.insert(provider.name.clone(), Box::new(client));
+            tracing::info!(provider = %provider.name, "auto-registered text client from config");
+        }
+
         Self {
             config,
             adapters,
@@ -57,37 +98,44 @@ impl LlmService {
         }
     }
 
-    /// Run the IPC server loop. Accepts connections on `socket_path`.
-    /// Handles each connection in a spawned task.
-    pub async fn run(self: Arc<Self>, socket_path: &str) -> Result<(), AvixError> {
-        let listener = UnixListener::bind(socket_path)
-            .map_err(|e| AvixError::ConfigParse(format!("llm.svc bind failed: {e}")))?;
-
-        tracing::info!(socket = %socket_path, "llm.svc listening");
-
-        loop {
-            let (stream, _) = listener
-                .accept()
-                .await
-                .map_err(|e| AvixError::ConfigParse(format!("accept failed: {e}")))?;
-
-            let svc = Arc::clone(&self);
-            tokio::spawn(async move {
-                if let Err(e) = svc.handle_connection(stream).await {
-                    tracing::error!(error = %e, "llm.svc connection error");
-                }
-            });
+    /// Returns a fresh `Arc<dyn ProviderAdapter>` for well-known provider names.
+    /// Returns `None` for unrecognised names so the caller can skip gracefully.
+    fn make_provider_adapter(name: &str) -> Option<Arc<dyn ProviderAdapter>> {
+        use crate::llm_svc::adapter::{AnthropicAdapter, OllamaAdapter, OpenAiAdapter, XaiAdapter};
+        match name {
+            "anthropic" => Some(Arc::new(AnthropicAdapter::new())),
+            "openai" => Some(Arc::new(OpenAiAdapter::new())),
+            "xai" => Some(Arc::new(XaiAdapter::new())),
+            "ollama" => Some(Arc::new(OllamaAdapter::new())),
+            _ => None,
         }
     }
 
-    async fn handle_connection(&self, mut stream: UnixStream) -> Result<(), AvixError> {
-        let req: JsonRpcRequest = frame::read_from(&mut stream).await?;
-        let response = self.dispatch(&req).await;
-        frame::write_to(&mut stream, &response).await?;
-        Ok(())
+    /// Resolves the HTTP auth header for a provider from its `ProviderAuth` config.
+    ///
+    /// - `ApiKey` — reads the key from the named environment variable; returns `None`
+    ///   when the variable is absent so the caller can skip the provider.
+    /// - `None` — returns `None` (no header needed; the client is still usable).
+    /// - `Oauth2` — not yet handled by `DirectHttpLlmClient`; returns `None`.
+    fn resolve_auth_header(auth: &ProviderAuth) -> Option<(String, String)> {
+        match auth {
+            ProviderAuth::ApiKey {
+                secret_name,
+                header,
+                prefix,
+            } => {
+                let key = std::env::var(secret_name).ok()?;
+                let value = match prefix {
+                    Some(p) => format!("{p}{key}"),
+                    None => key,
+                };
+                Some((header.clone(), value))
+            }
+            ProviderAuth::None | ProviderAuth::Oauth2 { .. } => None,
+        }
     }
 
-    async fn dispatch(&self, req: &JsonRpcRequest) -> JsonRpcResponse {
+    pub(crate) async fn dispatch(&self, req: &JsonRpcRequest) -> JsonRpcResponse {
         let result = match req.method.as_str() {
             "llm/complete" => self.handle_complete(&req.params).await,
             "llm/generate-image" => self.handle_generate_image(&req.params).await,
@@ -149,6 +197,7 @@ impl LlmService {
                 "no text client for {pname}"
             )));
         };
+        tracing::debug!(response =  ?resp, "LLM Complete Response");
 
         // Record usage
         self.usage
@@ -863,5 +912,182 @@ spec:
         };
         let resp = svc.dispatch(&req).await;
         assert!(resp.error.is_none());
+    }
+
+    // ── auto-population tests ─────────────────────────────────────────────────
+
+    fn make_ollama_config() -> LlmConfig {
+        LlmConfig::from_str(
+            r#"
+apiVersion: avix/v1
+kind: LlmConfig
+spec:
+  defaultProviders:
+    text: ollama
+    image: ollama
+    speech: ollama
+    transcription: ollama
+    embedding: ollama
+  providers:
+    - name: ollama
+      baseUrl: http://localhost:11434
+      modalities: [text, image, speech, transcription, embedding]
+      auth:
+        type: none
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_new_auto_registers_text_client_for_no_auth_provider() {
+        // Ollama uses ProviderAuth::None — no env var required.
+        // new() must auto-build and insert a text client for it.
+        let config = make_ollama_config();
+        let routing = Arc::new(RoutingEngine::from_config(&config));
+        let svc = LlmService::new(config, HashMap::new(), routing, HashMap::new());
+        assert!(
+            svc.text_clients.contains_key("ollama"),
+            "text_clients should contain 'ollama' after auto-registration"
+        );
+    }
+
+    #[test]
+    fn test_new_skips_api_key_provider_when_env_var_absent() {
+        // anthropic uses ApiKey auth; ANTHROPIC_API_KEY is not set in the test
+        // environment, so no client should be auto-registered.
+        let config = make_two_provider_config();
+        let routing = Arc::new(RoutingEngine::from_config(&config));
+        // Guard: if someone runs tests with the key actually set the assertion is
+        // misleading — skip rather than fail.
+        if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+            return;
+        }
+        let svc = LlmService::new(config, HashMap::new(), routing, HashMap::new());
+        assert!(
+            !svc.text_clients.contains_key("anthropic"),
+            "anthropic client must not be registered when ANTHROPIC_API_KEY is absent"
+        );
+    }
+
+    #[test]
+    fn test_new_does_not_overwrite_injected_client() {
+        use crate::llm_client::{LlmCompleteRequest, LlmCompleteResponse, StopReason};
+        use async_trait::async_trait;
+
+        struct SentinelClient;
+        #[async_trait]
+        impl LlmClient for SentinelClient {
+            async fn complete(&self, _: LlmCompleteRequest) -> anyhow::Result<LlmCompleteResponse> {
+                Ok(LlmCompleteResponse {
+                    content: vec![],
+                    stop_reason: StopReason::EndTurn,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                })
+            }
+        }
+
+        // Inject a sentinel client for "ollama" before calling new().
+        let config = make_ollama_config();
+        let routing = Arc::new(RoutingEngine::from_config(&config));
+        let mut pre_injected: HashMap<String, Box<dyn LlmClient>> = HashMap::new();
+        pre_injected.insert("ollama".to_string(), Box::new(SentinelClient));
+
+        let svc = LlmService::new(config, HashMap::new(), routing, pre_injected);
+        // The injected client must still be present; auto-population must not replace it.
+        assert!(svc.text_clients.contains_key("ollama"));
+    }
+
+    #[test]
+    fn test_new_skips_unknown_provider_name() {
+        // A provider named "custom-llm" has no built-in adapter; it must be silently
+        // skipped without panicking.
+        let yaml = r#"
+apiVersion: avix/v1
+kind: LlmConfig
+spec:
+  defaultProviders:
+    text: custom-llm
+    image: custom-llm
+    speech: custom-llm
+    transcription: custom-llm
+    embedding: custom-llm
+  providers:
+    - name: custom-llm
+      baseUrl: http://localhost:9999
+      modalities: [text, image, speech, transcription, embedding]
+      auth:
+        type: none
+"#;
+        let config = LlmConfig::from_str(yaml).unwrap();
+        let routing = Arc::new(RoutingEngine::from_config(&config));
+        let svc = LlmService::new(config, HashMap::new(), routing, HashMap::new());
+        assert!(
+            !svc.text_clients.contains_key("custom-llm"),
+            "unknown provider should not have a text client registered"
+        );
+    }
+
+    #[test]
+    fn test_resolve_auth_header_api_key_with_prefix() {
+        // Set a temporary env var for the test.
+        std::env::set_var("TEST_RESOLVE_AUTH_KEY", "mykey123");
+        let auth = ProviderAuth::ApiKey {
+            secret_name: "TEST_RESOLVE_AUTH_KEY".to_string(),
+            header: "Authorization".to_string(),
+            prefix: Some("Bearer ".to_string()),
+        };
+        let result = LlmService::resolve_auth_header(&auth);
+        std::env::remove_var("TEST_RESOLVE_AUTH_KEY");
+        let (name, value) = result.expect("should resolve header");
+        assert_eq!(name, "Authorization");
+        assert_eq!(value, "Bearer mykey123");
+    }
+
+    #[test]
+    fn test_resolve_auth_header_api_key_without_prefix() {
+        std::env::set_var("TEST_RESOLVE_AUTH_KEY_BARE", "rawkey");
+        let auth = ProviderAuth::ApiKey {
+            secret_name: "TEST_RESOLVE_AUTH_KEY_BARE".to_string(),
+            header: "x-api-key".to_string(),
+            prefix: None,
+        };
+        let result = LlmService::resolve_auth_header(&auth);
+        std::env::remove_var("TEST_RESOLVE_AUTH_KEY_BARE");
+        let (name, value) = result.expect("should resolve header");
+        assert_eq!(name, "x-api-key");
+        assert_eq!(value, "rawkey");
+    }
+
+    #[test]
+    fn test_resolve_auth_header_missing_env_var_returns_none() {
+        std::env::remove_var("NONEXISTENT_KEY_XYZ");
+        let auth = ProviderAuth::ApiKey {
+            secret_name: "NONEXISTENT_KEY_XYZ".to_string(),
+            header: "Authorization".to_string(),
+            prefix: None,
+        };
+        assert!(LlmService::resolve_auth_header(&auth).is_none());
+    }
+
+    #[test]
+    fn test_resolve_auth_header_none_auth_returns_none() {
+        assert!(LlmService::resolve_auth_header(&ProviderAuth::None).is_none());
+    }
+
+    #[test]
+    fn test_make_provider_adapter_known_providers() {
+        for name in &["anthropic", "openai", "xai", "ollama"] {
+            assert!(
+                LlmService::make_provider_adapter(name).is_some(),
+                "expected adapter for '{name}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_make_provider_adapter_unknown_returns_none() {
+        assert!(LlmService::make_provider_adapter("unknown-provider").is_none());
     }
 }

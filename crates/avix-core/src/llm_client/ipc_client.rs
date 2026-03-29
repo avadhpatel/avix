@@ -71,6 +71,8 @@ impl LlmClient for IpcLlmClient {
             .result
             .ok_or_else(|| anyhow::anyhow!("llm.svc returned empty result"))?;
 
+        tracing::debug!(result = ?result, "LLM.svc Result");
+
         // The result from llm.svc matches LlmCompleteResponse fields
         let resp: LlmCompleteResponse = serde_json::from_value(result)
             .map_err(|e| anyhow::anyhow!("failed to deserialize llm.svc response: {e}"))?;

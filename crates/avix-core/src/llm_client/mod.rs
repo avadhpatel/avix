@@ -32,6 +32,7 @@ impl FromStr for StopReason {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LlmCompleteRequest {
     pub model: String,
     pub messages: Vec<serde_json::Value>,
@@ -41,6 +42,7 @@ pub struct LlmCompleteRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LlmCompleteResponse {
     pub content: Vec<serde_json::Value>,
     pub stop_reason: StopReason,

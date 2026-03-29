@@ -1323,6 +1323,8 @@ impl RuntimeExecutor {
                 .await
                 .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
+            tracing::debug!(response = ?response, "RuntimeExecutor LLM Response");
+
             // Track token usage and context size from this response
             self.tokens_consumed = self
                 .tokens_consumed
