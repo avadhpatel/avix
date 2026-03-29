@@ -108,7 +108,9 @@ pub trait LlmClient: Send + Sync {
         req: LlmCompleteRequest,
     ) -> anyhow::Result<BoxStream<'static, anyhow::Result<StreamChunk>>> {
         let _ = req;
-        Err(anyhow::anyhow!("streaming not supported by this LLM client"))
+        Err(anyhow::anyhow!(
+            "streaming not supported by this LLM client"
+        ))
     }
 }
 
@@ -152,7 +154,9 @@ mod tests {
 
     #[test]
     fn stream_chunk_serde_text_delta() {
-        let chunk = StreamChunk::TextDelta { text: "hello".into() };
+        let chunk = StreamChunk::TextDelta {
+            text: "hello".into(),
+        };
         let v = serde_json::to_value(&chunk).unwrap();
         assert_eq!(v["type"], "text_delta");
         assert_eq!(v["text"], "hello");
@@ -190,7 +194,9 @@ mod tests {
         let v2 = serde_json::to_value(&delta).unwrap();
         assert_eq!(v2["type"], "tool_call_args_delta");
 
-        let complete = StreamChunk::ToolCallComplete { call_id: "c1".into() };
+        let complete = StreamChunk::ToolCallComplete {
+            call_id: "c1".into(),
+        };
         let v3 = serde_json::to_value(&complete).unwrap();
         assert_eq!(v3["type"], "tool_call_complete");
     }
@@ -236,8 +242,14 @@ mod tests {
             turn_id: uuid::Uuid::nil(),
         };
         let v = serde_json::to_value(&req).unwrap();
-        assert!(v.get("max_tokens").is_some(), "expected snake_case field max_tokens");
-        assert!(v.get("maxTokens").is_none(), "must not produce camelCase maxTokens");
+        assert!(
+            v.get("max_tokens").is_some(),
+            "expected snake_case field max_tokens"
+        );
+        assert!(
+            v.get("maxTokens").is_none(),
+            "must not produce camelCase maxTokens"
+        );
     }
 
     #[test]
@@ -252,7 +264,10 @@ mod tests {
         assert_eq!(v["stop_reason"], "end_turn");
         assert_eq!(v["input_tokens"], 10);
         assert_eq!(v["output_tokens"], 20);
-        assert!(v.get("stopReason").is_none(), "must not produce camelCase stopReason");
+        assert!(
+            v.get("stopReason").is_none(),
+            "must not produce camelCase stopReason"
+        );
         assert!(v.get("inputTokens").is_none());
         assert!(v.get("outputTokens").is_none());
     }

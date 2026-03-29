@@ -7,10 +7,10 @@ use tokio::sync::Mutex;
 
 use crate::error::AvixError;
 use crate::gateway::event_bus::AtpEventBus;
-use crate::llm_client::StreamChunk;
 use crate::kernel::resource_request::{
     KernelResourceHandler, ResourceGrant, ResourceItem, ResourceRequest, Urgency,
 };
+use crate::llm_client::StreamChunk;
 use crate::llm_client::{LlmCompleteResponse, StopReason};
 use crate::llm_svc::adapter::AvixToolCall;
 use crate::memfs::{VfsPath, VfsRouter};
@@ -1351,7 +1351,10 @@ impl RuntimeExecutor {
                 StreamChunk::ToolCallStart { call_id, name } => {
                     pending_calls.insert(call_id, (name, String::new()));
                 }
-                StreamChunk::ToolCallArgsDelta { call_id, args_delta } => {
+                StreamChunk::ToolCallArgsDelta {
+                    call_id,
+                    args_delta,
+                } => {
                     if let Some(entry) = pending_calls.get_mut(&call_id) {
                         entry.1.push_str(&args_delta);
                     }

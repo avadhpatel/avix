@@ -149,17 +149,12 @@ mod tests {
         use futures::stream;
 
         // Line split: "dat" in first chunk, "a: hello\n" in second.
-        let chunks: Vec<reqwest::Result<Bytes>> = vec![
-            Ok(Bytes::from("dat")),
-            Ok(Bytes::from("a: hello\n")),
-        ];
+        let chunks: Vec<reqwest::Result<Bytes>> =
+            vec![Ok(Bytes::from("dat")), Ok(Bytes::from("a: hello\n"))];
         let stream = stream::iter(chunks);
         let lines: Vec<_> = sse_lines(stream).collect().await;
 
         assert_eq!(lines.len(), 1);
-        assert_eq!(
-            lines[0].as_ref().unwrap(),
-            &SseLine::Data("hello".into())
-        );
+        assert_eq!(lines[0].as_ref().unwrap(), &SseLine::Data("hello".into()));
     }
 }

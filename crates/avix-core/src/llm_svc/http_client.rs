@@ -1,4 +1,6 @@
-use crate::llm_client::{LlmClient, LlmCompleteRequest, LlmCompleteResponse, StopReason, StreamChunk};
+use crate::llm_client::{
+    LlmClient, LlmCompleteRequest, LlmCompleteResponse, StopReason, StreamChunk,
+};
 use crate::llm_svc::adapter::{
     AvixCompleteRequest, AvixToolDescriptor, CompleteMetadata, ProviderAdapter,
 };
@@ -283,7 +285,8 @@ impl LlmClient for DirectHttpLlmClient {
                     }
                     SseLine::Data(data) => {
                         let event_name = last_event.as_deref();
-                        let result = adapter.parse_stream_event(event_name, &data)
+                        let result = adapter
+                            .parse_stream_event(event_name, &data)
                             .map_err(|e| anyhow::anyhow!("SSE parse error: {e}"));
                         *last_event = None;
                         match result {

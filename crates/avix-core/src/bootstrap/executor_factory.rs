@@ -59,17 +59,16 @@ impl AgentExecutorFactory for IpcExecutorFactory {
                 session_id.clone(),
             );
 
-            let mut executor =
-                match RuntimeExecutor::spawn_with_registry(params, registry).await {
-                    Ok(e) => e,
-                    Err(err) => {
-                        warn!(pid = pid.as_u32(), error = %err, "executor spawn failed");
-                        let _ = process_table.set_status(pid, ProcessStatus::Crashed).await;
-                        event_bus.agent_status(&session_id, pid.as_u32(), "crashed");
-                        event_bus.agent_exit(&session_id, pid.as_u32(), 1);
-                        return;
-                    }
-                };
+            let mut executor = match RuntimeExecutor::spawn_with_registry(params, registry).await {
+                Ok(e) => e,
+                Err(err) => {
+                    warn!(pid = pid.as_u32(), error = %err, "executor spawn failed");
+                    let _ = process_table.set_status(pid, ProcessStatus::Crashed).await;
+                    event_bus.agent_status(&session_id, pid.as_u32(), "crashed");
+                    event_bus.agent_exit(&session_id, pid.as_u32(), 1);
+                    return;
+                }
+            };
 
             // Wire the event bus so tool-call/result events are published mid-turn.
             executor = executor.with_event_bus(Arc::clone(&event_bus));

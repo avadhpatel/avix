@@ -126,8 +126,13 @@ impl LlmClient for IpcLlmClient {
 
                 if is_final {
                     if let Some(err) = raw.get("error") {
-                        let msg = err["message"].as_str().unwrap_or("unknown error").to_string();
-                        let _ = tx.send(Err(anyhow::anyhow!("llm.svc stream error: {msg}"))).await;
+                        let msg = err["message"]
+                            .as_str()
+                            .unwrap_or("unknown error")
+                            .to_string();
+                        let _ = tx
+                            .send(Err(anyhow::anyhow!("llm.svc stream error: {msg}")))
+                            .await;
                     }
                     return; // Channel dropped → stream ends for consumer.
                 }
@@ -143,7 +148,9 @@ impl LlmClient for IpcLlmClient {
                         }
                         Err(e) => {
                             let _ = tx
-                                .send(Err(anyhow::anyhow!("failed to deserialize StreamChunk: {e}")))
+                                .send(Err(anyhow::anyhow!(
+                                    "failed to deserialize StreamChunk: {e}"
+                                )))
                                 .await;
                             return;
                         }

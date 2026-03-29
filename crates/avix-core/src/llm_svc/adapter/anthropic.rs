@@ -176,8 +176,7 @@ impl ProviderAdapter for AnthropicAdapter {
                         // We surface the delta with a sentinel call_id; the executor
                         // resolves it by index.
                         let index = v["index"].as_u64().unwrap_or(0).to_string();
-                        let args_delta =
-                            delta["partial_json"].as_str().unwrap_or("").to_string();
+                        let args_delta = delta["partial_json"].as_str().unwrap_or("").to_string();
                         if args_delta.is_empty() {
                             Ok(None)
                         } else {

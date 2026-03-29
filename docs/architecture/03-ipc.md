@@ -131,6 +131,28 @@ concurrency reasoning trivial.
 **Long-running tools** return a `job_id` immediately. Progress is emitted via `jobs.svc`.
 The caller polls or subscribes to job events rather than holding the connection open.
 
+### Streaming extension: `serve_bidir()`
+
+For streaming calls (`llm/stream_complete`), the connection model is extended: **one
+connection per logical streaming call, held open until the stream ends**. There is no
+multiplexing — each call still gets its own connection, but the server writes multiple
+notification frames before the final response.
+
+`IpcServer` exposes a second server mode for this pattern:
+
+```rust
+// Standard: handler receives message, returns optional response
+pub async fn serve<F>(self, handler: F)
+
+// Streaming: handler also receives OwnedWriteHalf to push notifications
+pub async fn serve_bidir<F>(self, handler: F)
+```
+
+In `serve_bidir`, the connection is split into read and write halves at accept time.
+The write half is passed to the handler so it can push `JsonRpcNotification` frames
+before writing the final `JsonRpcResponse`. This is currently used only by `llm.svc`
+for `llm/stream_complete`. See **[13-streaming.md](13-streaming.md)**.
+
 ---
 
 ## JSON-RPC 2.0 Message Format

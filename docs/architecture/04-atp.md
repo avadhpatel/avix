@@ -313,14 +313,15 @@ seen before on the same WebSocket connection returns `EPARSE` immediately.
 
 ## Server-Push Events
 
-The 20 server-push event kinds with their scoping rules:
+The 21 server-push event kinds with their scoping rules:
 
 | Event | Min role | Owner-scoped¹ | When emitted | Source |
 |-------|----------|:---:|---|---|
 | `session.ready` | `guest` | yes | WebSocket upgrade succeeded | gateway |
 | `session.closing` | `guest` | yes | Session is being terminated | gateway |
 | `token.expiring` | `guest` | yes | Bearer token within renewal window | gateway |
-| `agent.output` | `user` | yes | LLM turn complete — final text | IpcExecutorFactory |
+| `agent.output` | `user` | yes | LLM turn complete — full accumulated text | IpcExecutorFactory |
+| `agent.output.chunk` | `user` | yes | One token delta during a streaming LLM turn | RuntimeExecutor |
 | `agent.status` | `user` | yes | Agent status changed | IpcExecutorFactory |
 | `agent.tool_call` | `user` | yes | Agent dispatching a tool call | RuntimeExecutor |
 | `agent.tool_result` | `user` | yes | Tool call result received | RuntimeExecutor |
@@ -394,8 +395,12 @@ sequenceDiagram
     BUS-->>C: ATP event {agent.status, pid:57, status:running}
 
     loop LLM turn loop
-        RE->>LLM: JSON-RPC llm/complete (IpcLlmClient)
-        LLM-->>RE: LlmCompleteResponse
+        RE->>LLM: JSON-RPC llm/stream_complete (IpcLlmClient)
+        note over LLM: streams llm.stream.chunk notifications
+        LLM-->>RE: StreamChunk (many, via IPC notifications)
+        RE->>BUS: agent_output_chunk(session, 57, turn_id, delta, seq, false)
+        BUS-->>C: ATP event {agent.output.chunk, text_delta:"..."}
+        LLM-->>RE: final JsonRpcResponse (summary)
         alt has tool calls
             loop each tool call
                 RE->>BUS: agent_tool_call(session, 57, call_id, tool, args)
@@ -415,6 +420,9 @@ sequenceDiagram
         end
     end
 ```
+
+> For the full streaming pipeline detail (SSE parsing, IPC notification protocol,
+> `turn_id` correlation) see **[13-streaming.md](13-streaming.md)**.
 
 ---
 

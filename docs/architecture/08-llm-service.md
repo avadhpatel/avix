@@ -261,16 +261,17 @@ the `-32010` to `-32029` range.
 `llm.svc` exposes the following tools under the `llm/` namespace. All are callable via
 IPC (JSON-RPC 2.0, 4-byte length-prefixed framing, fresh connection per call — ADR-05).
 
-| Tool              | Capability scope  | Description                                             |
-|-------------------|-------------------|---------------------------------------------------------|
-| `llm/complete`    | `llm:inference`   | Text, vision, and document completion                   |
-| `llm/embed`       | `llm:embedding`   | Produce a vector embedding for the given input          |
-| `llm/image`       | `llm:image`       | Generate an image from a text prompt                    |
-| `llm/speech`      | `llm:speech`      | Convert text to speech audio                            |
-| `llm/transcribe`  | `llm:speech`      | Transcribe audio to text (speech-to-text)               |
-| `llm/status`      | `llm:inference`   | Return health summary for all configured providers      |
-| `llm/models`      | `llm:inference`   | List available models, optionally filtered by modality  |
-| `llm/usage`       | `llm:inference`   | Return cumulative token and request counters            |
+| Tool                   | Capability scope  | Description                                             |
+|------------------------|-------------------|---------------------------------------------------------|
+| `llm/complete`         | `llm:inference`   | Text, vision, and document completion (blocking)        |
+| `llm/stream_complete`  | `llm:inference`   | Streaming text completion — returns `llm.stream.chunk` notifications then final response |
+| `llm/embed`            | `llm:embedding`   | Produce a vector embedding for the given input          |
+| `llm/image`            | `llm:image`       | Generate an image from a text prompt                    |
+| `llm/speech`           | `llm:speech`      | Convert text to speech audio                            |
+| `llm/transcribe`       | `llm:speech`      | Transcribe audio to text (speech-to-text)               |
+| `llm/status`           | `llm:inference`   | Return health summary for all configured providers      |
+| `llm/models`           | `llm:inference`   | List available models, optionally filtered by modality  |
+| `llm/usage`            | `llm:inference`   | Return cumulative token and request counters            |
 
 ### `llm/complete` request schema (abbreviated)
 
@@ -298,3 +299,33 @@ IPC (JSON-RPC 2.0, 4-byte length-prefixed framing, fresh connection per call —
 
 Long-running requests (e.g., large image generation) return a `job_id` immediately.
 Progress is emitted via `jobs.svc`. The caller polls using `job/watch`.
+
+### `llm/stream_complete` — streaming variant
+
+`llm/stream_complete` accepts the same request schema as `llm/complete` plus a
+`turn_id` UUID field. Instead of a single response, the server sends multiple
+JSON-RPC **notification** frames followed by a final **response** frame over the
+same IPC connection:
+
+```
+Client writes:  {"jsonrpc":"2.0","id":"r1","method":"llm/stream_complete","params":{...,"turn_id":"uuid"}}
+
+Server writes (many):
+  {"jsonrpc":"2.0","method":"llm.stream.chunk","params":{"stream_id":"r1","chunk":{"type":"text_delta","text":"Hello"}}}
+  {"jsonrpc":"2.0","method":"llm.stream.chunk","params":{"stream_id":"r1","chunk":{"type":"text_delta","text":" world"}}}
+  ...
+
+Server writes (once, after stream ends):
+  {"jsonrpc":"2.0","id":"r1","result":{"stop_reason":"end_turn","input_tokens":512,"output_tokens":87}}
+```
+
+The connection uses `IpcServer::serve_bidir()` — one connection stays open for the
+duration of the stream (ADR-05 extended). See **[13-streaming.md](13-streaming.md)**
+for the full pipeline specification.
+
+### Provider URL correction
+
+Each provider adapter declares its own `complete_path()`. The Anthropic adapter
+returns `/v1/messages`; all other adapters return `/v1/chat/completions` (the
+OpenAI-compatible default). This replaces a previous hardcoded assumption that all
+providers used the OpenAI endpoint.

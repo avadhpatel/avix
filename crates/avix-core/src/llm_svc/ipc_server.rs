@@ -118,8 +118,11 @@ async fn handle_stream_complete(
                 {
                     input_tokens = *it;
                     output_tokens = *ot;
-                    stop_reason_str =
-                        serde_json::to_value(stop_reason).unwrap_or_default().as_str().unwrap_or("end_turn").to_string();
+                    stop_reason_str = serde_json::to_value(stop_reason)
+                        .unwrap_or_default()
+                        .as_str()
+                        .unwrap_or("end_turn")
+                        .to_string();
                 }
 
                 let notif = JsonRpcNotification::new(
@@ -189,10 +192,16 @@ spec:
         let sock = dir.path().join("llm.sock");
         let config = make_minimal_config();
         let routing = Arc::new(RoutingEngine::from_config(&config));
-        let _handle = LlmIpcServer::new(sock.clone(), config, HashMap::new(), routing, HashMap::new())
-            .start()
-            .await
-            .unwrap();
+        let _handle = LlmIpcServer::new(
+            sock.clone(),
+            config,
+            HashMap::new(),
+            routing,
+            HashMap::new(),
+        )
+        .start()
+        .await
+        .unwrap();
         assert!(sock.exists(), "socket file should exist after bind");
     }
 
@@ -219,11 +228,16 @@ spec:
 
         // Second binding on the same path must succeed (stale socket removed).
         let routing2 = Arc::new(RoutingEngine::from_config(&config));
-        let _handle2 =
-            LlmIpcServer::new(sock.clone(), config, HashMap::new(), routing2, HashMap::new())
-                .start()
-                .await
-                .expect("second bind should succeed after stale socket removal");
+        let _handle2 = LlmIpcServer::new(
+            sock.clone(),
+            config,
+            HashMap::new(),
+            routing2,
+            HashMap::new(),
+        )
+        .start()
+        .await
+        .expect("second bind should succeed after stale socket removal");
         assert!(sock.exists());
     }
 
@@ -233,11 +247,16 @@ spec:
         let sock = dir.path().join("llm_unk.sock");
         let config = make_minimal_config();
         let routing = Arc::new(RoutingEngine::from_config(&config));
-        let _handle =
-            LlmIpcServer::new(sock.clone(), config, HashMap::new(), routing, HashMap::new())
-                .start()
-                .await
-                .unwrap();
+        let _handle = LlmIpcServer::new(
+            sock.clone(),
+            config,
+            HashMap::new(),
+            routing,
+            HashMap::new(),
+        )
+        .start()
+        .await
+        .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
@@ -265,20 +284,23 @@ spec:
         let sock = dir.path().join("llm_notif.sock");
         let config = make_minimal_config();
         let routing = Arc::new(RoutingEngine::from_config(&config));
-        let _handle =
-            LlmIpcServer::new(sock.clone(), config, HashMap::new(), routing, HashMap::new())
-                .start()
-                .await
-                .unwrap();
+        let _handle = LlmIpcServer::new(
+            sock.clone(),
+            config,
+            HashMap::new(),
+            routing,
+            HashMap::new(),
+        )
+        .start()
+        .await
+        .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         use crate::ipc::frame;
         let mut conn = tokio::net::UnixStream::connect(&sock).await.unwrap();
-        let notif = IpcMessage::Notification(JsonRpcNotification::new(
-            "llm/ping",
-            serde_json::json!({}),
-        ));
+        let notif =
+            IpcMessage::Notification(JsonRpcNotification::new("llm/ping", serde_json::json!({})));
         frame::write_to(&mut conn, &notif).await.unwrap();
 
         // Server should close the write side without sending a response.

@@ -151,10 +151,7 @@ mod tests {
         // Verify the extraction logic in isolation by calling handle_message directly
         // via a notification (which returns None — just exercising the match arm).
         use crate::ipc::message::JsonRpcNotification;
-        let msg = IpcMessage::Notification(JsonRpcNotification::new(
-            "test",
-            serde_json::json!({}),
-        ));
+        let msg = IpcMessage::Notification(JsonRpcNotification::new("test", serde_json::json!({})));
         // The notification arm returns None — no panic expected.
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(handle_message(msg, make_dispatcher()));

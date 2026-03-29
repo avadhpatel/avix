@@ -185,7 +185,8 @@ These are hard rules. Violating any of them is a bug.
 | 05-capabilities.md | CapabilityToken, HIL, role hierarchy, session model |
 | 06-agents.md | RuntimeExecutor, spawn, turn loop, ATP event emission |
 | 07-services.md | Service lifecycle, `service.unit` TOML, installation pipeline, `_caller` injection, restart watchdog, secrets |
-| 08-llm-service.md | llm.svc multi-modality, provider routing |
+| 08-llm-service.md | llm.svc multi-modality, provider routing, streaming (`llm/stream_complete`) |
 | 09-runtime-executor-tools.md | Tool categories, 7-step turn loop, HIL scenarios |
+| 13-streaming.md | End-to-end LLM streaming: SSE parsing, IPC notification protocol, `StreamChunk`, `agent.output.chunk` ATP events, TUI integration |
 
 **Comprehensive narrative reference:** `docs/Avix-Architecture.md`
