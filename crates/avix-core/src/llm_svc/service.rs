@@ -177,13 +177,13 @@ impl LlmService {
             .await?;
         let pname = provider_config.name.clone();
 
-        // Build LlmCompleteRequest
+        // Build LlmCompleteRequest — all keys are snake_case on the wire.
         let llm_req = LlmCompleteRequest {
             model: model.clone(),
             messages: params["messages"].as_array().cloned().unwrap_or_default(),
             tools: params["tools"].as_array().cloned().unwrap_or_default(),
             system: params["system"].as_str().map(str::to_string),
-            max_tokens: params["maxTokens"].as_u64().unwrap_or(4096) as u32,
+            max_tokens: params["max_tokens"].as_u64().unwrap_or(4096) as u32,
         };
 
         // Use the injected text client for this provider
@@ -204,17 +204,19 @@ impl LlmService {
             .record_text(&pname, resp.input_tokens as u64, resp.output_tokens as u64)
             .await;
 
+        // Return a flat, snake_case result.  `input_tokens` and `output_tokens`
+        // are at the top level so IpcLlmClient can deserialize directly into
+        // LlmCompleteResponse.  `stop_reason` is serialised via serde to produce
+        // the correct snake_case variant string (e.g. "end_turn", not "endturn").
         Ok(serde_json::json!({
             "provider": pname,
             "model": model,
             "content": resp.content,
-            "usage": {
-                "inputTokens": resp.input_tokens,
-                "outputTokens": resp.output_tokens,
-                "totalTokens": resp.total_tokens(),
-            },
-            "stopReason": format!("{:?}", resp.stop_reason).to_lowercase(),
-            "latencyMs": 0u64,
+            "stop_reason": serde_json::to_value(&resp.stop_reason).unwrap_or_default(),
+            "input_tokens": resp.input_tokens,
+            "output_tokens": resp.output_tokens,
+            "total_tokens": resp.total_tokens(),
+            "latency_ms": 0u64,
         }))
     }
 
@@ -239,13 +241,13 @@ impl LlmService {
             provider: Some(pname.clone()),
             model: params["model"].as_str().unwrap_or("").to_string(),
             prompt: params["prompt"].as_str().unwrap_or("").to_string(),
-            negative_prompt: params["negativePrompt"].as_str().map(str::to_string),
+            negative_prompt: params["negative_prompt"].as_str().map(str::to_string),
             size: params["size"].as_str().map(str::to_string),
             style: params["style"].as_str().map(str::to_string),
             n: params["n"].as_u64().map(|n| n as u32),
             metadata: crate::llm_svc::adapter::CompleteMetadata {
-                agent_pid: params["metadata"]["agentPid"].as_u64().unwrap_or(0) as u32,
-                session_id: params["metadata"]["sessionId"]
+                agent_pid: params["metadata"]["agent_pid"].as_u64().unwrap_or(0) as u32,
+                session_id: params["metadata"]["session_id"]
                     .as_str()
                     .unwrap_or("")
                     .to_string(),
@@ -308,7 +310,7 @@ impl LlmService {
             "provider": pname,
             "model": model,
             "images": outputs,
-            "latencyMs": 0u64,
+            "latency_ms": 0u64,
         }))
     }
 
@@ -338,8 +340,8 @@ impl LlmService {
             speed: params["speed"].as_f64().map(|s| s as f32),
             stream: params["stream"].as_bool(),
             metadata: crate::llm_svc::adapter::CompleteMetadata {
-                agent_pid: params["metadata"]["agentPid"].as_u64().unwrap_or(0) as u32,
-                session_id: params["metadata"]["sessionId"]
+                agent_pid: params["metadata"]["agent_pid"].as_u64().unwrap_or(0) as u32,
+                session_id: params["metadata"]["session_id"]
                     .as_str()
                     .unwrap_or("")
                     .to_string(),
@@ -388,10 +390,10 @@ impl LlmService {
         Ok(serde_json::json!({
             "provider": pname,
             "model": model,
-            "filePath": vfs_path,
-            "mimeType": format!("audio/{}", endpoint.format),
+            "file_path": vfs_path,
+            "mime_type": format!("audio/{}", endpoint.format),
             "bytes": audio_bytes.len() as u64,
-            "latencyMs": 0u64,
+            "latency_ms": 0u64,
         }))
     }
 
@@ -415,13 +417,13 @@ impl LlmService {
         let req = AvixTranscribeRequest {
             provider: Some(pname.clone()),
             model: params["model"].as_str().unwrap_or("whisper-1").to_string(),
-            file_path: params["filePath"].as_str().unwrap_or("").to_string(),
+            file_path: params["file_path"].as_str().unwrap_or("").to_string(),
             language: params["language"].as_str().map(str::to_string),
             prompt: params["prompt"].as_str().map(str::to_string),
             granularity: params["granularity"].as_str().map(str::to_string),
             metadata: crate::llm_svc::adapter::CompleteMetadata {
-                agent_pid: params["metadata"]["agentPid"].as_u64().unwrap_or(0) as u32,
-                session_id: params["metadata"]["sessionId"]
+                agent_pid: params["metadata"]["agent_pid"].as_u64().unwrap_or(0) as u32,
+                session_id: params["metadata"]["session_id"]
                     .as_str()
                     .unwrap_or("")
                     .to_string(),
@@ -512,8 +514,8 @@ impl LlmService {
                 .to_string(),
             input,
             metadata: crate::llm_svc::adapter::CompleteMetadata {
-                agent_pid: params["metadata"]["agentPid"].as_u64().unwrap_or(0) as u32,
-                session_id: params["metadata"]["sessionId"]
+                agent_pid: params["metadata"]["agent_pid"].as_u64().unwrap_or(0) as u32,
+                session_id: params["metadata"]["session_id"]
                     .as_str()
                     .unwrap_or("")
                     .to_string(),
@@ -579,19 +581,19 @@ impl LlmService {
                     "status": status_str,
                     "modalities": p.modalities.iter().map(|m| m.as_str()).collect::<Vec<_>>(),
                     "models": p.models.iter().map(|m| m.id.clone()).collect::<Vec<_>>(),
-                    "authType": match &p.auth {
+                    "auth_type": match &p.auth {
                         crate::config::ProviderAuth::ApiKey { .. } => "api_key",
                         crate::config::ProviderAuth::Oauth2 { .. } => "oauth2",
                         crate::config::ProviderAuth::None => "none",
                     },
-                    "lastError": last_error,
+                    "last_error": last_error,
                 })
             })
             .collect();
 
         Ok(serde_json::json!({
             "providers": providers,
-            "defaultProviders": {
+            "default_providers": {
                 "text": self.config.spec.default_providers.text,
                 "image": self.config.spec.default_providers.image,
                 "speech": self.config.spec.default_providers.speech,
@@ -685,8 +687,8 @@ spec:
         let providers = result["providers"].as_array().unwrap();
         assert_eq!(providers.len(), 2);
         // Check that default providers are returned
-        assert_eq!(result["defaultProviders"]["text"], "anthropic");
-        assert_eq!(result["defaultProviders"]["image"], "openai");
+        assert_eq!(result["default_providers"]["text"], "anthropic");
+        assert_eq!(result["default_providers"]["image"], "openai");
     }
 
     #[tokio::test]
@@ -717,8 +719,8 @@ spec:
                 "model": "claude-3",
                 "messages": [],
                 "metadata": {
-                    "agentPid": 1,
-                    "sessionId": "sess-test"
+                    "agent_pid": 1,
+                    "session_id": "sess-test"
                 }
             }),
         };
@@ -742,8 +744,8 @@ spec:
                 "model": "model-x",
                 "messages": [],
                 "metadata": {
-                    "agentPid": 1,
-                    "sessionId": "sess-test"
+                    "agent_pid": 1,
+                    "session_id": "sess-test"
                 }
             }),
         };
@@ -763,8 +765,8 @@ spec:
                 "model": "dall-e-3",
                 "prompt": "a cat",
                 "metadata": {
-                    "agentPid": 1,
-                    "sessionId": "sess-test"
+                    "agent_pid": 1,
+                    "session_id": "sess-test"
                 }
             }),
         };
@@ -789,8 +791,8 @@ spec:
                 "text": "hello",
                 "voice": "alloy",
                 "metadata": {
-                    "agentPid": 1,
-                    "sessionId": "sess-test"
+                    "agent_pid": 1,
+                    "session_id": "sess-test"
                 }
             }),
         };
@@ -811,10 +813,10 @@ spec:
             params: serde_json::json!({
                 "provider": "openai",
                 "model": "whisper-1",
-                "filePath": "/tmp/audio.wav",
+                "file_path": "/tmp/audio.wav",
                 "metadata": {
-                    "agentPid": 1,
-                    "sessionId": "sess-test"
+                    "agent_pid": 1,
+                    "session_id": "sess-test"
                 }
             }),
         };
@@ -836,8 +838,8 @@ spec:
                 "provider": "openai",
                 "model": "text-embedding-3-small",
                 "metadata": {
-                    "agentPid": 1,
-                    "sessionId": "sess-test"
+                    "agent_pid": 1,
+                    "session_id": "sess-test"
                 }
                 // no "input" field
             }),
@@ -892,9 +894,9 @@ spec:
         let resp = svc.dispatch(&req).await;
         let result = resp.result.unwrap();
         let providers = result["providers"].as_array().unwrap();
-        // anthropic provider should have authType: api_key
+        // anthropic provider should have auth_type: api_key
         let anthropic = providers.iter().find(|p| p["name"] == "anthropic").unwrap();
-        assert_eq!(anthropic["authType"], "api_key");
+        assert_eq!(anthropic["auth_type"], "api_key");
         assert_eq!(anthropic["status"], "available");
     }
 

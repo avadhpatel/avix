@@ -30,17 +30,13 @@ impl IpcLlmClient {
 #[async_trait]
 impl LlmClient for IpcLlmClient {
     async fn complete(&self, req: LlmCompleteRequest) -> anyhow::Result<LlmCompleteResponse> {
-        // Build JSON-RPC params — embed agent metadata
-        let params = serde_json::json!({
-            "model": req.model,
-            "messages": req.messages,
-            "tools": req.tools,
-            "system": req.system,
-            "maxTokens": req.max_tokens,
-            "metadata": {
-                "agentPid": self.agent_pid,
-                "sessionId": self.session_id,
-            }
+        // Serialize request with its natural snake_case field names, then add
+        // agent metadata for routing / observability at the service end.
+        let mut params =
+            serde_json::to_value(&req).expect("LlmCompleteRequest is always serializable");
+        params["metadata"] = serde_json::json!({
+            "agent_pid": self.agent_pid,
+            "session_id": self.session_id,
         });
 
         let rpc_req = JsonRpcRequest {
