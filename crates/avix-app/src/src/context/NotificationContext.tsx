@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { invoke, listen } from '@tauri-apps/api/tauri';
+import { invoke, listen } from '../platform';
 import { toast } from 'react-hot-toast';
 import { Notification, NotificationKind } from '../types/notifications';
 import NotificationToast from '../components/NotificationToast';
@@ -7,14 +7,14 @@ import NotificationToast from '../components/NotificationToast';
 interface ContextType {
   notifications: Notification[];
   unreadCount: number;
-  load: () => Promise&lt;void&gt;;
-  add: (n: Notification) =&gt; void;
-  markRead: (id: string) =&gt; Promise&lt;void&gt;;
+  load: () => Promise<void>;
+  add: (n: Notification) => void;
+  markRead: (id: string) => Promise<void>;
 }
 
-const NotificationContext = createContext&lt;ContextType | null&gt;(null);
+const NotificationContext = createContext<ContextType | null>(null);
 
-export const useNotification = () =&gt; {
+export const useNotification = () => {
   const context = useContext(NotificationContext);
   if (!context) {
     throw new Error('useNotification must be used within NotificationProvider');
@@ -22,14 +22,14 @@ export const useNotification = () =&gt; {
   return context;
 };
 
-export const NotificationProvider: React.FC&lt;{children: ReactNode}&gt; = ({ children }) =&gt; {
-  const [notifications, setNotifications] = useState&lt;Notification[]&gt;([]);
+export const NotificationProvider: React.FC<{children: ReactNode}> = ({ children }) => {
+  const [notifications, setNotifications] = useState<Notification[]>([]);
 
-  const unreadCount = notifications.filter(n =&gt; !n.read).length;
+  const unreadCount = notifications.filter(n => !n.read).length;
 
-  const load = async () =&gt; {
+  const load = async () => {
     try {
-      const json = await invoke&lt;string&gt;('get_notifications');
+      const json = await invoke<string>('get_notifications');
       const notifs: Notification[] = JSON.parse(json);
       setNotifications(notifs);
     } catch (e) {
@@ -37,10 +37,10 @@ export const NotificationProvider: React.FC&lt;{children: ReactNode}&gt; = ({ ch
     }
   };
 
-  const add = (n: Notification) =&gt; {
-    setNotifications(prev =&gt; [n, ...prev.filter(p =&gt; p.id !== n.id)]);
+  const add = (n: Notification) => {
+    setNotifications(prev => [n, ...prev.filter(p => p.id !== n.id)]);
     if (n.kind === NotificationKind.Hil) {
-      toast.custom((t) =&gt; &lt;NotificationToast notif={n} /&gt;, {
+      toast.custom(() => <NotificationToast notif={n} />, {
         id: n.id,
         duration: Infinity,
         position: 'bottom-right',
@@ -50,10 +50,10 @@ export const NotificationProvider: React.FC&lt;{children: ReactNode}&gt; = ({ ch
     }
   };
 
-  const markRead = async (id: string) =&gt; {
+  const markRead = async (id: string) => {
     try {
       await invoke('ack_notif', { id });
-      setNotifications(prev =&gt; prev.map(notif =&gt;
+      setNotifications(prev => prev.map(notif =>
         notif.id === id ? { ...notif, read: true } : notif
       ));
     } catch (e) {
@@ -61,22 +61,22 @@ export const NotificationProvider: React.FC&lt;{children: ReactNode}&gt; = ({ ch
     }
   };
 
-  useEffect(() =&gt; {
+  useEffect(() => {
     load();
-    let unlisten: () =&gt; void;
-    listen&lt;Notification&gt;('notification', (event) =&gt; {
+    let unlisten: () => void;
+    listen<Notification>('notification', (event) => {
       add(event.payload);
-    }).then((f) =&gt; {
+    }).then((f) => {
       unlisten = f;
     }).catch(console.error);
-    return () =&gt; {
+    return () => {
       if (unlisten) unlisten();
     };
   }, []);
 
   return (
-    &lt;NotificationContext.Provider value={{ notifications, unreadCount, load, add, markRead }}&gt;
+    <NotificationContext.Provider value={{ notifications, unreadCount, load, add, markRead }}>
       {children}
-    &lt;/NotificationContext.Provider&gt;
+    </NotificationContext.Provider>
   );
 };

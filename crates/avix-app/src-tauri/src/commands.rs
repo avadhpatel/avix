@@ -4,7 +4,7 @@ use tauri::State;
 use avix_client_core::atp::types::HilOutcome;
 use avix_client_core::commands::spawn_agent::spawn_agent as core_spawn_agent;
 use avix_client_core::commands::{
-    list_agents as core_list_agents, resolve_hil as core_resolve_hil,
+    list_agents as core_list_agents, pipe_text as core_pipe_text, resolve_hil as core_resolve_hil,
 };
 use avix_client_core::state::SharedState;
 
@@ -73,6 +73,26 @@ pub async fn resolve_hil(
 }
 
 #[tauri::command]
+pub async fn pipe_text(
+    state: State<'_, SharedState>,
+    pid: u64,
+    text: String,
+) -> Result<(), String> {
+    let s = state.read().await;
+    if let Some(dispatcher) = &s.dispatcher {
+        if let Some(_session) = s.connection_status.session_id() {
+            core_pipe_text(dispatcher, pid, &text)
+                .await
+                .map_err(|e| format!("Failed to pipe text: {:?}", e))
+        } else {
+            Err("Not connected".to_string())
+        }
+    } else {
+        Err("No dispatcher".to_string())
+    }
+}
+
+#[tauri::command]
 pub async fn list_agents(state: State<'_, SharedState>) -> Result<String, String> {
     let s = state.read().await;
     if let Some(dispatcher) = &s.dispatcher {
@@ -94,6 +114,33 @@ pub async fn get_notifications(state: State<'_, SharedState>) -> Result<String, 
     let s = state.read().await;
     let notifications = s.notifications.all().await;
     serde_json::to_string(&notifications).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn auth_status(state: State<'_, SharedState>) -> Result<String, String> {
+    let s = state.read().await;
+    serde_json::to_string(&serde_json::json!({
+        "authenticated": s.is_authenticated(),
+        "identity": s.config.identity,
+    }))
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn login(
+    state: State<'_, SharedState>,
+    identity: String,
+    credential: String,
+    save: bool,
+) -> Result<(), String> {
+    let mut s = state.write().await;
+    s.login(&identity, &credential)
+        .await
+        .map_err(|e| format!("Login failed: {e:?}"))?;
+    if save {
+        s.config.save().map_err(|e| format!("Failed to save config: {e:?}"))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

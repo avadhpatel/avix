@@ -1,13 +1,13 @@
 export enum NotificationKind {
-  Hil = &quot;Hil&quot;,
-  AgentExit = &quot;AgentExit&quot;,
-  SysAlert = &quot;SysAlert&quot;,
+  Hil = "Hil",
+  AgentExit = "AgentExit",
+  SysAlert = "SysAlert",
 }
 
 export enum HilOutcome {
-  Approved = &quot;Approved&quot;,
-  Denied = &quot;Denied&quot;,
-  Timeout = &quot;Timeout&quot;,
+  Approved = "Approved",
+  Denied = "Denied",
+  Timeout = "Timeout",
 }
 
 export interface HilState {

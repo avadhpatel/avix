@@ -83,6 +83,8 @@ pub enum EventKind {
     AgentToolResult,
     #[serde(rename = "agent.exit")]
     AgentExit,
+    #[serde(rename = "proc.start")]
+    ProcStart,
     #[serde(rename = "proc.signal")]
     ProcSignal,
     #[serde(rename = "hil.request")]

@@ -5,6 +5,7 @@ members = [
     "crates/avix-client-core",
     "crates/avix-cli",
     "crates/avix-app/src-tauri",
+    "crates/avix-app/src-web",
     "crates/avix-docker",
     "crates/avix-tests-integration",
 ]

@@ -84,74 +84,101 @@ impl AppState {
     }
 
     pub async fn init(&mut self) -> Result<(), ClientError> {
-        // Ensure server is running
+        // Ensure server is running (best-effort — client apps don't own the daemon lifecycle).
         if let Ok(handle) = ServerHandle::ensure_running(&self.config).await {
             self.server_handle = Some(handle);
         } else {
             warn!("Failed to start server in init");
         }
 
-        // Load persisted notifications
+        // Load persisted notifications.
         if let Ok(persisted) = persistence::load_notifications() {
             for n in persisted {
                 self.notifications.add(n).await;
             }
-            let agents_len = 0; // no agents loaded yet
-            let notifs_count = self.notifications.unread_count().await;
-            let hil_pending = 0; // no hil loaded yet
             debug!(
-                "State update agents={} notifs={} hil={}",
-                agents_len, notifs_count, hil_pending
+                "State update agents=0 notifs={} hil=0",
+                self.notifications.unread_count().await
             );
         }
 
-        debug!(
-            "State init: connecting to ATP server {}",
-            self.config.server_url
-        );
+        // Connect only when a credential is present.  If it's missing (fresh
+        // install, or config not yet written), leave the state as Disconnected
+        // so the UI can show a login page instead of crashing.
+        if !self.config.credential.is_empty() {
+            if let Err(e) = self.do_connect().await {
+                warn!("Initial connect failed (will show login): {}", e);
+            }
+        } else {
+            debug!("No credential configured — skipping initial connect");
+        }
 
+        Ok(())
+    }
+
+    /// Authenticate with explicit credentials, update the in-memory config, and
+    /// establish the dispatcher + event bridge.  Does **not** persist the config
+    /// to disk — callers decide whether to save.
+    pub async fn login(&mut self, identity: &str, credential: &str) -> Result<(), ClientError> {
+        self.config.identity = identity.to_string();
+        self.config.credential = credential.to_string();
+        self.do_connect().await
+    }
+
+    /// Returns true when a dispatcher is active (i.e. we are authenticated).
+    pub fn is_authenticated(&self) -> bool {
+        self.dispatcher.is_some()
+    }
+
+    async fn do_connect(&mut self) -> Result<(), ClientError> {
         self.connection_status = ConnectionStatus::Connecting;
 
-        let client = AtpClient::connect(self.config.clone()).await.map_err(|e| {
-            warn!("Failed to connect in init: {}", e);
-            ClientError::Other(e.into())
-        })?;
+        let client = match AtpClient::connect(self.config.clone()).await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("ATP connect failed: {}", e);
+                self.connection_status = ConnectionStatus::Disconnected;
+                return Err(ClientError::Other(e.into()));
+            }
+        };
 
         let dispatcher = Arc::new(Dispatcher::new(client));
-        let dispatcher_c = Arc::clone(&dispatcher);
-        let emitter = EventEmitter::start(move || {
-            let d = Arc::clone(&dispatcher_c);
-            async move { Ok(Arc::try_unwrap(d).unwrap()) }
-        });
-
         self.dispatcher = Some(dispatcher);
-        self.emitter = Some(emitter);
         self.connection_status = ConnectionStatus::Connected {
             session_id: "core-init".to_string(),
         };
 
-        debug!("State init complete, connected");
+        // If a UI callback was registered before login completed, start the
+        // event bridge now that the dispatcher exists.
+        if self.emit_callback.is_some() {
+            self.start_event_bridge();
+        }
 
+        debug!("ATP connected, session ready");
         Ok(())
     }
 
     pub fn set_emit_callback(&mut self, callback: EmitCallback) {
         self.emit_callback = Some(callback);
-        // Start the event bridge if emitter exists
-        if let Some(_emitter) = &self.emitter {
+        if self.dispatcher.is_some() {
             self.start_event_bridge();
         }
     }
 
     fn start_event_bridge(&self) {
-        if let (Some(emitter), Some(callback)) = (&self.emitter, &self.emit_callback) {
-            let mut rx = emitter.subscribe_all();
-            let callback = callback.clone(); // Clone the Arc to move into the spawn
+        if let (Some(dispatcher), Some(callback)) = (&self.dispatcher, &self.emit_callback) {
+            let mut rx = dispatcher.events();
+            let callback = callback.clone();
             tokio::spawn(async move {
                 while let Ok(event) = rx.recv().await {
-                    let event_name = match event.kind {
+                    let event_name: &str = match event.kind {
                         crate::atp::types::EventKind::SessionReady => "daemon-ready",
-                        _ => continue, // Only emit daemon-ready for now
+                        crate::atp::types::EventKind::AgentSpawned => "agent.spawned",
+                        crate::atp::types::EventKind::AgentOutput => "agent.output",
+                        crate::atp::types::EventKind::AgentOutputChunk => "agent.output.chunk",
+                        crate::atp::types::EventKind::AgentStatus => "agent.status",
+                        crate::atp::types::EventKind::AgentExit => "agent.exit",
+                        _ => continue,
                     };
                     let data = serde_json::to_value(&event.body).unwrap_or(serde_json::Value::Null);
                     (callback)(event_name, &data);

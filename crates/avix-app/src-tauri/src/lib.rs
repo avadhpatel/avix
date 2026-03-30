@@ -30,7 +30,9 @@ pub async fn create_app_state(
     let state = new_shared(config);
     {
         let mut guard = state.write().await;
-        guard.init().await?;
+        if let Err(e) = guard.init().await {
+            tracing::warn!("State init error (will show login): {e}");
+        }
     }
     Ok(state)
 }
@@ -46,9 +48,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
         .invoke_handler(tauri::generate_handler![
+            commands::auth_status,
+            commands::login,
             commands::spawn_agent,
             commands::resolve_hil,
             commands::list_agents,
+            commands::pipe_text,
             commands::get_notifications,
             commands::save_layout
         ])

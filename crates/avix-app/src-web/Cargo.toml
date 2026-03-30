@@ -1,0 +1,25 @@
+[package]
+name    = "avix-web"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "avix_web"
+crate-type = ["lib"]
+
+[[bin]]
+name = "avix-web"
+path = "src/main.rs"
+
+[dependencies]
+avix-client-core = { path = "../../avix-client-core" }
+avix-core         = { path = "../../avix-core" }
+axum.workspace    = true
+tokio.workspace   = true
+serde.workspace   = true
+serde_json.workspace = true
+tracing.workspace          = true
+tracing-subscriber         = { version = "0.3", features = ["env-filter", "json", "registry"] }
+tracing-appender.workspace = true
+clap              = { version = "4", features = ["derive", "env"] }
+tower-http        = { version = "0.5", features = ["fs", "cors"] }

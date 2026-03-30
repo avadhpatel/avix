@@ -1,1 +1,107 @@
-import React, { useEffect, useRef, useState, useCallback } from \"react\";\nimport { GoldenLayout } from \"golden-layout\";\nimport { invoke } from \"@tauri-apps/api/tauri\";\nimport { Toaster } from \"react-hot-toast\";\nimport { useLayoutPersistence } from \"./hooks/useLayoutPersistence\";\nimport { AddAgentModal } from \"./components/AddAgentModal\";\nimport { AgentPanel } from \"./components/AgentPanel\";\n\nconst App: React.FC = () => {\n  const containerRef = useRef&lt;HTMLDivElement&gt;(null);\n  const layoutRef = useRef&lt;GoldenLayout | null&gt;(null);\n  const [modalOpen, setModalOpen] = useState(false);\n\n  useLayoutPersistence({ layout: layoutRef.current });\n\n  const agentPanelFactory = useCallback((container: any, state: any) => {\n    return React.createElement(AgentPanel, { container, state });\n  }, []);\n\n  useEffect(() => {\n    if (containerRef.current) {\n      const layout = new GoldenLayout(containerRef.current);\n      layout.registerComponent(\"agentPanel\", agentPanelFactory);\n\n      // Initial empty layout\n      layout.loadLayoutConfig({\n        root: {\n          type: \"row\",\n          content: [],\n        },\n      });\n      layout.init();\n\n      layoutRef.current = layout;\n    }\n  }, [agentPanelFactory]);\n\n  const handleAgentAdded = useCallback((agentId: string) => {\n    const layout = layoutRef.current;\n    if (layout) {\n      layout.addItem({\n        type: \"component\",\n        componentType: \"agentPanel\",\n        componentState: { agentId, configId: agentId },\n        title: \"\",\n      });\n    }\n  }, []);\n\n  return (\n    &lt;&gt;\n      &lt;div ref={containerRef} style={{ width: \"100vw\", height: \"100vh\" }} /&gt;\n      &lt;button\n        style={{\n          position: \"fixed\",\n          top: \"20px\",\n          right: \"20px\",\n          zIndex: 1001,\n          padding: \"12px 24px\",\n          fontSize: \"16px\",\n          fontWeight: \"bold\",\n          backgroundColor: \"#3b82f6\",\n          color: \"white\",\n          border: \"none\",\n          borderRadius: \"8px\",\n          cursor: \"pointer\",\n          boxShadow: \"0 4px 12px rgba(0,0,0,0.15)\",\n          transition: \"all 0.2s\",\n        }}\n        onClick={() => setModalOpen(true)}\n      &gt;\n        + Add Agent\n      &lt;/button&gt;\n      &lt;AddAgentModal\n        isOpen={modalOpen}\n        onClose={() => setModalOpen(false)}\n        onAgentAdded={handleAgentAdded}\n      /&gt;\n      &lt;Toaster position=\"top-right\" /&gt;\n    &lt;/&gt;\n  );\n};\n\nexport default App;\n
+import React, { useEffect, useState } from "react";
+import { invoke } from "./platform";
+import { Toaster } from "react-hot-toast";
+import { NotificationProvider } from "./context/NotificationContext";
+import { AppProvider, useApp } from "./context/AppContext";
+import { useNotification } from "./context/NotificationContext";
+import { LoginPage } from "./components/LoginPage";
+import AppShell from "./components/layout/AppShell";
+import Topbar from "./components/layout/Topbar";
+import Sidebar from "./components/layout/Sidebar";
+import { AddAgentModal } from "./components/AddAgentModal";
+import NotificationCenter from "./components/notifications/NotificationCenter";
+import AgentThreadPage from "./pages/AgentThreadPage";
+import ServicesPage from "./pages/ServicesPage";
+import ToolsPage from "./pages/ToolsPage";
+
+interface AuthStatus {
+  authenticated: boolean;
+  identity: string;
+}
+
+// Inner app that uses contexts
+const AppInner: React.FC = () => {
+  const { currentPage, addAgent } = useApp();
+  const { unreadCount } = useNotification();
+  const [modalOpen, setModalOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+
+  const handleAgentAdded = (pidStr: string) => {
+    const pid = parseInt(pidStr, 10);
+    if (!isNaN(pid)) {
+      addAgent({ pid, name: `Agent #${pid}`, goal: '', status: 'running' });
+    }
+  };
+
+  return (
+    <AppShell
+      topbar={
+        <Topbar
+          unreadCount={unreadCount}
+          onNotifClick={() => setNotifOpen((o) => !o)}
+          onAddAgent={() => setModalOpen(true)}
+        />
+      }
+      sidebar={<Sidebar />}
+    >
+      {currentPage === 'agent' && <AgentThreadPage />}
+      {currentPage === 'services' && <ServicesPage />}
+      {currentPage === 'tools' && <ToolsPage />}
+
+      {notifOpen && (
+        <NotificationCenter onClose={() => setNotifOpen(false)} />
+      )}
+
+      <AddAgentModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onAgentAdded={handleAgentAdded}
+      />
+    </AppShell>
+  );
+};
+
+const App: React.FC = () => {
+  // null = still checking, false = needs login, true = logged in
+  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    invoke<AuthStatus>("auth_status")
+      .then((r) => setAuthenticated(r.authenticated))
+      .catch(() => setAuthenticated(false));
+  }, []);
+
+  if (authenticated === null) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: "100vw",
+          height: "100vh",
+          backgroundColor: "#0f172a",
+          color: "#94a3b8",
+          fontSize: "1rem",
+        }}
+      >
+        Loading…
+      </div>
+    );
+  }
+
+  if (!authenticated) {
+    return <LoginPage onLogin={() => setAuthenticated(true)} />;
+  }
+
+  return (
+    <NotificationProvider>
+      <AppProvider>
+        <AppInner />
+        <Toaster position="bottom-right" />
+      </AppProvider>
+    </NotificationProvider>
+  );
+};
+
+export default App;
