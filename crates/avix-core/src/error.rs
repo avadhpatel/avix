@@ -58,6 +58,12 @@ pub enum AvixError {
 
     #[error("serialization error: {0}")]
     Serialization(String),
+
+    #[error("MCP protocol error: {0}")]
+    McpProtocol(String),
+
+    #[error("MCP server unreachable: {0}")]
+    McpUnreachable(String),
 }
 
 impl From<serde_json::Error> for AvixError {

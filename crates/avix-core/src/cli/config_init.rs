@@ -131,6 +131,7 @@ identities:
     )?;
 
     write_if_absent(&root.join("etc/llm.yaml"), LLM_YAML_TEMPLATE)?;
+    write_if_absent(&root.join("etc/mcp.json"), MCP_JSON_TEMPLATE)?;
 
     // Data directories referenced by fstab mounts
     std::fs::create_dir_all(root.join(format!("data/users/{identity}")))
@@ -295,6 +296,8 @@ spec:
       options:
         encrypted: true
 ";
+
+const MCP_JSON_TEMPLATE: &str = "{\n  \"mcpServers\": {}\n}\n";
 
 /// Default LLM provider configuration.
 ///
@@ -536,5 +539,62 @@ mod tests {
         assert!(content.contains("xai"));
         assert!(content.contains("ANTHROPIC_API_KEY"));
         assert!(content.contains("XAI_API_KEY"));
+    }
+
+    #[test]
+    fn test_config_init_creates_mcp_json() {
+        let dir = tempdir().unwrap();
+        let params = ConfigInitParams {
+            root: dir.path().to_path_buf(),
+            identity_name: "alice".into(),
+            credential_type: "api_key".into(),
+            role: "admin".into(),
+            master_key_source: "env".into(),
+            mode: "cli".into(),
+        };
+        run_config_init(params).unwrap();
+        assert!(
+            dir.path().join("etc/mcp.json").exists(),
+            "etc/mcp.json should be created"
+        );
+    }
+
+    #[test]
+    fn test_config_init_mcp_json_is_valid_json() {
+        let dir = tempdir().unwrap();
+        let params = ConfigInitParams {
+            root: dir.path().to_path_buf(),
+            identity_name: "alice".into(),
+            credential_type: "api_key".into(),
+            role: "admin".into(),
+            master_key_source: "env".into(),
+            mode: "cli".into(),
+        };
+        run_config_init(params).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join("etc/mcp.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(parsed.get("mcpServers").is_some());
+    }
+
+    #[test]
+    fn test_config_init_mcp_json_idempotent() {
+        let dir = tempdir().unwrap();
+        let make_params = || ConfigInitParams {
+            root: dir.path().to_path_buf(),
+            identity_name: "alice".into(),
+            credential_type: "api_key".into(),
+            role: "admin".into(),
+            master_key_source: "env".into(),
+            mode: "cli".into(),
+        };
+        run_config_init(make_params()).unwrap();
+        let content_first =
+            std::fs::read_to_string(dir.path().join("etc/mcp.json")).unwrap();
+        // Second init should return early (auth.conf already exists) without overwriting.
+        run_config_init(make_params()).unwrap();
+        let content_second =
+            std::fs::read_to_string(dir.path().join("etc/mcp.json")).unwrap();
+        assert_eq!(content_first, content_second);
     }
 }

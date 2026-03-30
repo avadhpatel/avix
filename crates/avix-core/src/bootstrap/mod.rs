@@ -6,6 +6,7 @@ use crate::auth::atp_token::ATPTokenStore;
 use crate::auth::service::AuthService;
 use crate::config::LlmConfig;
 use crate::error::AvixError;
+use crate::mcp_bridge::{McpBridgeRunner, McpConfig};
 use crate::exec_svc::ExecIpcServer;
 use crate::gateway::config::GatewayConfig;
 use crate::gateway::event_bus::AtpEventBus;
@@ -279,6 +280,36 @@ impl Runtime {
             }
         } else {
             tracing::warn!("etc/llm.yaml not found — llm.svc not started");
+        }
+
+        // ── mcp-bridge.svc (optional — requires non-empty etc/mcp.json) ─────────
+        let mcp_json_path = self.root.join("etc/mcp.json");
+        if mcp_json_path.exists() {
+            match McpConfig::load(&mcp_json_path) {
+                Ok(cfg) if !cfg.mcp_servers.is_empty() => {
+                    let mcp_sock = self.runtime_dir.join("mcp-bridge.sock");
+                    let runner = McpBridgeRunner::new(
+                        cfg,
+                        self.kernel_sock.clone(),
+                        "svc-token-mcp-bridge".to_string(),
+                        mcp_sock.clone(),
+                    );
+                    match runner.start().await {
+                        Ok(_bridge) => {
+                            tracing::info!(sock = %mcp_sock.display(), "mcp-bridge.svc started");
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "mcp-bridge.svc failed to start — continuing");
+                        }
+                    }
+                }
+                Ok(_) => {
+                    tracing::debug!("mcp.json has no servers — mcp-bridge.svc not started");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to parse etc/mcp.json — mcp-bridge.svc not started");
+                }
+            }
         }
 
         // ── installed third-party services ───────────────────────────────────
