@@ -1298,8 +1298,10 @@ impl RuntimeExecutor {
 
     /// Execute a single LLM turn, preferring streaming when the client supports it.
     ///
-    /// On each `TextDelta` chunk an `agent.output.chunk` ATP event is emitted so
-    /// connected TUI/CLI clients see tokens as they arrive.  A synthetic
+    /// Text deltas are **batched** before being emitted as `agent.output.chunk` ATP
+    /// events: the buffer is flushed whenever it reaches `CHUNK_FLUSH_BYTES` characters
+    /// OR when the 50 ms flush timer fires, whichever comes first.  This keeps UI
+    /// renders smooth without firing a separate event per token.  A synthetic
     /// `LlmCompleteResponse` is built from the accumulated stream data so the
     /// existing `interpret_stop_reason` logic can work unchanged.
     async fn run_turn_streaming(
@@ -1309,6 +1311,10 @@ impl RuntimeExecutor {
         turn_id: uuid::Uuid,
     ) -> Result<LlmCompleteResponse, AvixError> {
         use futures::StreamExt as _;
+        use tokio::time::{interval, Duration, MissedTickBehavior};
+
+        // Flush buffered text when it reaches this many bytes, even before the timer.
+        const CHUNK_FLUSH_BYTES: usize = 80;
 
         let stream = client.stream_complete(req.clone()).await;
 
@@ -1332,45 +1338,83 @@ impl RuntimeExecutor {
         let mut output_tokens = 0u32;
         let mut seq: u64 = 0;
 
-        while let Some(chunk) = stream.next().await {
-            match chunk.map_err(|e| AvixError::ConfigParse(e.to_string()))? {
-                StreamChunk::TextDelta { text } => {
-                    accumulated_text.push_str(&text);
+        // Pending text buffer — flushed to the event bus on timer or size threshold.
+        let mut pending_text = String::new();
+
+        // 50 ms flush timer. Skip missed ticks so a slow consumer doesn't flood.
+        let mut flush_timer = interval(Duration::from_millis(50));
+        flush_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        // Consume the initial immediate tick so we don't flush an empty buffer on entry.
+        flush_timer.tick().await;
+
+        // Helper closure — not a real closure due to borrow rules; we inline it.
+        macro_rules! flush_pending {
+            () => {
+                if !pending_text.is_empty() {
                     if let Some(bus) = &self.event_bus {
                         bus.agent_output_chunk(
                             &self.session_id,
                             self.pid.as_u32(),
                             &turn_id_str,
-                            &text,
+                            &pending_text,
                             seq,
                             false,
                         );
+                        seq += 1;
                     }
-                    seq += 1;
+                    pending_text.clear();
                 }
-                StreamChunk::ToolCallStart { call_id, name } => {
-                    pending_calls.insert(call_id, (name, String::new()));
-                }
-                StreamChunk::ToolCallArgsDelta {
-                    call_id,
-                    args_delta,
-                } => {
-                    if let Some(entry) = pending_calls.get_mut(&call_id) {
-                        entry.1.push_str(&args_delta);
+            };
+        }
+
+        loop {
+            tokio::select! {
+                // Prioritise the stream so we don't stall behind a timer tick.
+                biased;
+
+                chunk_opt = stream.next() => {
+                    let Some(chunk_result) = chunk_opt else { break; };
+                    match chunk_result.map_err(|e| AvixError::ConfigParse(e.to_string()))? {
+                        StreamChunk::TextDelta { text } => {
+                            accumulated_text.push_str(&text);
+                            pending_text.push_str(&text);
+                            // Eager flush once the buffer is large enough.
+                            if pending_text.len() >= CHUNK_FLUSH_BYTES {
+                                flush_pending!();
+                            }
+                        }
+                        StreamChunk::ToolCallStart { call_id, name } => {
+                            // Flush any buffered text before a tool call so the UI
+                            // shows all preceding text immediately.
+                            flush_pending!();
+                            pending_calls.insert(call_id, (name, String::new()));
+                        }
+                        StreamChunk::ToolCallArgsDelta { call_id, args_delta } => {
+                            if let Some(entry) = pending_calls.get_mut(&call_id) {
+                                entry.1.push_str(&args_delta);
+                            }
+                        }
+                        StreamChunk::ToolCallComplete { .. } => {} // args already accumulated
+                        StreamChunk::Done {
+                            stop_reason: sr,
+                            input_tokens: it,
+                            output_tokens: ot,
+                        } => {
+                            stop_reason = sr;
+                            input_tokens = it;
+                            output_tokens = ot;
+                        }
                     }
                 }
-                StreamChunk::ToolCallComplete { .. } => {} // args already accumulated
-                StreamChunk::Done {
-                    stop_reason: sr,
-                    input_tokens: it,
-                    output_tokens: ot,
-                } => {
-                    stop_reason = sr;
-                    input_tokens = it;
-                    output_tokens = ot;
+
+                _ = flush_timer.tick() => {
+                    flush_pending!();
                 }
             }
         }
+
+        // Flush any text that arrived after the last timer tick.
+        flush_pending!();
 
         // Emit turn-end marker so TUI can stop the streaming indicator.
         if let Some(bus) = &self.event_bus {

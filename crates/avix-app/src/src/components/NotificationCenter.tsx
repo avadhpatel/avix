@@ -1,17 +1,16 @@
 import React from 'react';
 import { useNotification } from '../context/NotificationContext';
-import { NotificationKind } from '../types/notifications';
 
 interface Props {
-  onClose: () =&gt; void;
+  onClose: () => void;
 }
 
-const NotificationCenter: React.FC&lt;Props&gt; = ({ onClose }) =&gt; {
+const NotificationCenter: React.FC<Props> = ({ onClose }) => {
   const { notifications, markRead, unreadCount } = useNotification();
-  const unread = notifications.filter(n =&gt; !n.read).reverse();
+  const unread = notifications.filter(n => !n.read).reverse();
 
   return (
-    &lt;div style={{
+    <div style={{
       background: 'white',
       width: '500px',
       height: '600px',
@@ -20,8 +19,8 @@ const NotificationCenter: React.FC&lt;Props&gt; = ({ onClose }) =&gt; {
       overflow: 'hidden',
       display: 'flex',
       flexDirection: 'column',
-    }}&gt;
-      &lt;div style={{
+    }}>
+      <div style={{
         padding: '1rem 1.5rem',
         backgroundColor: '#f3f4f6',
         borderBottom: '1px solid #e5e7eb',
@@ -30,9 +29,9 @@ const NotificationCenter: React.FC&lt;Props&gt; = ({ onClose }) =&gt; {
         alignItems: 'center',
         fontWeight: 'bold',
         fontSize: '1.1rem',
-      }}&gt;
+      }}>
         Notifications ({unreadCount})
-        &lt;button
+        <button
           onClick={onClose}
           style={{
             background: 'none',
@@ -41,17 +40,17 @@ const NotificationCenter: React.FC&lt;Props&gt; = ({ onClose }) =&gt; {
             cursor: 'pointer',
             color: '#6b7280',
           }}
-        &gt;
+        >
           ×
-        &lt;/button&gt;
-      &lt;/div&gt;
-      &lt;div style={{
+        </button>
+      </div>
+      <div style={{
         flex: 1,
         overflow: 'auto',
         padding: '1rem',
-      }}&gt;
-        {unread.map((n) =&gt; (
-          &lt;div
+      }}>
+        {unread.map((n) => (
+          <div
             key={n.id}
             style={{
               padding: '1rem',
@@ -60,11 +59,11 @@ const NotificationCenter: React.FC&lt;Props&gt; = ({ onClose }) =&gt; {
               borderRadius: '8px',
               border: '1px solid #e5e7eb',
             }}
-          &gt;
-            &lt;div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}&gt;
-              &lt;strong style={{ color: '#374151' }}&gt;{n.kind}&lt;/strong&gt;
-              &lt;button
-                onClick={() =&gt; markRead(n.id)}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+              <strong style={{ color: '#374151' }}>{n.kind}</strong>
+              <button
+                onClick={() => markRead(n.id)}
                 style={{
                   background: '#3b82f6',
                   color: 'white',
@@ -74,24 +73,24 @@ const NotificationCenter: React.FC&lt;Props&gt; = ({ onClose }) =&gt; {
                   cursor: 'pointer',
                   fontSize: '0.8rem',
                 }}
-              &gt;
+              >
                 Mark read
-              &lt;/button&gt;
-            &lt;/div&gt;
-            &lt;p style={{ margin: 0, marginBottom: '0.5rem', color: '#4b5563', whiteSpace: 'pre-wrap' }}&gt;{n.message}&lt;/p&gt;
-            &lt;div style={{ fontSize: '0.8rem', color: '#9ca3af' }}&gt;
+              </button>
+            </div>
+            <p style={{ margin: 0, marginBottom: '0.5rem', color: '#4b5563', whiteSpace: 'pre-wrap' }}>{n.message}</p>
+            <div style={{ fontSize: '0.8rem', color: '#9ca3af' }}>
               {new Date(n.created_at).toLocaleString()}
-              {n.agent_pid &amp;&amp; ` | Agent ${n.agent_pid}`}
-            &lt;/div&gt;
-          &lt;/div&gt;
+              {n.agent_pid && ` | Agent ${n.agent_pid}`}
+            </div>
+          </div>
         ))}
-        {unread.length === 0 &amp;&amp; (
-          &lt;p style={{ textAlign: 'center', color: '#9ca3af', marginTop: '2rem' }}&gt;
+        {unread.length === 0 && (
+          <p style={{ textAlign: 'center', color: '#9ca3af', marginTop: '2rem' }}>
             No unread notifications
-          &lt;/p&gt;
+          </p>
         )}
-      &lt;/div&gt;
-    &lt;/div&gt;
+      </div>
+    </div>
   );
 };
 

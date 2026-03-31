@@ -8,7 +8,7 @@ import HilInlineCard from '../components/agents/HilInlineCard';
 import AgentStatusBadge from '../components/agents/AgentStatusBadge';
 
 const AgentThreadPage: React.FC = () => {
-  const { agents, selectedAgentPid, agentOutputs } = useApp();
+  const { agents, selectedAgentPid, agentOutputs, streamingOutputs } = useApp();
   const { notifications } = useNotification();
 
   const agent = agents.find((a) => a.pid === selectedAgentPid);
@@ -117,6 +117,7 @@ const AgentThreadPage: React.FC = () => {
         outputs={outputs}
         agentPid={agent.pid}
         agentName={agent.name}
+        streamingText={selectedAgentPid != null ? streamingOutputs[selectedAgentPid] : undefined}
       />
 
       {/* Input bar */}

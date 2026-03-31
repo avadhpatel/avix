@@ -15,6 +15,7 @@ interface AppContextValue {
   selectedAgentPid: number | null;
   currentPage: Page;
   agentOutputs: Record<number, OutputItem[]>;
+  streamingOutputs: Record<number, string>;
   setSelectedAgent: (pid: number) => void;
   setPage: (p: Page) => void;
   addAgent: (agent: Agent) => void;
@@ -52,6 +53,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [selectedAgentPid, setSelectedAgentPid] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState<Page>('agent');
   const [agentOutputs, setAgentOutputs] = useState<Record<number, OutputItem[]>>({});
+  const [streamingOutputs, setStreamingOutputs] = useState<Record<number, string>>({});
   // Pending chunk buffers: turn_id -> accumulated text
   const pendingChunks = useRef<Map<string, { pid: number; text: string }>>(new Map());
 
@@ -105,52 +107,81 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Listen for agent lifecycle events
   useEffect(() => {
+    // Use an active flag to handle React StrictMode's double-invoke: cleanup may run
+    // before async listen() promises resolve. If that happens, we cancel immediately
+    // inside the .then() callback rather than leaving orphaned listeners.
+    let active = true;
     const unlisteners: Array<() => void> = [];
 
-    // agent.spawned → refresh agent list
-    listen<unknown>('agent.spawned', () => {
-      invoke<string>('list_agents')
-        .then((json) => {
-          try {
-            const raw: RawAgent[] = JSON.parse(json);
-            setAgents(raw.map(parseAgent));
-          } catch {}
-        })
-        .catch(() => {});
-    }).then((f) => unlisteners.push(f)).catch(() => {});
+    Promise.all([
+      // agent.spawned → refresh agent list
+      listen<unknown>('agent.spawned', () => {
+        invoke<string>('list_agents')
+          .then((json) => {
+            try {
+              const raw: RawAgent[] = JSON.parse(json);
+              setAgents(raw.map(parseAgent));
+            } catch {}
+          })
+          .catch(() => {});
+      }),
 
-    // agent.exit → mark stopped
-    listen<{ pid: number; exitCode?: number }>('agent.exit', (e) => {
-      removeAgent(e.payload.pid);
-    }).then((f) => unlisteners.push(f)).catch(() => {});
+      // agent.exit → mark stopped
+      listen<{ pid: number; exitCode?: number }>('agent.exit', (e) => {
+        removeAgent(e.payload.pid);
+      }),
 
-    // agent.status → update status
-    listen<{ pid: number; status: string }>('agent.status', (e) => {
-      updateAgentStatus(e.payload.pid, e.payload.status as AgentStatus);
-    }).then((f) => unlisteners.push(f)).catch(() => {});
+      // agent.status → update status
+      listen<{ pid: number; status: string }>('agent.status', (e) => {
+        updateAgentStatus(e.payload.pid, e.payload.status as AgentStatus);
+      }),
 
-    // agent.output → plain text output
-    listen<{ pid: number; text: string }>('agent.output', (e) => {
-      appendOutput(e.payload.pid, { content: e.payload.text });
-    }).then((f) => unlisteners.push(f)).catch(() => {});
-
-    // agent.output.chunk → streaming output, accumulate until is_final
-    listen<{ pid: number; turn_id: string; text_delta: string; seq: number; is_final: boolean }>(
-      'agent.output.chunk',
-      (e) => {
-        const { pid, turn_id, text_delta, is_final } = e.payload;
-        const existing = pendingChunks.current.get(turn_id);
-        const accumulated = (existing?.text ?? '') + text_delta;
-        if (is_final) {
-          pendingChunks.current.delete(turn_id);
-          appendOutput(pid, { content: accumulated });
-        } else {
-          pendingChunks.current.set(turn_id, { pid, text: accumulated });
+      // agent.output → plain text output (non-streaming)
+      listen<{ pid: number; text: string }>('agent.output', (e) => {
+        const { pid, text } = e.payload;
+        if (text) {
+          appendOutput(pid, { content: text });
         }
+      }),
+
+      // agent.output.chunk → streaming output, accumulate until is_final
+      listen<{ pid: number; turn_id: string; text_delta: string; seq: number; is_final: boolean }>(
+        'agent.output.chunk',
+        (e) => {
+          const { pid, turn_id, text_delta, is_final } = e.payload;
+          const existing = pendingChunks.current.get(turn_id);
+          const accumulated = (existing?.text ?? '') + text_delta;
+
+          if (is_final) {
+            pendingChunks.current.delete(turn_id);
+            // Clear streaming display for this pid
+            setStreamingOutputs((prev) => {
+              const next = { ...prev };
+              delete next[pid];
+              return next;
+            });
+            // Only commit non-empty output
+            if (accumulated.length > 0) {
+              appendOutput(pid, { content: accumulated });
+            }
+          } else {
+            pendingChunks.current.set(turn_id, { pid, text: accumulated });
+            // Update live streaming display
+            setStreamingOutputs((prev) => ({ ...prev, [pid]: accumulated }));
+          }
+        }
+      ),
+    ]).then((fns) => {
+      if (!active) {
+        // Cleanup already ran before promises resolved — unlisten immediately
+        fns.forEach((f) => f());
+        return;
       }
-    ).then((f) => unlisteners.push(f)).catch(() => {});
+      unlisteners.push(...fns);
+    }).catch(() => {});
 
     return () => {
+      active = false;
       unlisteners.forEach((f) => f());
     };
   }, [appendOutput, removeAgent, updateAgentStatus]);
@@ -162,6 +193,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         selectedAgentPid,
         currentPage,
         agentOutputs,
+        streamingOutputs,
         setSelectedAgent,
         setPage,
         addAgent,

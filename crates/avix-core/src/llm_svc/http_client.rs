@@ -268,35 +268,92 @@ impl LlmClient for DirectHttpLlmClient {
         let line_stream = sse_lines(byte_stream);
 
         let chunk_stream = line_stream
-            .scan(None::<String>, move |last_event, line_result| {
-                let adapter = Arc::clone(&adapter);
-                let line = match line_result {
-                    Ok(l) => l,
-                    Err(e) => {
-                        return futures::future::ready(Some(Some(Err(e))));
-                    }
-                };
+            .scan(
+                (None::<String>, std::collections::HashMap::<String, String>::new()),
+                move |state, line_result| {
+                    let adapter = Arc::clone(&adapter);
+                    let (last_event, index_to_id) = state;
+                    let line = match line_result {
+                        Ok(l) => l,
+                        Err(e) => {
+                            return futures::future::ready(Some(Some(Err(e))));
+                        }
+                    };
 
-                match line {
-                    SseLine::Done => futures::future::ready(Some(None)),
-                    SseLine::Event(name) => {
-                        *last_event = Some(name);
-                        futures::future::ready(Some(None))
-                    }
-                    SseLine::Data(data) => {
-                        let event_name = last_event.as_deref();
-                        let result = adapter
-                            .parse_stream_event(event_name, &data)
-                            .map_err(|e| anyhow::anyhow!("SSE parse error: {e}"));
-                        *last_event = None;
-                        match result {
-                            Ok(Some(chunk)) => futures::future::ready(Some(Some(Ok(chunk)))),
-                            Ok(None) => futures::future::ready(Some(None)),
-                            Err(e) => futures::future::ready(Some(Some(Err(e)))),
+                    match line {
+                        SseLine::Done => futures::future::ready(Some(None)),
+                        SseLine::Event(name) => {
+                            *last_event = Some(name);
+                            futures::future::ready(Some(None))
+                        }
+                        SseLine::Data(data) => {
+                            let event_name = last_event.as_deref();
+                            let result = adapter
+                                .parse_stream_event(event_name, &data)
+                                .map_err(|e| anyhow::anyhow!("SSE parse error: {e}"));
+                            *last_event = None;
+
+                            // Fix up ToolCallArgsDelta: OpenAI uses numeric index as call_id
+                            // on argument delta chunks, but ToolCallStart uses the real id.
+                            // We maintain an index→real_id map and rewrite the call_id here.
+                            let result = result.map(|opt| {
+                                opt.map(|chunk| match chunk {
+                                    StreamChunk::ToolCallStart {
+                                        ref call_id,
+                                        ..
+                                    } => {
+                                        // Extract the numeric index from the raw data and
+                                        // store the mapping so we can fix up future deltas.
+                                        if let Ok(v) =
+                                            serde_json::from_str::<serde_json::Value>(&data)
+                                        {
+                                            if let Some(tcs) = v["choices"][0]["delta"]
+                                                ["tool_calls"]
+                                                .as_array()
+                                            {
+                                                for tc in tcs {
+                                                    if tc["id"].as_str() == Some(call_id.as_str())
+                                                    {
+                                                        if let Some(idx) = tc["index"].as_u64() {
+                                                            index_to_id.insert(
+                                                                idx.to_string(),
+                                                                call_id.clone(),
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        chunk
+                                    }
+                                    StreamChunk::ToolCallArgsDelta {
+                                        ref call_id,
+                                        ref args_delta,
+                                    } => {
+                                        if let Some(real_id) = index_to_id.get(call_id) {
+                                            StreamChunk::ToolCallArgsDelta {
+                                                call_id: real_id.clone(),
+                                                args_delta: args_delta.clone(),
+                                            }
+                                        } else {
+                                            chunk
+                                        }
+                                    }
+                                    other => other,
+                                })
+                            });
+
+                            match result {
+                                Ok(Some(chunk)) => {
+                                    futures::future::ready(Some(Some(Ok(chunk))))
+                                }
+                                Ok(None) => futures::future::ready(Some(None)),
+                                Err(e) => futures::future::ready(Some(Some(Err(e)))),
+                            }
                         }
                     }
-                }
-            })
+                },
+            )
             .filter_map(futures::future::ready);
 
         Ok(Box::pin(chunk_stream))

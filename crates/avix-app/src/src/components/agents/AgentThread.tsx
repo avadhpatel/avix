@@ -6,14 +6,15 @@ interface Props {
   outputs: OutputItem[];
   agentPid: number;
   agentName: string;
+  streamingText?: string;
 }
 
-const AgentThread: React.FC<Props> = ({ outputs, agentPid, agentName }) => {
+const AgentThread: React.FC<Props> = ({ outputs, agentPid, agentName, streamingText }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [outputs.length]);
+  }, [outputs.length, streamingText]);
 
   return (
     <div
@@ -26,7 +27,7 @@ const AgentThread: React.FC<Props> = ({ outputs, agentPid, agentName }) => {
         gap: '2px',
       }}
     >
-      {outputs.length === 0 ? (
+      {outputs.length === 0 && !streamingText ? (
         <div
           style={{
             display: 'flex',
@@ -48,9 +49,36 @@ const AgentThread: React.FC<Props> = ({ outputs, agentPid, agentName }) => {
           </p>
         </div>
       ) : (
-        outputs.map((item, i) => (
-          <AgentMessageBubble key={i} item={item} index={i} />
-        ))
+        <>
+          {outputs.map((item, i) => (
+            <AgentMessageBubble key={i} item={item} index={i} />
+          ))}
+          {streamingText && (
+            <div
+              style={{
+                padding: '10px 14px',
+                borderRadius: '8px',
+                background: 'rgba(99,102,241,0.06)',
+                border: '1px solid rgba(99,102,241,0.15)',
+              }}
+            >
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: '14px', margin: 0, color: '#e2e8f0' }}>
+                {streamingText}
+                <span
+                  style={{
+                    display: 'inline-block',
+                    width: '2px',
+                    height: '1em',
+                    background: '#818cf8',
+                    marginLeft: '2px',
+                    verticalAlign: 'text-bottom',
+                    animation: 'blink 1s step-end infinite',
+                  }}
+                />
+              </pre>
+            </div>
+          )}
+        </>
       )}
       <div ref={bottomRef} />
     </div>

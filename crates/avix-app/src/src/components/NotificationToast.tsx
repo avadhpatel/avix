@@ -1,36 +1,35 @@
 import React from 'react';
-import { Notification, NotificationKind, HilOutcome } from '../types/notifications';
-import { invoke } from '@tauri-apps/api/tauri';
+import { Notification, NotificationKind } from '../types/notifications';
+import { invoke } from '../platform';
 import toast from 'react-hot-toast';
 
 interface Props {
   notif: Notification;
-  toast: any; // toast props
 }
 
-const NotificationToast: React.FC&lt;Props&gt; = ({ notif }) =&gt; {
+const NotificationToast: React.FC<Props> = ({ notif }) => {
   if (notif.kind !== NotificationKind.Hil) {
     return (
-      &lt;div style={{ padding: '1rem' }}&gt;
-        &lt;p&gt;{notif.message}&lt;/p&gt;
-      &lt;/div&gt;
+      <div style={{ padding: '1rem' }}>
+        <p>{notif.message}</p>
+      </div>
     );
   }
 
   return (
-    &lt;div style={{
+    <div style={{
       background: 'white',
       padding: '1.5rem',
       borderRadius: '8px',
       boxShadow: '0 10px 25px rgba(0,0,0,0.2)',
       maxWidth: '400px',
       minHeight: '150px',
-    }}&gt;
-      &lt;h3 style={{ margin: 0, marginBottom: '0.5rem', color: '#333' }}&gt;HIL Request&lt;/h3&gt;
-      &lt;p style={{ margin: 0, marginBottom: '1rem', color: '#666', whiteSpace: 'pre-wrap' }}&gt;{notif.hil!.prompt}&lt;/p&gt;
-      &lt;div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}&gt;
-        &lt;button
-          onClick={async () =&gt; {
+    }}>
+      <h3 style={{ margin: 0, marginBottom: '0.5rem', color: '#333' }}>HIL Request</h3>
+      <p style={{ margin: 0, marginBottom: '1rem', color: '#666', whiteSpace: 'pre-wrap' }}>{notif.hil!.prompt}</p>
+      <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+        <button
+          onClick={async () => {
             await invoke('resolve_hil', { id: notif.id, approve: false });
             toast.dismiss();
           }}
@@ -43,11 +42,11 @@ const NotificationToast: React.FC&lt;Props&gt; = ({ notif }) =&gt; {
             cursor: 'pointer',
             fontWeight: 'bold',
           }}
-        &gt;
+        >
           Deny
-        &lt;/button&gt;
-        &lt;button
-          onClick={async () =&gt; {
+        </button>
+        <button
+          onClick={async () => {
             await invoke('resolve_hil', { id: notif.id, approve: true });
             toast.dismiss();
           }}
@@ -60,11 +59,11 @@ const NotificationToast: React.FC&lt;Props&gt; = ({ notif }) =&gt; {
             cursor: 'pointer',
             fontWeight: 'bold',
           }}
-        &gt;
+        >
           Approve
-        &lt;/button&gt;
-      &lt;/div&gt;
-    &lt;/div&gt;
+        </button>
+      </div>
+    </div>
   );
 };
 

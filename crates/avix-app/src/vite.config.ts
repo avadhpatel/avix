@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 // https://vitejs.dev/config/
-export default defineConfig(({
+export default defineConfig({
   plugins: [react()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
@@ -12,5 +12,18 @@ export default defineConfig(({
   server: {
     port: 5173,
     strictPort: true,
+    // Proxy /api/* to the avix-web Rust backend in dev mode.
+    // Tauri builds are unaffected — they never call /api/ (use IPC instead).
+    proxy: {
+      "/api/events": {
+        target: "ws://localhost:8080",
+        ws: true,
+        changeOrigin: true,
+      },
+      "/api": {
+        target: "http://localhost:8080",
+        changeOrigin: true,
+      },
+    },
   },
-}));
+});

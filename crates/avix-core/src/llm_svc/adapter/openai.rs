@@ -16,6 +16,118 @@ impl OpenAiAdapter {
     pub fn new() -> Self {
         Self
     }
+
+    /// Convert a slice of messages from Anthropic internal format to OpenAI wire format.
+    ///
+    /// Anthropic tool_use blocks:
+    ///   `{"role":"assistant","content":[{"type":"tool_use","id":"...","name":"...","input":{...}}]}`
+    /// → OpenAI tool_calls:
+    ///   `{"role":"assistant","content":null,"tool_calls":[{"id":"...","type":"function","function":{"name":"mangled","arguments":"..."}}]}`
+    ///
+    /// Anthropic tool_result blocks:
+    ///   `{"role":"user","content":[{"type":"tool_result","tool_use_id":"...","content":"..."}]}`
+    /// → OpenAI tool messages (one per result):
+    ///   `{"role":"tool","tool_call_id":"...","content":"..."}`
+    fn convert_messages(&self, messages: &[Value]) -> Vec<Value> {
+        let mut out: Vec<Value> = Vec::with_capacity(messages.len());
+
+        for msg in messages {
+            let role = msg["role"].as_str().unwrap_or("");
+            let content = &msg["content"];
+
+            // Flatten assistant messages that contain tool_use blocks
+            if role == "assistant" {
+                if let Some(blocks) = content.as_array() {
+                    let mut text_parts: Vec<&str> = Vec::new();
+                    let mut tool_calls: Vec<Value> = Vec::new();
+
+                    for block in blocks {
+                        match block["type"].as_str() {
+                            Some("tool_use") => {
+                                let id = block["id"].as_str().unwrap_or("").to_string();
+                                let name = block["name"].as_str().unwrap_or("");
+                                let mangled = ToolName::parse(name)
+                                    .map(|tn| tn.mangled())
+                                    .unwrap_or_else(|_| name.replace('/', "__"));
+                                let args_str = serde_json::to_string(&block["input"])
+                                    .unwrap_or_else(|_| "{}".to_string());
+                                tool_calls.push(json!({
+                                    "id": id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": mangled,
+                                        "arguments": args_str,
+                                    }
+                                }));
+                            }
+                            Some("text") => {
+                                if let Some(t) = block["text"].as_str() {
+                                    text_parts.push(t);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    if !tool_calls.is_empty() {
+                        let text_content: Value = if text_parts.is_empty() {
+                            Value::Null
+                        } else {
+                            json!(text_parts.join(""))
+                        };
+                        out.push(json!({
+                            "role": "assistant",
+                            "content": text_content,
+                            "tool_calls": tool_calls,
+                        }));
+                        continue;
+                    }
+                }
+                // Plain assistant message (text string or no tool_use blocks)
+                out.push(msg.clone());
+                continue;
+            }
+
+            // Flatten user messages that contain tool_result blocks
+            if role == "user" {
+                if let Some(blocks) = content.as_array() {
+                    let all_tool_results = blocks
+                        .iter()
+                        .all(|b| b["type"].as_str() == Some("tool_result"));
+
+                    if all_tool_results {
+                        for block in blocks {
+                            let call_id =
+                                block["tool_use_id"].as_str().unwrap_or("").to_string();
+                            // content may be a string or an array of content blocks
+                            let content_str = if let Some(s) = block["content"].as_str() {
+                                s.to_string()
+                            } else if let Some(arr) = block["content"].as_array() {
+                                arr.iter()
+                                    .filter_map(|c| c["text"].as_str())
+                                    .collect::<Vec<_>>()
+                                    .join("")
+                            } else {
+                                block["content"].to_string()
+                            };
+                            out.push(json!({
+                                "role": "tool",
+                                "tool_call_id": call_id,
+                                "content": content_str,
+                            }));
+                        }
+                        continue;
+                    }
+                }
+                out.push(msg.clone());
+                continue;
+            }
+
+            out.push(msg.clone());
+        }
+
+        out
+    }
 }
 
 impl Default for OpenAiAdapter {
@@ -60,9 +172,10 @@ impl ProviderAdapter for OpenAiAdapter {
     }
 
     fn build_complete_request(&self, req: &AvixCompleteRequest) -> Value {
+        let messages = self.convert_messages(&req.messages);
         let mut body = json!({
             "model": req.model,
-            "messages": req.messages,
+            "messages": messages,
         });
 
         if let Some(max_tokens) = req.max_tokens {
@@ -712,5 +825,126 @@ mod tests {
         assert_eq!(resp.dimensions, 3);
         assert!((resp.embeddings[0][0] - 0.1).abs() < 0.001);
         assert_eq!(resp.usage.input_tokens, 5);
+    }
+
+    #[test]
+    fn test_convert_messages_tool_use_to_tool_calls() {
+        let adapter = make_adapter();
+        let messages = vec![
+            json!({"role": "user", "content": "call something"}),
+            json!({
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "call_abc",
+                    "name": "fs/read",
+                    "input": {"path": "/tmp/file"}
+                }]
+            }),
+            json!({
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "call_abc",
+                    "content": "file contents here"
+                }]
+            }),
+        ];
+
+        let converted = adapter.convert_messages(&messages);
+
+        // User message unchanged
+        assert_eq!(converted[0]["role"], "user");
+        assert_eq!(converted[0]["content"], "call something");
+
+        // Assistant message → tool_calls format
+        assert_eq!(converted[1]["role"], "assistant");
+        assert!(converted[1]["tool_calls"].is_array());
+        let tc = &converted[1]["tool_calls"][0];
+        assert_eq!(tc["id"], "call_abc");
+        assert_eq!(tc["type"], "function");
+        assert_eq!(tc["function"]["name"], "fs__read");
+        let args: serde_json::Value =
+            serde_json::from_str(tc["function"]["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args["path"], "/tmp/file");
+
+        // Tool result → role: tool message
+        assert_eq!(converted[2]["role"], "tool");
+        assert_eq!(converted[2]["tool_call_id"], "call_abc");
+        assert_eq!(converted[2]["content"], "file contents here");
+    }
+
+    #[test]
+    fn test_convert_messages_plain_messages_unchanged() {
+        let adapter = make_adapter();
+        let messages = vec![
+            json!({"role": "user", "content": "hello"}),
+            json!({"role": "assistant", "content": "hi there"}),
+        ];
+        let converted = adapter.convert_messages(&messages);
+        assert_eq!(converted.len(), 2);
+        assert_eq!(converted[0]["content"], "hello");
+        assert_eq!(converted[1]["content"], "hi there");
+    }
+
+    #[test]
+    fn test_convert_messages_assistant_with_text_and_tool_use() {
+        let adapter = make_adapter();
+        let messages = vec![json!({
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me read that file."},
+                {"type": "tool_use", "id": "call_xyz", "name": "fs/read", "input": {"path": "/tmp/x"}}
+            ]
+        })];
+        let converted = adapter.convert_messages(&messages);
+        assert_eq!(converted[0]["role"], "assistant");
+        assert_eq!(converted[0]["content"], "Let me read that file.");
+        let tc = &converted[0]["tool_calls"][0];
+        assert_eq!(tc["id"], "call_xyz");
+    }
+
+    #[test]
+    fn test_build_complete_request_converts_tool_messages() {
+        let adapter = make_adapter();
+        let req = AvixCompleteRequest {
+            provider: None,
+            model: "grok-2".to_string(),
+            messages: vec![
+                json!({"role": "user", "content": "use a tool"}),
+                json!({
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "call_1",
+                        "name": "fs/read",
+                        "input": {"path": "/etc/passwd"}
+                    }]
+                }),
+                json!({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "call_1",
+                        "content": "root:x:0:0"
+                    }]
+                }),
+            ],
+            system: None,
+            max_tokens: None,
+            temperature: None,
+            stream: None,
+            stop_sequences: None,
+            tools: vec![],
+            metadata: make_metadata(),
+        };
+
+        let body = adapter.build_complete_request(&req);
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[1]["role"], "assistant");
+        assert!(msgs[1]["tool_calls"].is_array());
+        assert_eq!(msgs[2]["role"], "tool");
+        assert_eq!(msgs[2]["tool_call_id"], "call_1");
     }
 }
