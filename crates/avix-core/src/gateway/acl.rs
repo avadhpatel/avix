@@ -52,7 +52,11 @@ fn domain_min_role(domain: AtpDomain, op: &str) -> Role {
             _ => Role::Admin,
         },
         AtpDomain::Sys => match op {
-            "status" | "logs" | "install" | "uninstall" | "update" => Role::Operator,
+            // Read-only observability ops — any authenticated user can query these.
+            "status" | "logs" | "service-list" | "tool-list" => Role::User,
+            // Service lifecycle ops require operator.
+            "install" | "uninstall" | "update" => Role::Operator,
+            // Mutating / destructive ops require admin.
             _ => Role::Admin,
         },
         AtpDomain::Pipe => Role::User,
@@ -99,7 +103,7 @@ pub fn check_admin_port(domain: AtpDomain, op: &str, is_admin_port: bool) -> Res
     let requires_admin_port = match domain {
         AtpDomain::Cap => true,
         // read-only sys ops are allowed on user port; mutating ones require admin port
-        AtpDomain::Sys => !matches!(op, "status" | "logs"),
+        AtpDomain::Sys => !matches!(op, "status" | "logs" | "service-list" | "tool-list"),
         _ => false,
     };
     if requires_admin_port && !is_admin_port {
@@ -218,8 +222,23 @@ mod tests {
     }
 
     #[test]
-    fn operator_can_view_sys_status() {
-        assert!(check_domain_role(AtpDomain::Sys, "status", Role::Operator).is_ok());
+    fn user_can_view_sys_status() {
+        assert!(check_domain_role(AtpDomain::Sys, "status", Role::User).is_ok());
+    }
+
+    #[test]
+    fn user_can_list_services() {
+        assert!(check_domain_role(AtpDomain::Sys, "service-list", Role::User).is_ok());
+    }
+
+    #[test]
+    fn user_can_list_tools() {
+        assert!(check_domain_role(AtpDomain::Sys, "tool-list", Role::User).is_ok());
+    }
+
+    #[test]
+    fn guest_cannot_list_services() {
+        assert!(check_domain_role(AtpDomain::Sys, "service-list", Role::Guest).is_err());
     }
 
     #[test]
@@ -337,6 +356,16 @@ mod tests {
     #[test]
     fn sys_logs_allowed_on_user_port() {
         assert!(check_admin_port(AtpDomain::Sys, "logs", false).is_ok());
+    }
+
+    #[test]
+    fn sys_service_list_allowed_on_user_port() {
+        assert!(check_admin_port(AtpDomain::Sys, "service-list", false).is_ok());
+    }
+
+    #[test]
+    fn sys_tool_list_allowed_on_user_port() {
+        assert!(check_admin_port(AtpDomain::Sys, "tool-list", false).is_ok());
     }
 
     #[test]
