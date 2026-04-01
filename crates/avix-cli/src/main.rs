@@ -207,6 +207,9 @@ enum ServerCmd {
         /// Kernel IPC socket path (default: <root>/run/avix/kernel.sock)
         #[arg(long)]
         kernel_sock: Option<PathBuf>,
+        /// Enable structured trace output (comma-separated: atp,agent,notifications or all)
+        #[arg(long)]
+        trace: Option<String>,
     },
     /// Server configuration management
     Config {
@@ -288,7 +291,11 @@ enum ClientCmd {
     /// Test connectivity to the Avix server (reads config.yaml)
     Connect,
     /// Launch the TUI dashboard
-    Tui,
+    Tui {
+        /// Enable structured trace output (comma-separated: notifications or all)
+        #[arg(long)]
+        trace: Option<String>,
+    },
     /// ATP protocol commands
     Atp {
         #[command(subcommand)]
@@ -499,7 +506,7 @@ fn log_filename(cmd: &Cmd) -> &str {
             _ => "server",
         },
         Cmd::Client { sub } => match sub {
-            ClientCmd::Tui => "tui",
+            ClientCmd::Tui { .. } => "tui",
             ClientCmd::Hil { .. } => "hil",
             ClientCmd::Logs { .. } => "logs",
             ClientCmd::Agent { .. } => "agent",
@@ -553,11 +560,18 @@ async fn main() -> Result<()> {
                 port,
                 test_mode,
                 kernel_sock,
+                trace,
             } => {
                 let root = expand_home(root);
                 let kernel_sock = kernel_sock.unwrap_or_else(|| root.join("run/avix/kernel.sock"));
                 std::env::set_var("AVIX_KERNEL_SOCK", kernel_sock);
-                let runtime = Runtime::bootstrap_with_root(&root).await?;
+                let trace_flags = trace
+                    .as_deref()
+                    .map(avix_core::trace::TraceFlags::from_csv)
+                    .unwrap_or_default();
+                let runtime = Runtime::bootstrap_with_root(&root)
+                    .await?
+                    .with_trace_flags(trace_flags);
                 runtime.start_daemon(port, test_mode).await?;
             }
 
@@ -710,7 +724,12 @@ async fn main() -> Result<()> {
                 emit(cli.json, |_: &()| "Connected to server".to_string(), ());
             }
 
-            ClientCmd::Tui => {
+            ClientCmd::Tui { trace } => {
+                let _tracer = trace.as_deref().map(|t| {
+                    let flags = avix_client_core::trace::ClientTraceFlags::from_csv(t);
+                    let log_dir = persistence::app_data_dir().join("logs");
+                    avix_client_core::trace::ClientTracer::new(flags, log_dir)
+                });
                 return tui::app::run(cli.json).await;
             }
 

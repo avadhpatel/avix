@@ -29,4 +29,5 @@ pub mod signal;
 pub mod snapshot;
 pub mod syscall;
 pub mod tool_registry;
+pub mod trace;
 pub mod types;

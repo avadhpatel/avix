@@ -13,3 +13,4 @@ pub mod notification; // gap D
 pub mod persistence; // gap D
 pub mod server; // gap E
 pub mod state; // gap E
+pub mod trace;

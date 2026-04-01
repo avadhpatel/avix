@@ -17,6 +17,7 @@ use crate::process::table::ProcessTable;
 use crate::service::lifecycle::ServiceManager;
 use crate::service::ServiceSummary;
 use crate::tool_registry::{ToolRegistry, ToolSummary};
+use crate::trace::Tracer;
 use crate::types::token::{CapabilityToken, IssuedTo};
 use crate::types::Pid;
 
@@ -70,6 +71,8 @@ pub struct ProcHandler {
     service_manager: Arc<Mutex<Option<Arc<ServiceManager>>>>,
     /// Tool registry — set in phase3 after services start.
     tool_registry: Arc<Mutex<Option<Arc<ToolRegistry>>>>,
+    /// Tracer — when set, agent spawn events are written to the agent trace file.
+    tracer: Arc<Tracer>,
 }
 
 impl ProcHandler {
@@ -93,6 +96,7 @@ impl ProcHandler {
             active_invocations: Arc::new(Mutex::new(HashMap::new())),
             service_manager: Arc::new(Mutex::new(None)),
             tool_registry: Arc::new(Mutex::new(None)),
+            tracer: Tracer::noop(),
         }
     }
 
@@ -117,7 +121,14 @@ impl ProcHandler {
             active_invocations: Arc::new(Mutex::new(HashMap::new())),
             service_manager: Arc::new(Mutex::new(None)),
             tool_registry: Arc::new(Mutex::new(None)),
+            tracer: Tracer::noop(),
         }
+    }
+
+    /// Attach a tracer to record agent spawn events.
+    pub fn with_tracer(mut self, tracer: Arc<Tracer>) -> Self {
+        self.tracer = tracer;
+        self
     }
 
     /// Attach a persistent invocation store.

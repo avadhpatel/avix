@@ -47,6 +47,10 @@ struct Args {
     /// Log verbosity level (error, warn, info, debug, trace).
     #[arg(long = "log", default_value_t = LevelFilter::INFO, env = "AVIX_LOG")]
     log: LevelFilter,
+
+    /// Enable structured trace output (comma-separated: atp,agent,notifications or all).
+    #[arg(long, env = "AVIX_TRACE")]
+    trace: Option<String>,
 }
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -88,7 +92,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let root = args.root.clone().unwrap_or_else(|| {
             persistence::app_data_dir().join("runtime")
         });
-        let runtime = avix_core::bootstrap::Runtime::bootstrap_with_root(&root).await?;
+        let trace_flags = args
+            .trace
+            .as_deref()
+            .map(avix_core::trace::TraceFlags::from_csv)
+            .unwrap_or_default();
+        let runtime = avix_core::bootstrap::Runtime::bootstrap_with_root(&root)
+            .await?
+            .with_trace_flags(trace_flags);
         let atp_port = args.atp_port;
         tokio::spawn(async move {
             if let Err(e) = runtime.start_daemon(atp_port, false).await {

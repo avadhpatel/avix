@@ -91,6 +91,8 @@ impl Notification {
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 
+use crate::trace::ClientTracer;
+
 impl std::fmt::Debug for NotificationStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NotificationStore").finish_non_exhaustive()
@@ -100,6 +102,7 @@ impl std::fmt::Debug for NotificationStore {
 pub struct NotificationStore {
     inner: Arc<Mutex<Vec<Notification>>>,
     changed: broadcast::Sender<()>,
+    tracer: Arc<ClientTracer>,
 }
 
 impl Default for NotificationStore {
@@ -113,20 +116,40 @@ impl NotificationStore {
         Self {
             inner: Arc::new(Mutex::new(vec![])),
             changed: broadcast::channel(1).0,
+            tracer: ClientTracer::noop(),
         }
     }
 
+    /// Attach a `ClientTracer` so notification events are written to trace files.
+    pub fn with_tracer(mut self, tracer: Arc<ClientTracer>) -> Self {
+        self.tracer = tracer;
+        self
+    }
+
     pub async fn add(&self, n: Notification) {
+        let kind_str = format!("{:?}", n.kind);
+        let id = n.id.clone();
+        let message = n.message.clone();
+        let agent_pid = n.agent_pid;
+        // Trace HIL requests specifically.
+        if let (Some(hil), true) = (&n.hil, n.kind == NotificationKind::Hil) {
+            self.tracer.hil_request(hil.pid, &hil.hil_id, &hil.prompt);
+        }
+        self.tracer.notification_added(&kind_str, &id, &message, agent_pid);
+
         let mut inner = self.inner.lock().await;
         inner.push(n.clone());
         let count = inner.iter().filter(|n| !n.read).count();
         inner.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         drop(inner);
         let _ = self.changed.send(());
-        debug!("Notif add {:?} unread={}", n.message, count);
+        debug!("Notif add {:?} unread={}", message, count);
     }
 
     pub async fn resolve_hil(&self, hil_id: &str, outcome: HilOutcome) {
+        let outcome_str = format!("{:?}", outcome);
+        self.tracer.hil_resolved(hil_id, &outcome_str);
+
         let mut inner = self.inner.lock().await;
         if let Some(notif) = inner
             .iter_mut()

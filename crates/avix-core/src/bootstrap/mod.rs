@@ -20,6 +20,7 @@ use crate::router::{RouterDispatcher, RouterIpcServer, ServiceRegistry};
 use crate::service::lifecycle::{ServiceManager, ServiceSpawnRequest};
 use crate::service::process::ServiceProcess;
 use crate::service::watchdog::{ServiceWatchdog, WatchdogEntry};
+use crate::trace::{TraceFlags, Tracer};
 use crate::types::Pid;
 use std::collections::HashMap;
 use std::fs;
@@ -52,6 +53,10 @@ pub struct Runtime {
     event_bus: Arc<AtpEventBus>,
     /// Proc handler retained so phase3 can wire in service_manager and tool_registry.
     proc_handler: Option<Arc<ProcHandler>>,
+    /// Trace flags set via `with_trace_flags()` before `start_daemon()`.
+    trace_flags: TraceFlags,
+    /// Active tracer — created at `start_daemon()` from `trace_flags`.
+    tracer: Arc<Tracer>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -127,7 +132,15 @@ impl Runtime {
             kernel_sock,
             event_bus: Arc::new(AtpEventBus::default()),
             proc_handler: None,
+            trace_flags: TraceFlags::default(),
+            tracer: Tracer::noop(),
         })
+    }
+
+    /// Set trace flags before calling `start_daemon()`.
+    pub fn with_trace_flags(mut self, flags: TraceFlags) -> Self {
+        self.trace_flags = flags;
+        self
     }
 
     pub fn vfs(&self) -> &VfsRouter {
@@ -153,6 +166,11 @@ impl Runtime {
 
     /// Starts the daemon: spawns kernel.agent, services, ATP gateway, and polls for hot reload.
     pub async fn start_daemon(mut self, port: u16, test_mode: bool) -> Result<(), AvixError> {
+        // Create tracer now that we know the log directory.
+        let log_dir = self.root.join("logs");
+        let tracer = Tracer::new(self.trace_flags.clone(), log_dir);
+        self.tracer = tracer;
+
         // Phase 2: spawn kernel.agent PID1 (skip in test_mode — gateway uses TestIpcRouter)
         if !test_mode {
             self.phase2_kernel().await?;
@@ -207,18 +225,24 @@ impl Runtime {
         // VFS mounts /etc/avix → <root>/etc, so agents.yaml lives at <root>/etc/agents.yaml.
         let agents_yaml_path = self.root.join("etc/agents.yaml");
 
-        let factory = Arc::new(executor_factory::IpcExecutorFactory::new(
-            Arc::clone(&self.process_table),
-            Arc::clone(&self.event_bus),
-        ));
+        let factory = Arc::new(
+            executor_factory::IpcExecutorFactory::new(
+                Arc::clone(&self.process_table),
+                Arc::clone(&self.event_bus),
+            )
+            .with_tracer(Arc::clone(&self.tracer)),
+        );
 
-        let proc_handler = Arc::new(ProcHandler::new_with_factory(
-            Arc::clone(&self.process_table),
-            agents_yaml_path,
-            master_key_bytes,
-            self.runtime_dir.clone(),
-            factory,
-        ));
+        let proc_handler = Arc::new(
+            ProcHandler::new_with_factory(
+                Arc::clone(&self.process_table),
+                agents_yaml_path,
+                master_key_bytes,
+                self.runtime_dir.clone(),
+                factory,
+            )
+            .with_tracer(Arc::clone(&self.tracer)),
+        );
         // Retain a reference so phase3 can wire in service_manager and tool_registry.
         self.proc_handler = Some(Arc::clone(&proc_handler));
         let kernel_server = KernelIpcServer::new(self.kernel_sock.clone(), proc_handler);
@@ -410,7 +434,8 @@ impl Runtime {
             kernel_sock: std::env::var("AVIX_KERNEL_SOCK").ok().map(PathBuf::from),
         };
         let _user_addr = config.user_addr;
-        let server = GatewayServer::new(config, auth_svc, token_store, event_bus);
+        let server = GatewayServer::new(config, auth_svc, token_store, event_bus)
+            .with_tracer(Arc::clone(&self.tracer));
         tokio::spawn(async move {
             let _ = server.run(test_mode).await;
         });

@@ -28,6 +28,7 @@ use crate::gateway::handlers::{dispatch, HandlerCtx, LiveIpcRouter, TestIpcRoute
 use crate::gateway::replay::ReplayGuard;
 use crate::gateway::validator::validate_cmd;
 use crate::ipc::IpcClient;
+use crate::trace::Tracer;
 use crate::types::Role;
 
 #[derive(Clone)]
@@ -37,6 +38,7 @@ struct AppState {
     event_bus: Arc<AtpEventBus>,
     is_admin_port: bool,
     handler_ctx: Arc<HandlerCtx>,
+    tracer: Arc<Tracer>,
 }
 
 pub struct GatewayServer {
@@ -44,6 +46,7 @@ pub struct GatewayServer {
     auth_svc: Arc<AuthService>,
     token_store: Arc<ATPTokenStore>,
     event_bus: Arc<AtpEventBus>,
+    tracer: Arc<Tracer>,
 }
 
 impl GatewayServer {
@@ -58,6 +61,19 @@ impl GatewayServer {
             auth_svc,
             token_store,
             event_bus,
+            tracer: Tracer::noop(),
+        })
+    }
+
+    /// Attach a tracer to record ATP traffic.
+    pub fn with_tracer(self: Arc<Self>, tracer: Arc<Tracer>) -> Arc<Self> {
+        // Arc<Self> doesn't allow mutation; reconstruct via inner fields.
+        Arc::new(Self {
+            config: self.config.clone(),
+            auth_svc: Arc::clone(&self.auth_svc),
+            token_store: Arc::clone(&self.token_store),
+            event_bus: Arc::clone(&self.event_bus),
+            tracer,
         })
     }
 
@@ -112,6 +128,7 @@ impl GatewayServer {
             event_bus: Arc::clone(&self.event_bus),
             is_admin_port,
             handler_ctx,
+            tracer: Arc::clone(&self.tracer),
         };
 
         let app = Router::new()
@@ -318,6 +335,7 @@ async fn run_connection(
     let pump_filter = Arc::clone(&filter);
     let pump_tx = tx.clone();
     let pump_session = session_id.clone();
+    let pump_tracer = Arc::clone(&state.tracer);
     tokio::spawn(async move {
         loop {
             match bus_rx.recv().await {
@@ -325,6 +343,8 @@ async fn run_connection(
                     let f = pump_filter.read().await;
                     if f.should_receive(&bus_event) {
                         if let Ok(s) = serde_json::to_string(&bus_event.event) {
+                            let kind = format!("{:?}", bus_event.event.event);
+                            pump_tracer.atp_event(&pump_session, &kind, &s);
                             let _ = pump_tx.send(WsOutMsg::Text(s)).await;
                         }
                     }
@@ -390,6 +410,7 @@ async fn handle_text_frame(
     filter: &Arc<RwLock<EventFilter>>,
 ) {
     trace!(session_id = %session_id, frame_len = text.len(), frame = %text, "incoming ATP frame");
+    state.tracer.atp_inbound(session_id, "", text);
     match AtpFrame::parse(text) {
         Ok(AtpFrame::Cmd(cmd)) => {
             let cmd_id = cmd.id.clone();
@@ -421,6 +442,7 @@ async fn handle_text_frame(
             };
 
             if let Ok(s) = serde_json::to_string(&reply) {
+                state.tracer.atp_outbound(session_id, &s);
                 let _ = tx.send(WsOutMsg::Text(s)).await;
             }
         }

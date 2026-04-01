@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 
 use crate::error::AvixError;
 use crate::gateway::event_bus::AtpEventBus;
+use crate::trace::Tracer;
 use crate::kernel::resource_request::{
     KernelResourceHandler, ResourceGrant, ResourceItem, ResourceRequest, Urgency,
 };
@@ -158,6 +159,8 @@ pub struct RuntimeExecutor {
     pub conversation_history: Vec<(String, String)>,
     /// Event bus — when set, agent_tool_call / agent_tool_result events are published live.
     event_bus: Option<Arc<AtpEventBus>>,
+    /// Tracer — when set, LLM calls, tool calls, and exits are written to trace files.
+    tracer: Option<Arc<Tracer>>,
     /// Invocation store — when set, conversation is flushed on shutdown.
     invocation_store: Option<Arc<crate::invocation::InvocationStore>>,
     /// Invocation UUID assigned at spawn by ProcHandler (empty string if not tracked).
@@ -230,6 +233,7 @@ impl RuntimeExecutor {
             memory_context: None,
             conversation_history: Vec::new(),
             event_bus: None,
+            tracer: None,
             invocation_store: None,
             invocation_id: params.invocation_id.clone(),
             spawned_at: chrono::Utc::now(),
@@ -261,6 +265,12 @@ impl RuntimeExecutor {
     /// Attach an `AtpEventBus` so tool-call and tool-result events are published live.
     pub fn with_event_bus(mut self, bus: Arc<AtpEventBus>) -> Self {
         self.event_bus = Some(bus);
+        self
+    }
+
+    /// Attach a `Tracer` so LLM calls, tool calls, and exits are written to trace files.
+    pub fn with_tracer(mut self, tracer: Arc<Tracer>) -> Self {
+        self.tracer = Some(tracer);
         self
     }
 
@@ -1519,8 +1529,10 @@ impl RuntimeExecutor {
         let mut messages: Vec<serde_json::Value> =
             vec![serde_json::json!({"role": "user", "content": goal})];
         let mut chain_count = 0;
+        let mut turn_num: u32 = 0;
 
         loop {
+            turn_num += 1;
             // GAP 3: refresh tool list at turn start
             self.refresh_tool_list();
 
@@ -1544,9 +1556,30 @@ impl RuntimeExecutor {
                 turn_id,
             };
 
+            if let Some(t) = &self.tracer {
+                t.agent_llm_call(
+                    self.pid.as_u32(),
+                    turn_num,
+                    "",
+                    messages.len(),
+                    self.current_tool_list().len(),
+                );
+            }
+
             let response = self.run_turn_streaming(req, client, turn_id).await?;
 
             tracing::debug!(response = ?response, "RuntimeExecutor LLM Response");
+
+            if let Some(t) = &self.tracer {
+                let stop = format!("{:?}", response.stop_reason);
+                t.agent_llm_response(
+                    self.pid.as_u32(),
+                    turn_num,
+                    &stop,
+                    response.input_tokens as u64,
+                    response.output_tokens as u64,
+                );
+            }
 
             // Track token usage and context size from this response
             self.tokens_consumed = self
@@ -1640,6 +1673,14 @@ impl RuntimeExecutor {
                                 &call.args,
                             );
                         }
+                        if let Some(t) = &self.tracer {
+                            t.agent_tool_call(
+                                self.pid.as_u32(),
+                                &call.call_id,
+                                &call.name,
+                                &call.args,
+                            );
+                        }
 
                         // Cat2: handled locally; Cat1/3: forwarded to router.svc
                         let result = if self.is_cat2_tool(&call.name) {
@@ -1656,6 +1697,14 @@ impl RuntimeExecutor {
                                 &call.call_id,
                                 &call.name,
                                 &result.to_string(),
+                            );
+                        }
+                        if let Some(t) = &self.tracer {
+                            t.agent_tool_result(
+                                self.pid.as_u32(),
+                                &call.call_id,
+                                &call.name,
+                                &result,
                             );
                         }
 

@@ -10,6 +10,7 @@ use crate::gateway::event_bus::AtpEventBus;
 use crate::llm_client::IpcLlmClient;
 use crate::process::entry::ProcessStatus;
 use crate::process::table::ProcessTable;
+use crate::trace::Tracer;
 use crate::types::Pid;
 
 /// Concrete `AgentExecutorFactory` wired into the kernel bootstrap.
@@ -28,6 +29,8 @@ pub struct IpcExecutorFactory {
     process_table: Arc<ProcessTable>,
     /// Event bus — used to publish agent output/status/exit events to ATP clients.
     event_bus: Arc<AtpEventBus>,
+    /// Tracer — records agent spawn, LLM calls, tool calls, and exit.
+    tracer: Arc<Tracer>,
 }
 
 impl IpcExecutorFactory {
@@ -35,7 +38,13 @@ impl IpcExecutorFactory {
         Self {
             process_table,
             event_bus,
+            tracer: Tracer::noop(),
         }
+    }
+
+    pub fn with_tracer(mut self, tracer: Arc<Tracer>) -> Self {
+        self.tracer = tracer;
+        self
     }
 }
 
@@ -46,12 +55,16 @@ impl AgentExecutorFactory for IpcExecutorFactory {
         let llm_sock = params.runtime_dir.join("llm.sock");
         let process_table = Arc::clone(&self.process_table);
         let event_bus = Arc::clone(&self.event_bus);
+        let tracer = Arc::clone(&self.tracer);
 
         let pid = params.pid;
+        let agent_name = params.agent_name.clone();
         let goal = params.goal.clone();
         let session_id = params.session_id.clone();
 
         let handle = tokio::spawn(async move {
+            tracer.agent_spawn(pid.as_u32(), &agent_name, &goal, &session_id);
+
             let registry = Arc::new(MockToolRegistry::new());
             let llm_client = IpcLlmClient::new(
                 llm_sock.to_string_lossy().to_string(),
@@ -63,6 +76,7 @@ impl AgentExecutorFactory for IpcExecutorFactory {
                 Ok(e) => e,
                 Err(err) => {
                     warn!(pid = pid.as_u32(), error = %err, "executor spawn failed");
+                    tracer.agent_exit(pid.as_u32(), "crashed", Some("spawn failed"));
                     let _ = process_table.set_status(pid, ProcessStatus::Crashed).await;
                     event_bus.agent_status(&session_id, pid.as_u32(), "crashed");
                     event_bus.agent_exit(&session_id, pid.as_u32(), 1);
@@ -70,8 +84,9 @@ impl AgentExecutorFactory for IpcExecutorFactory {
                 }
             };
 
-            // Wire the event bus so tool-call/result events are published mid-turn.
+            // Wire the event bus and tracer so events and trace are emitted mid-turn.
             executor = executor.with_event_bus(Arc::clone(&event_bus));
+            executor = executor.with_tracer(Arc::clone(&tracer));
 
             info!(pid = pid.as_u32(), "executor started");
             event_bus.agent_status(&session_id, pid.as_u32(), "running");
@@ -79,6 +94,7 @@ impl AgentExecutorFactory for IpcExecutorFactory {
             match executor.run_with_client(&goal, &llm_client).await {
                 Ok(result) => {
                     info!(pid = pid.as_u32(), "executor finished");
+                    tracer.agent_exit(pid.as_u32(), "completed", None);
                     event_bus.agent_output(&session_id, pid.as_u32(), &result.text);
                     event_bus.agent_status(&session_id, pid.as_u32(), "stopped");
                     event_bus.agent_exit(&session_id, pid.as_u32(), 0);
@@ -86,6 +102,7 @@ impl AgentExecutorFactory for IpcExecutorFactory {
                 }
                 Err(err) => {
                     warn!(pid = pid.as_u32(), error = %err, "executor crashed");
+                    tracer.agent_exit(pid.as_u32(), "crashed", Some(&err.to_string()));
                     event_bus.agent_status(&session_id, pid.as_u32(), "crashed");
                     event_bus.agent_exit(&session_id, pid.as_u32(), 1);
                     let _ = process_table
