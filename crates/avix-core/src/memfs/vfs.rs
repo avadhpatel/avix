@@ -48,26 +48,22 @@ impl MemFs {
     pub async fn list(&self, dir: &VfsPath) -> Result<Vec<String>, AvixError> {
         let prefix = format!("{}/", dir.as_str().trim_end_matches('/'));
         let guard = self.files.read().await;
-        let entries: Vec<String> = guard
-            .keys()
-            .filter(|k| k.starts_with(&prefix))
-            .filter_map(|k| {
-                let rest = &k[prefix.len()..];
-                // Only immediate children (no '/' in the remainder)
-                if rest.contains('/') {
-                    None
-                } else {
-                    Some(rest.to_string())
-                }
-            })
-            .collect();
-        if entries.is_empty() {
-            // Check if any file exists under this dir at all
-            let any = guard.keys().any(|k| k.starts_with(&prefix));
-            if !any {
-                return Err(AvixError::ConfigParse(format!("ENOENT: {}", dir.as_str())));
+
+        // Collect the first path component for every key under `prefix`.
+        // This returns both direct file children and subdirectory names, which
+        // is the standard `ls`-equivalent behaviour.
+        let mut seen = std::collections::HashSet::new();
+        for k in guard.keys().filter(|k| k.starts_with(&prefix)) {
+            let rest = &k[prefix.len()..];
+            let first = rest.split('/').next().unwrap_or(rest);
+            if !first.is_empty() {
+                seen.insert(first.to_string());
             }
         }
-        Ok(entries)
+
+        if seen.is_empty() {
+            return Err(AvixError::ConfigParse(format!("ENOENT: {}", dir.as_str())));
+        }
+        Ok(seen.into_iter().collect())
     }
 }

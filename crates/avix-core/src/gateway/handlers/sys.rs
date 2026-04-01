@@ -9,7 +9,7 @@ pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
 
     match op {
         "status" | "reload" | "shutdown" | "restart" | "logs" | "install" | "uninstall"
-        | "update" => {
+        | "update" | "service-list" | "tool-list" => {
             ipc_forward(
                 &id,
                 &format!("kernel/sys/{op}"),

@@ -1,4 +1,5 @@
 pub mod agent_manifest;
+pub mod invocation;
 pub mod auth;
 pub mod bootstrap;
 pub mod cli;

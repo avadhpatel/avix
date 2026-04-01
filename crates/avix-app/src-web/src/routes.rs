@@ -15,8 +15,10 @@ use tracing::warn;
 use avix_client_core::{
     atp::types::HilOutcome,
     commands::{
-        list_agents as core_list_agents, pipe_text as core_pipe_text,
-        resolve_hil as core_resolve_hil,
+        get_invocation as core_get_invocation, list_agents as core_list_agents,
+        list_installed as core_list_installed, list_invocations as core_list_invocations,
+        list_services as core_list_services, list_tools as core_list_tools,
+        pipe_text as core_pipe_text, resolve_hil as core_resolve_hil,
     },
     commands::spawn_agent::spawn_agent as core_spawn_agent,
     persistence,
@@ -205,6 +207,100 @@ pub async fn invoke_handler(
                 .ok_or_else(|| bad_request("missing id"))?;
             s.notifications.mark_read(id).await;
             Ok(Json(Value::Null))
+        }
+
+        "list_installed" => {
+            let username = req.args["username"]
+                .as_str()
+                .unwrap_or("default")
+                .to_string();
+            let dispatcher = s
+                .dispatcher
+                .as_ref()
+                .ok_or_else(|| bad_request("not connected"))?
+                .clone();
+            drop(s);
+            let agents = core_list_installed(&dispatcher, &username)
+                .await
+                .map_err(|e| internal(format!("{e:?}")))?;
+            let json_str =
+                serde_json::to_string(&agents).map_err(|e| internal(e.to_string()))?;
+            Ok(Json(Value::String(json_str)))
+        }
+
+        "list_invocations" => {
+            let username = req.args["username"]
+                .as_str()
+                .unwrap_or("default")
+                .to_string();
+            let agent_name = req.args["agent_name"].as_str().map(str::to_string);
+            let dispatcher = s
+                .dispatcher
+                .as_ref()
+                .ok_or_else(|| bad_request("not connected"))?
+                .clone();
+            drop(s);
+            let records =
+                core_list_invocations(&dispatcher, &username, agent_name.as_deref())
+                    .await
+                    .map_err(|e| internal(format!("{e:?}")))?;
+            let json_str =
+                serde_json::to_string(&records).map_err(|e| internal(e.to_string()))?;
+            Ok(Json(Value::String(json_str)))
+        }
+
+        "get_invocation" => {
+            let invocation_id = req.args["invocation_id"]
+                .as_str()
+                .ok_or_else(|| bad_request("missing invocation_id"))?
+                .to_string();
+            let dispatcher = s
+                .dispatcher
+                .as_ref()
+                .ok_or_else(|| bad_request("not connected"))?
+                .clone();
+            drop(s);
+            match core_get_invocation(&dispatcher, &invocation_id)
+                .await
+                .map_err(|e| internal(format!("{e:?}")))?
+            {
+                Some(record) => {
+                    let json_str =
+                        serde_json::to_string(&record).map_err(|e| internal(e.to_string()))?;
+                    Ok(Json(Value::String(json_str)))
+                }
+                None => Ok(Json(Value::Null)),
+            }
+        }
+
+        "get_services" => {
+            let dispatcher = s
+                .dispatcher
+                .as_ref()
+                .ok_or_else(|| bad_request("not connected"))?
+                .clone();
+            drop(s);
+            let services = core_list_services(&dispatcher)
+                .await
+                .map_err(|e| internal(format!("{e:?}")))?;
+            let json_str =
+                serde_json::to_string(&services).map_err(|e| internal(e.to_string()))?;
+            Ok(Json(Value::String(json_str)))
+        }
+
+        "get_tools" => {
+            let dispatcher = s
+                .dispatcher
+                .as_ref()
+                .ok_or_else(|| bad_request("not connected"))?
+                .clone();
+            drop(s);
+            let tools = core_list_tools(&dispatcher)
+                .await
+                .map_err(|e| internal(format!("{e:?}")))?;
+            let json_str =
+                serde_json::to_string(&tools).map_err(|e| internal(e.to_string()))?;
+            Ok(Json(Value::String(json_str)))
         }
 
         other => {

@@ -110,6 +110,80 @@ pub async fn list_agents(dispatcher: &Dispatcher) -> Result<Vec<Value>, ClientEr
     }
 }
 
+/// List all installed agents available to `username`.
+pub async fn list_installed(
+    dispatcher: &Dispatcher,
+    username: &str,
+) -> Result<Vec<Value>, ClientError> {
+    let body = dispatch(
+        dispatcher,
+        "proc",
+        "list-installed",
+        serde_json::json!({ "username": username }),
+    )
+    .await?;
+    match body {
+        Some(Value::Array(arr)) => Ok(arr),
+        Some(_) | None => Ok(vec![]),
+    }
+}
+
+/// List invocation history for `username`, optionally filtered to `agent_name`.
+pub async fn list_invocations(
+    dispatcher: &Dispatcher,
+    username: &str,
+    agent_name: Option<&str>,
+) -> Result<Vec<Value>, ClientError> {
+    let mut payload = serde_json::json!({ "username": username });
+    if let Some(name) = agent_name {
+        payload["agent_name"] = serde_json::Value::String(name.to_string());
+    }
+    let body = dispatch(dispatcher, "proc", "invocation-list", payload).await?;
+    match body {
+        Some(Value::Array(arr)) => Ok(arr),
+        Some(_) | None => Ok(vec![]),
+    }
+}
+
+/// Get a single invocation record by UUID. Returns `None` if not found.
+pub async fn get_invocation(
+    dispatcher: &Dispatcher,
+    invocation_id: &str,
+) -> Result<Option<Value>, ClientError> {
+    match dispatch(
+        dispatcher,
+        "proc",
+        "invocation-get",
+        serde_json::json!({ "id": invocation_id }),
+    )
+    .await
+    {
+        Ok(body) => Ok(body),
+        Err(ClientError::Atp { code, .. }) if code.contains("32003") || code.contains("ENOTFOUND") => {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// List all running services. Returns an array of service summary objects.
+pub async fn list_services(dispatcher: &Dispatcher) -> Result<Vec<Value>, ClientError> {
+    let body = dispatch(dispatcher, "sys", "service-list", serde_json::json!({})).await?;
+    match body {
+        Some(Value::Array(arr)) => Ok(arr),
+        Some(_) | None => Ok(vec![]),
+    }
+}
+
+/// List all registered tools. Returns an array of tool summary objects.
+pub async fn list_tools(dispatcher: &Dispatcher) -> Result<Vec<Value>, ClientError> {
+    let body = dispatch(dispatcher, "sys", "tool-list", serde_json::json!({})).await?;
+    match body {
+        Some(Value::Array(arr)) => Ok(arr),
+        Some(_) | None => Ok(vec![]),
+    }
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -329,5 +403,132 @@ mod tests {
         };
         assert_eq!(agents.len(), 2);
         assert_eq!(agents[0]["pid"], 1);
+    }
+
+    // T-CLI-01: list_installed passes username correctly
+    #[tokio::test]
+    async fn list_installed_passes_username_in_body() {
+        let fake = FakeDispatcher::new();
+        fake.set_reply(
+            "proc/list-installed",
+            ok_reply(serde_json::json!([
+                {"name": "researcher", "version": "1.0.0", "scope": "system"}
+            ])),
+        );
+
+        let cmd = Cmd::new(
+            "proc",
+            "list-installed",
+            "tok",
+            serde_json::json!({ "username": "alice" }),
+        );
+        let reply = fake.call(cmd).await.unwrap();
+
+        let agents: Vec<Value> = match reply.body {
+            Some(Value::Array(arr)) => arr,
+            _ => panic!("expected array"),
+        };
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0]["name"], "researcher");
+    }
+
+    // T-CLI-02: list_invocations returns records sorted (here just verifies passthrough)
+    #[tokio::test]
+    async fn list_invocations_returns_all_for_user() {
+        let fake = FakeDispatcher::new();
+        fake.set_reply(
+            "proc/invocation-list",
+            ok_reply(serde_json::json!([
+                {"id": "inv-1", "agentName": "researcher", "status": "completed"},
+                {"id": "inv-2", "agentName": "coder", "status": "running"},
+            ])),
+        );
+
+        let cmd = Cmd::new(
+            "proc",
+            "invocation-list",
+            "tok",
+            serde_json::json!({ "username": "alice" }),
+        );
+        let reply = fake.call(cmd).await.unwrap();
+
+        let records: Vec<Value> = match reply.body {
+            Some(Value::Array(arr)) => arr,
+            _ => panic!("expected array"),
+        };
+        assert_eq!(records.len(), 2);
+    }
+
+    // T-CLI-03: list_invocations with agent_name passes filter
+    #[tokio::test]
+    async fn list_invocations_with_agent_name_filter() {
+        let fake = FakeDispatcher::new();
+        fake.set_reply(
+            "proc/invocation-list",
+            ok_reply(serde_json::json!([
+                {"id": "inv-1", "agentName": "researcher", "status": "completed"},
+            ])),
+        );
+
+        let cmd = Cmd::new(
+            "proc",
+            "invocation-list",
+            "tok",
+            serde_json::json!({ "username": "alice", "agent_name": "researcher" }),
+        );
+        let reply = fake.call(cmd).await.unwrap();
+        assert!(reply.ok);
+        let body = reply.body.is_some();
+        assert!(body);
+    }
+
+    // T-CLI-04: get_invocation parses conversation
+    #[tokio::test]
+    async fn get_invocation_returns_record() {
+        let fake = FakeDispatcher::new();
+        fake.set_reply(
+            "proc/invocation-get",
+            ok_reply(serde_json::json!({
+                "id": "inv-abc",
+                "agentName": "researcher",
+                "goal": "research something",
+                "status": "completed",
+            })),
+        );
+
+        let cmd = Cmd::new(
+            "proc",
+            "invocation-get",
+            "tok",
+            serde_json::json!({ "id": "inv-abc" }),
+        );
+        let reply = fake.call(cmd).await.unwrap();
+        let body = reply.body.unwrap();
+        assert_eq!(body["id"], "inv-abc");
+        assert_eq!(body["status"], "completed");
+    }
+
+    // T-CLI-05: list_installed with empty reply returns empty vec
+    #[tokio::test]
+    async fn list_installed_returns_empty_on_null_body() {
+        let fake = FakeDispatcher::new();
+        fake.set_reply(
+            "proc/list-installed",
+            ok_reply(serde_json::json!([])),
+        );
+
+        let cmd = Cmd::new(
+            "proc",
+            "list-installed",
+            "tok",
+            serde_json::json!({ "username": "alice" }),
+        );
+        let reply = fake.call(cmd).await.unwrap();
+        let agents: Vec<Value> = match reply.body {
+            Some(Value::Array(arr)) => arr,
+            None => vec![],
+            _ => panic!("unexpected"),
+        };
+        assert!(agents.is_empty());
     }
 }

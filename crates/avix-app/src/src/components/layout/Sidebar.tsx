@@ -189,6 +189,29 @@ const Sidebar: React.FC = () => {
         }}
       >
         <NavItem
+          label="Catalog"
+          active={currentPage === 'catalog'}
+          onClick={() => setPage('catalog' as Page)}
+          icon={
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+              <line x1="3" y1="9" x2="21" y2="9" />
+              <line x1="9" y1="21" x2="9" y2="9" />
+            </svg>
+          }
+        />
+        <NavItem
+          label="History"
+          active={currentPage === 'history'}
+          onClick={() => setPage('history' as Page)}
+          icon={
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+          }
+        />
+        <NavItem
           label="Services"
           active={currentPage === 'services'}
           onClick={() => setPage('services' as Page)}

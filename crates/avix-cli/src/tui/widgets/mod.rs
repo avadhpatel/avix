@@ -1,4 +1,5 @@
 pub mod agent_list;
+pub mod catalog;
 pub mod agent_output;
 pub mod command_bar;
 pub mod event_log;

@@ -6,11 +6,17 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
+use crate::agent_manifest::{AgentManifestSummary, ManifestScanner};
 use crate::error::AvixError;
 use crate::executor::{AgentExecutorFactory, SpawnParams};
+use crate::invocation::{InvocationRecord, InvocationStatus, InvocationStore};
 use crate::process::entry::{ProcessEntry, ProcessKind, ProcessStatus};
 use crate::process::table::ProcessTable;
+use crate::service::lifecycle::ServiceManager;
+use crate::service::ServiceSummary;
+use crate::tool_registry::{ToolRegistry, ToolSummary};
 use crate::types::token::{CapabilityToken, IssuedTo};
 use crate::types::Pid;
 
@@ -54,6 +60,16 @@ pub struct ProcHandler {
     executor_factory: Option<Arc<dyn AgentExecutorFactory>>,
     /// Abort handles for running executor tasks, keyed by Avix PID.
     task_handles: Arc<Mutex<HashMap<u32, tokio::task::AbortHandle>>>,
+    /// Persistent store for agent invocation records (optional).
+    invocation_store: Option<Arc<InvocationStore>>,
+    /// Scanner for discovering installed agent manifests (optional).
+    manifest_scanner: Option<Arc<ManifestScanner>>,
+    /// Maps running PID → invocation UUID, for finalization on kill.
+    active_invocations: Arc<Mutex<HashMap<u32, String>>>,
+    /// Service manager — set in phase3 after services start.
+    service_manager: Arc<Mutex<Option<Arc<ServiceManager>>>>,
+    /// Tool registry — set in phase3 after services start.
+    tool_registry: Arc<Mutex<Option<Arc<ToolRegistry>>>>,
 }
 
 impl ProcHandler {
@@ -72,6 +88,11 @@ impl ProcHandler {
             runtime_dir: PathBuf::from("/run/avix"),
             executor_factory: None,
             task_handles: Arc::new(Mutex::new(HashMap::new())),
+            invocation_store: None,
+            manifest_scanner: None,
+            active_invocations: Arc::new(Mutex::new(HashMap::new())),
+            service_manager: Arc::new(Mutex::new(None)),
+            tool_registry: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -91,12 +112,57 @@ impl ProcHandler {
             runtime_dir,
             executor_factory: Some(factory),
             task_handles: Arc::new(Mutex::new(HashMap::new())),
+            invocation_store: None,
+            manifest_scanner: None,
+            active_invocations: Arc::new(Mutex::new(HashMap::new())),
+            service_manager: Arc::new(Mutex::new(None)),
+            tool_registry: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Attach a persistent invocation store.
+    pub fn with_invocation_store(mut self, store: Arc<InvocationStore>) -> Self {
+        self.invocation_store = Some(store);
+        self
+    }
+
+    /// Attach a manifest scanner for agent discovery.
+    pub fn with_manifest_scanner(mut self, scanner: Arc<ManifestScanner>) -> Self {
+        self.manifest_scanner = Some(scanner);
+        self
     }
 
     /// Expose the process table for use by other kernel subsystems (e.g. ipc_server).
     pub fn process_table(&self) -> &Arc<ProcessTable> {
         &self.process_table
+    }
+
+    /// Wire in the `ServiceManager` after phase3 services start.
+    pub async fn set_service_manager(&self, sm: Arc<ServiceManager>) {
+        *self.service_manager.lock().await = Some(sm);
+    }
+
+    /// Wire in the `ToolRegistry` after phase3 services start.
+    pub async fn set_tool_registry(&self, tr: Arc<ToolRegistry>) {
+        *self.tool_registry.lock().await = Some(tr);
+    }
+
+    /// List all running services. Returns empty vec if service manager not yet wired.
+    pub async fn list_services(&self) -> Vec<ServiceSummary> {
+        if let Some(sm) = self.service_manager.lock().await.as_ref() {
+            sm.list_running().await
+        } else {
+            vec![]
+        }
+    }
+
+    /// List all registered tools. Returns empty vec if tool registry not yet wired.
+    pub async fn list_tools(&self) -> Vec<ToolSummary> {
+        if let Some(tr) = self.tool_registry.lock().await.as_ref() {
+            tr.list_all().await
+        } else {
+            vec![]
+        }
     }
 
     /// Abort the background executor task for the given PID, if one is running.
@@ -112,6 +178,38 @@ impl ProcHandler {
                 "no executor task found for agent (may have exited already)"
             );
         }
+        drop(handles);
+        self.finalize_invocation(pid, InvocationStatus::Killed, Some("killed".into()))
+            .await;
+    }
+
+    /// Finalize the invocation record for a PID (called on kill or normal exit).
+    async fn finalize_invocation(
+        &self,
+        pid: u32,
+        status: InvocationStatus,
+        exit_reason: Option<String>,
+    ) {
+        let inv_id = {
+            let mut map = self.active_invocations.lock().await;
+            map.remove(&pid)
+        };
+        let inv_id = match inv_id {
+            Some(id) => id,
+            None => return,
+        };
+        let store = match &self.invocation_store {
+            Some(s) => s,
+            None => return,
+        };
+        // Read final metrics from the process table (best-effort).
+        let (tokens, tool_calls) = match self.process_table.get(Pid::new(pid)).await {
+            Some(entry) => (entry.tokens_consumed, entry.tool_calls_total),
+            None => (0, 0),
+        };
+        let _ = store
+            .finalize(&inv_id, status, chrono::Utc::now(), tokens, tool_calls, exit_reason)
+            .await;
     }
 
     /// Spawn a new agent: allocate PID, mint CapToken, write /proc/ files, persist to agents.yaml, fork/exec RuntimeExecutor.
@@ -154,6 +252,26 @@ impl ProcHandler {
         // Write /proc/<pid>/status.yaml and resolved.yaml
         // TODO: Implement init_proc_files here
 
+        // Create invocation record (before minting token / launching executor)
+        let invocation_id = Uuid::new_v4().to_string();
+        if let Some(store) = &self.invocation_store {
+            let record = InvocationRecord::new(
+                invocation_id.clone(),
+                name.to_string(),
+                caller_identity.to_string(),
+                pid,
+                goal.to_string(),
+                session_id.to_string(),
+            );
+            if let Err(e) = store.create(&record).await {
+                warn!(pid, invocation_id = %invocation_id, error = %e, "failed to create invocation record");
+            }
+        }
+        self.active_invocations
+            .lock()
+            .await
+            .insert(pid, invocation_id.clone());
+
         // Mint capability token for the agent
         let issued_to = IssuedTo {
             pid,
@@ -189,6 +307,7 @@ impl ProcHandler {
                 denied_tools: vec![],
                 context_limit: 0,
                 runtime_dir: self.runtime_dir.clone(),
+                invocation_id: invocation_id.clone(),
             };
             let abort_handle = factory.launch(spawn_params);
             self.task_handles.lock().await.insert(pid, abort_handle);
@@ -241,6 +360,44 @@ impl ProcHandler {
 
         info!(count = active.len(), "listed active agents");
         Ok(active)
+    }
+
+    // ── Discovery / history API ───────────────────────────────────────────────
+
+    /// List all agents installed and available to `username`.
+    /// Returns empty vec if no manifest scanner is configured.
+    pub async fn list_installed(&self, username: &str) -> Vec<AgentManifestSummary> {
+        match &self.manifest_scanner {
+            Some(scanner) => scanner.scan(username).await,
+            None => vec![],
+        }
+    }
+
+    /// List historical invocations for `username`, optionally filtered by agent name.
+    pub async fn list_invocations(
+        &self,
+        username: &str,
+        agent_name: Option<&str>,
+    ) -> Result<Vec<InvocationRecord>, AvixError> {
+        let store = match &self.invocation_store {
+            Some(s) => s,
+            None => return Ok(vec![]),
+        };
+        match agent_name {
+            Some(name) => store.list_for_agent(username, name).await,
+            None => store.list_for_user(username).await,
+        }
+    }
+
+    /// Get a specific invocation record by UUID.
+    pub async fn get_invocation(
+        &self,
+        invocation_id: &str,
+    ) -> Result<Option<InvocationRecord>, AvixError> {
+        match &self.invocation_store {
+            Some(s) => s.get(invocation_id).await,
+            None => Ok(None),
+        }
     }
 
     /// Allocate a new unique PID.

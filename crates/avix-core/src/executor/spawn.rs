@@ -19,4 +19,7 @@ pub struct SpawnParams {
     pub context_limit: u64,
     /// Runtime directory for IPC sockets.
     pub runtime_dir: PathBuf,
+    /// Invocation ID (UUID v4) generated at spawn by `ProcHandler`.
+    /// Used by `RuntimeExecutor` to write conversation + finalize invocation record.
+    pub invocation_id: String,
 }

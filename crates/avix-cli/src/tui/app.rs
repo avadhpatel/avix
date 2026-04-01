@@ -311,6 +311,51 @@ async fn dispatch_parsed_command(
             action_tx.send(Action::SetNewAgentForm(new_form)).await?;
         }
         ParsedCommand::Invalid(_) => {} // Already handled in caller
+        ParsedCommand::Catalog => {
+            let log_event = TuiEvent::SentCommand {
+                cmd: "catalog".to_string(),
+                timestamp: std::time::Instant::now(),
+            };
+            let _ = action_tx.send(Action::LogEvent(log_event)).await;
+            // Switch to catalog tab and re-fetch
+            action_tx
+                .send(Action::SwitchTab(super::state::TuiTab::Catalog))
+                .await?;
+            if let Some(disp) = shared_state.read().await.dispatcher.clone() {
+                let action_tx_c = action_tx.clone();
+                tokio::spawn(async move {
+                    if let Ok(agents) =
+                        avix_client_core::commands::list_installed(&disp, "default").await
+                    {
+                        use avix_core::agent_manifest::{AgentManifestSummary, AgentScope};
+                        let summaries: Vec<AgentManifestSummary> = agents
+                            .iter()
+                            .filter_map(|v| {
+                                Some(AgentManifestSummary {
+                                    name: v["name"].as_str()?.to_string(),
+                                    version: v["version"]
+                                        .as_str()
+                                        .unwrap_or("?")
+                                        .to_string(),
+                                    description: v["description"]
+                                        .as_str()
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    author: v["author"].as_str().unwrap_or("").to_string(),
+                                    path: v["path"].as_str().unwrap_or("").to_string(),
+                                    scope: if v["scope"].as_str() == Some("user") {
+                                        AgentScope::User
+                                    } else {
+                                        AgentScope::System
+                                    },
+                                })
+                            })
+                            .collect();
+                        let _ = action_tx_c.send(Action::UpdateCatalog(summaries)).await;
+                    }
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -725,6 +770,33 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                                         }
                                         debug!("Connection successful");
                                         state.reducer(Action::Connect);
+                                        // Fetch catalog on connect
+                                        if let Some(disp) = shared_state.read().await.dispatcher.clone() {
+                                            let action_tx_c = action_tx.clone();
+                                            tokio::spawn(async move {
+                                                if let Ok(agents) = avix_client_core::commands::list_installed(&disp, "default").await {
+                                                    use avix_core::agent_manifest::{AgentManifestSummary, AgentScope};
+                                                    let summaries: Vec<AgentManifestSummary> = agents
+                                                        .iter()
+                                                        .filter_map(|v| {
+                                                            Some(AgentManifestSummary {
+                                                                name: v["name"].as_str()?.to_string(),
+                                                                version: v["version"].as_str().unwrap_or("?").to_string(),
+                                                                description: v["description"].as_str().unwrap_or("").to_string(),
+                                                                author: v["author"].as_str().unwrap_or("").to_string(),
+                                                                path: v["path"].as_str().unwrap_or("").to_string(),
+                                                                scope: if v["scope"].as_str() == Some("user") {
+                                                                    AgentScope::User
+                                                                } else {
+                                                                    AgentScope::System
+                                                                },
+                                                            })
+                                                        })
+                                                        .collect();
+                                                    let _ = action_tx_c.send(Action::UpdateCatalog(summaries)).await;
+                                                }
+                                            });
+                                        }
                                     }
                                     Err(e) => {
                                         warn!("ATP connection failed: {}", e);
@@ -767,11 +839,33 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                         KeyCode::Char('n') => {
                             state.reducer(Action::ToggleNotificationsPopup);
                         }
+                        KeyCode::Tab => {
+                            let next_tab = match state.active_tab {
+                                super::state::TuiTab::Running => super::state::TuiTab::Catalog,
+                                super::state::TuiTab::Catalog => super::state::TuiTab::Running,
+                            };
+                            state.reducer(Action::SwitchTab(next_tab));
+                        }
                         KeyCode::Up => {
-                            state.agent_list_widget.select_prev(&state.agents);
+                            match state.active_tab {
+                                super::state::TuiTab::Catalog => {
+                                    state.catalog_widget.select_prev();
+                                }
+                                _ => {
+                                    state.agent_list_widget.select_prev(&state.agents);
+                                }
+                            }
                         }
                         KeyCode::Down => {
-                            state.agent_list_widget.select_next(&state.agents);
+                            match state.active_tab {
+                                super::state::TuiTab::Catalog => {
+                                    let items = state.catalog.clone();
+                                    state.catalog_widget.select_next(&items);
+                                }
+                                _ => {
+                                    state.agent_list_widget.select_next(&state.agents);
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -864,44 +958,57 @@ fn ui(f: &mut ratatui::Frame, state: &TuiState) {
     let status_bar = state.status_widget.render(state);
     f.render_widget(status_bar, layout[0]);
 
-    // Agents list
-    let agents_list = state.agent_list_widget.render(&state.agents, layout[1]);
-    f.render_widget(agents_list, layout[1]);
-
-    // Event log (if visible)
-    if state.log_visible {
-        let event_log = state
-            .event_log_widget
-            .render(&state.event_log, main_area[0]);
-        f.render_widget(event_log, main_area[0]);
-    }
-
-    // Agent output pane
-    let output_area = if state.log_visible {
-        main_area[1]
-    } else {
-        layout[2]
-    };
-    if let Some(selected_pid) = state
-        .agents
-        .get(state.agent_list_widget.selected_index)
-        .map(|a| a.pid)
-    {
-        if let Some(buf) = state.agent_output_buffers.get(&selected_pid) {
-            let output_para = buf.render(selected_pid, output_area);
-            f.render_widget(output_para, output_area);
-        } else {
-            let empty = Paragraph::new("No output yet").block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!("Agent {} Output", selected_pid)),
-            );
-            f.render_widget(empty, output_area);
+    match state.active_tab {
+        super::state::TuiTab::Catalog => {
+            // Catalog tab: full main area shows catalog list
+            let catalog_area = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0)])
+                .split(layout[2])[0];
+            let catalog_list = state.catalog_widget.render(&state.catalog);
+            f.render_widget(catalog_list, catalog_area);
         }
-    } else {
-        let no_selection = Paragraph::new("No agent selected")
-            .block(Block::default().borders(Borders::ALL).title("Agent Output"));
-        f.render_widget(no_selection, output_area);
+        super::state::TuiTab::Running => {
+            // Running tab: agents list + output pane
+            let agents_list = state.agent_list_widget.render(&state.agents, layout[1]);
+            f.render_widget(agents_list, layout[1]);
+
+            // Event log (if visible)
+            if state.log_visible {
+                let event_log = state
+                    .event_log_widget
+                    .render(&state.event_log, main_area[0]);
+                f.render_widget(event_log, main_area[0]);
+            }
+
+            // Agent output pane
+            let output_area = if state.log_visible {
+                main_area[1]
+            } else {
+                layout[2]
+            };
+            if let Some(selected_pid) = state
+                .agents
+                .get(state.agent_list_widget.selected_index)
+                .map(|a| a.pid)
+            {
+                if let Some(buf) = state.agent_output_buffers.get(&selected_pid) {
+                    let output_para = buf.render(selected_pid, output_area);
+                    f.render_widget(output_para, output_area);
+                } else {
+                    let empty = Paragraph::new("No output yet").block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(format!("Agent {} Output", selected_pid)),
+                    );
+                    f.render_widget(empty, output_area);
+                }
+            } else {
+                let no_selection = Paragraph::new("No agent selected")
+                    .block(Block::default().borders(Borders::ALL).title("Agent Output"));
+                f.render_widget(no_selection, output_area);
+            }
+        }
     }
 
     // Command bar (if in command mode)

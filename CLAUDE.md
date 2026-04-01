@@ -86,10 +86,15 @@ These are hard rules. Violating any of them is a bug, not a design choice.
 
 ### Filesystem Ownership
 
-15. The kernel **never writes** into user-owned trees (`/users/`, `/services/`, `/crews/`).
+15. The kernel **never writes** into user-owned trees (`/users/`, `/services/`, `/crews/`)
+    **via the VFS ACL layer**. Exception: kernel components may write directly to disk via
+    `LocalProvider` (which bypasses ACL), specifically for `InvocationStore` artefacts under
+    `users/<username>/agents/`. This is intentional — the kernel is trusted.
 16. Users and agents **never write** into ephemeral (`/proc/`, `/kernel/`) or system trees
     (`/bin/`, `/etc/avix/`).
 17. Sessions live in `/proc/` — they are runtime state, never persisted under `/users/`.
+18. Invocation records live in `users/<username>/agents/` — they are persistent, not ephemeral.
+    A session and its invocation record are linked by `session_id` but have independent lifetimes.
 
 ---
 
@@ -286,6 +291,8 @@ a running system is `avix config init` → `avix start`.
 | Writing `service.unit` as YAML | `service.unit` uses **TOML** format — see `docs/architecture/07-services.md` |
 | Constructing `ServiceSpawnRequest { name, binary }` literals | Use `ServiceSpawnRequest::simple(name, binary)` or `ServiceSpawnRequest::from_unit(&unit)` |
 | Injecting `_caller` unconditionally | Only inject when `ServiceRegistry::is_caller_scoped(svc)` returns true |
+| Writing invocation records via VFS | Use `LocalProvider` directly (kernel is trusted) — VFS ACL layer would block it |
+| Confusing sessions with invocations | Sessions are ephemeral (`/proc/`); invocations are persistent (`users/<u>/agents/`) |
 
 ---
 
@@ -358,3 +365,17 @@ once the work is complete and incorporated into `docs/architecture/`.
 | svc-gap-F | `ipc.tool-add` / `ipc.tool-remove` typed wire params + `drain` semantics |
 | svc-gap-G | `CallerInfo`, `caller_scoped` in `ServiceRecord` + `ServiceRegistry`, dispatcher injection |
 | svc-gap-H | `ServiceWatchdog`, `SecretStore` (disk-backed), `kernel/secret/get`, `avix secret` CLI |
+
+**Agent Persistence** — fully implemented and documented in `docs/architecture/14-agent-persistence.md`.
+
+| Component | What was built |
+|-----------|---------------|
+| `ManifestScanner` | Scans `/bin/` + `/users/<u>/bin/` for installed agents; system wins collisions |
+| `InvocationStore` | redb + LocalProvider; YAML summary + JSONL conversation per invocation |
+| `ProcHandler` extension | `spawn()` creates record, `abort_agent()` finalizes Killed, 3 new list/get methods |
+| `KernelIpcServer` extension | `kernel/proc/list-installed`, `kernel/proc/invocation-list`, `kernel/proc/invocation-get` |
+| `RuntimeExecutor` extension | `shutdown_with_status()` flushes conversation + finalizes record on exit |
+| ATP gateway | `proc/list-installed`, `proc/invocation-list`, `proc/invocation-get` forwarded via `ipc_forward` |
+| CLI | `avix agent catalog`, `avix agent history [--agent]`, `avix agent show <id>` |
+| TUI | Catalog tab (Tab key), `:catalog` command, `UpdateCatalog` / `SwitchTab` actions |
+| GUI (`avix-app`) | CatalogPage (browse + spawn), HistoryPage (table + conversation drawer), 3 new Tauri commands |

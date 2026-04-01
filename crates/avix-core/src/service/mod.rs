@@ -13,7 +13,7 @@ pub use installer::{InstallRequest, InstallResult, ServiceInstaller};
 pub use ipc_server::ServiceIpcServer;
 pub use lifecycle::{
     IpcRegisterRequest, IpcRegisterResult, IpcToolAddParams, IpcToolRemoveParams, IpcToolSpec,
-    ServiceManager, ServiceSpawnRequest,
+    ServiceManager, ServiceSpawnRequest, ServiceSummary,
 };
 pub use process::ServiceProcess;
 pub use status::{ServiceState, ServiceStatus};

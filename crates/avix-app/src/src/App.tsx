@@ -11,6 +11,8 @@ import Sidebar from "./components/layout/Sidebar";
 import { AddAgentModal } from "./components/AddAgentModal";
 import NotificationCenter from "./components/notifications/NotificationCenter";
 import AgentThreadPage from "./pages/AgentThreadPage";
+import CatalogPage from "./pages/CatalogPage";
+import HistoryPage from "./pages/HistoryPage";
 import ServicesPage from "./pages/ServicesPage";
 import ToolsPage from "./pages/ToolsPage";
 
@@ -45,6 +47,8 @@ const AppInner: React.FC = () => {
       sidebar={<Sidebar />}
     >
       {currentPage === 'agent' && <AgentThreadPage />}
+      {currentPage === 'catalog' && <CatalogPage />}
+      {currentPage === 'history' && <HistoryPage />}
       {currentPage === 'services' && <ServicesPage />}
       {currentPage === 'tools' && <ToolsPage />}
 

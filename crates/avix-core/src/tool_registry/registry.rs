@@ -167,6 +167,48 @@ impl ToolRegistry {
     pub async fn tool_count(&self) -> usize {
         self.inner.read().await.len()
     }
+
+    /// Return a snapshot of every registered tool with its name, namespace, description,
+    /// and current state. The description is extracted from the JSON descriptor's
+    /// `"description"` field when present.
+    pub async fn list_all(&self) -> Vec<ToolSummary> {
+        self.inner
+            .read()
+            .await
+            .values()
+            .map(|rec| {
+                let name = rec.entry.name.as_str().to_string();
+                let namespace = name
+                    .split('/')
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let description = rec
+                    .entry
+                    .descriptor
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let state = match rec.entry.state {
+                    crate::types::tool::ToolState::Available => "available",
+                    crate::types::tool::ToolState::Unavailable => "unavailable",
+                    crate::types::tool::ToolState::Degraded => "degraded",
+                }
+                .to_string();
+                ToolSummary { name, namespace, description, state }
+            })
+            .collect()
+    }
+}
+
+/// A lightweight summary of a registered tool, returned by `list_all()`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolSummary {
+    pub name: String,
+    pub namespace: String,
+    pub description: String,
+    pub state: String,
 }
 
 impl Default for ToolRegistry {

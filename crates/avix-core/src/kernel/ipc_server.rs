@@ -154,6 +154,51 @@ async fn dispatch_request(
             }
         }
 
+        "kernel/proc/list-installed" => {
+            let username = params["username"].as_str().unwrap_or("");
+            let summaries = proc_handler.list_installed(username).await;
+            JsonRpcResponse::ok(id, json!(summaries))
+        }
+
+        "kernel/proc/invocation-list" => {
+            let username = params["username"].as_str().unwrap_or("");
+            let agent_name = params["agent_name"].as_str();
+            match proc_handler.list_invocations(username, agent_name).await {
+                Ok(records) => JsonRpcResponse::ok(id, json!(records)),
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/invocation-list failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+
+        "kernel/proc/invocation-get" => {
+            let inv_id = params["id"].as_str().unwrap_or("");
+            match proc_handler.get_invocation(inv_id).await {
+                Ok(Some(record)) => JsonRpcResponse::ok(id, json!(record)),
+                Ok(None) => JsonRpcResponse::err(
+                    id,
+                    -32003,
+                    &format!("invocation {inv_id} not found"),
+                    None,
+                ),
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/invocation-get failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+
+        "kernel/sys/service-list" => {
+            let summaries = proc_handler.list_services().await;
+            JsonRpcResponse::ok(id, serde_json::json!(summaries))
+        }
+
+        "kernel/sys/tool-list" => {
+            let summaries = proc_handler.list_tools().await;
+            JsonRpcResponse::ok(id, serde_json::json!(summaries))
+        }
+
         other => {
             warn!(method = other, "kernel IPC: unknown method");
             JsonRpcResponse::err(id, -32601, &format!("unknown kernel method: {other}"), None)
@@ -316,6 +361,67 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
         let resp = dispatch_request("req-1", "kernel/bogus/method", json!({}), ph).await;
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, -32601);
+    }
+
+    // T-GW-10
+    #[tokio::test]
+    async fn list_installed_returns_ok() {
+        let dir = TempDir::new().unwrap();
+        let ph = make_proc_handler(&dir);
+        let resp = dispatch_request(
+            "req-1",
+            "kernel/proc/list-installed",
+            json!({ "username": "alice" }),
+            ph,
+        )
+        .await;
+        // No scanner configured → empty array, still OK
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
+    }
+
+    // T-GW-11
+    #[tokio::test]
+    async fn invocation_list_returns_ok() {
+        let dir = TempDir::new().unwrap();
+        let ph = make_proc_handler(&dir);
+        let resp = dispatch_request(
+            "req-1",
+            "kernel/proc/invocation-list",
+            json!({ "username": "alice" }),
+            ph,
+        )
+        .await;
+        // No store configured → empty array, still OK
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
+    }
+
+    // T-GW-12
+    #[tokio::test]
+    async fn invocation_get_returns_not_found_for_unknown_id() {
+        let dir = TempDir::new().unwrap();
+        let ph = make_proc_handler(&dir);
+        let resp = dispatch_request(
+            "req-1",
+            "kernel/proc/invocation-get",
+            json!({ "id": "does-not-exist" }),
+            ph,
+        )
+        .await;
+        // No store configured → Ok(None) → 404-style error
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, -32003);
+    }
+
+    // T-GW-13: regression — unknown op must NOT match new ops
+    #[tokio::test]
+    async fn unknown_method_still_returns_eparse_after_new_ops() {
+        let dir = TempDir::new().unwrap();
+        let ph = make_proc_handler(&dir);
+        let resp = dispatch_request("req-1", "kernel/proc/bogus-new-op", json!({}), ph).await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
     }

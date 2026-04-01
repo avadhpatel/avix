@@ -69,7 +69,16 @@ AVIX_ROOT/                 (e.g. ~/avix-data or /var/avix-data)
 │       ├── workspace/
 │       ├── snapshots/
 │       ├── defaults.yaml
-│       └── limits.yaml
+│       ├── limits.yaml
+│       ├── bin/               → VFS /users/<username>/bin/ (user-installed agents)
+│       │   └── <agent-name>/
+│       │       └── manifest.yaml
+│       └── agents/            → invocation records (written by kernel via LocalProvider)
+│           └── <agent-name>/
+│               └── invocations/
+│                   ├── <uuid>.yaml          (summary: status, tokens, timing)
+│                   └── <uuid>/
+│                       └── conversation.jsonl
 ├── crews/                 → VFS /crews/
 ├── secrets/               → VFS /secrets/ (AES-256-GCM blobs, chmod 700)
 └── logs/                  → /var/log/avix/

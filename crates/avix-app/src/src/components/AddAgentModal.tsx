@@ -7,10 +7,11 @@ interface Props {
   onClose: () => void;
   // pid as string (backend returns numeric pid as a string)
   onAgentAdded: (pidStr: string) => void;
+  defaultName?: string;
 }
 
-export const AddAgentModal: React.FC<Props> = ({ isOpen, onClose, onAgentAdded }) => {
-  const [name, setName] = useState('');
+export const AddAgentModal: React.FC<Props> = ({ isOpen, onClose, onAgentAdded, defaultName }) => {
+  const [name, setName] = useState(defaultName ?? '');
   const [desc, setDesc] = useState('');
   const [submitting, setSubmitting] = useState(false);
 

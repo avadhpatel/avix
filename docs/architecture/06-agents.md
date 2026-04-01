@@ -485,3 +485,58 @@ This primes the LLM with the prior session's last known state without unbounded 
 | `snap/list` | List all snapshots for the calling agent |
 | `snap/delete` | Delete a named snapshot |
 | `snap/restore` | Restore calling agent from a named snapshot |
+
+---
+
+## Agent Discovery
+
+Installed agents are enumerated by `ManifestScanner` (`crates/avix-core/src/agent_manifest/scanner.rs`).
+
+It scans two VFS directories:
+
+| Tree | Scope | ATP op |
+|------|-------|--------|
+| `/bin/<name>/manifest.yaml` | System — all users | `proc/list-installed` |
+| `/users/<username>/bin/<name>/manifest.yaml` | User — personal installs | `proc/list-installed` |
+
+System agents take precedence: if the same agent `name` appears in both trees, only the system version is returned.
+
+See `docs/architecture/14-agent-persistence.md` for the full discovery specification.
+
+---
+
+## Invocation Records
+
+Every `kernel/proc/spawn` creates a persistent `InvocationRecord` that survives daemon restart.
+
+```
+kernel/proc/spawn
+  → InvocationRecord { status: Running } written to InvocationStore
+  → invocation_id threaded through SpawnParams → RuntimeExecutor
+
+RuntimeExecutor::shutdown_with_status(status, exit_reason)
+  → conversation flushed to JSONL
+  → InvocationRecord finalized (status, ended_at, tokens, tool_calls)
+
+kernel/proc/kill (abort_agent)
+  → InvocationRecord finalized with status: Killed
+```
+
+Disk artefacts (written by kernel via `LocalProvider` to `AVIX_ROOT/users/`):
+
+```
+users/<username>/agents/<agent>/invocations/
+├── <uuid>.yaml              ← summary
+└── <uuid>/conversation.jsonl
+```
+
+ATP query interface:
+
+| Op | Description |
+|----|-------------|
+| `proc/list-installed` | All agents available to a user |
+| `proc/invocation-list` | All invocations for a user (optional agent_name filter) |
+| `proc/invocation-get` | Single invocation by UUID |
+
+See `docs/architecture/14-agent-persistence.md` for full specification.
+

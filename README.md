@@ -63,6 +63,9 @@ cargo build --workspace
    ./target/debug/avix agent list
    ./target/debug/avix agent spawn researcher \\
      --goal "Research Q3 earnings"
+   ./target/debug/avix agent catalog        # list installed agents
+   ./target/debug/avix agent history        # past invocations
+   ./target/debug/avix agent show <id>      # detail + conversation
    ```
 
 5. GUI dev:
@@ -174,11 +177,13 @@ Long-lived, reconnectable             Fresh connection per call
 ```
 /proc/          Ephemeral — per-agent runtime state (lost on reboot)
 /kernel/        Ephemeral — system defaults and limits
-/bin/           Persistent system — installed agents
+/bin/           Persistent system — system-installed agents (all users)
 /etc/avix/      Persistent system — configuration
 /secrets/       Persistent — AES-256-GCM encrypted credentials
                   (never readable via VFS — kernel-injected only)
 /users/         Persistent user — operator workspaces
+  └── <username>/bin/       User-installed agents (that user only)
+  └── <username>/agents/    Invocation records + conversation history
 /services/      Persistent — service account workspaces
 /crews/         Persistent — crew shared spaces
 ```
@@ -213,9 +218,9 @@ Supported providers: Anthropic, OpenAI, Ollama, Stability AI, ElevenLabs.
 ## Clients
 
 * **Daemon**: `avix start --root <dir> [--port 9142]` — ATP WS gateway + services + kernel.agent
-* **CLI**: `avix agent spawn/list/kill`, `avix hil approve/deny`, `avix logs --follow`
-* **TUI**: `avix tui` — fullscreen dashboard: agents/output/events/notifs/HIL. Keys: q/c//↑↓/f/n, `:spawn`/`:kill`/`:logs`
-* **GUI**: `cd crates/avix-app && tauri dev` — GoldenLayout UI, dockable panels, HIL modals
+* **CLI**: `avix agent spawn/list/kill/catalog/history/show`, `avix hil approve/deny`, `avix logs --follow`
+* **TUI**: `avix tui` — fullscreen dashboard: Running tab (agents/output/events/notifs/HIL) + Catalog tab (`Tab` to switch). Commands: `:spawn`/`:kill`/`:logs`/`:catalog`
+* **GUI**: `cd crates/avix-app && tauri dev` — sidebar app with Agent threads, Catalog page (browse + spawn), History page (invocation table + conversation drawer), Services, Tools
 
 All share `avix-client-core` ATP lib.
 
@@ -263,7 +268,7 @@ avix/ (Cargo workspace)
 │   ├── avix-cli/            ← CLI binary
 │   ├── avix-app/            ← Tauri GUI (Rust backend + React/Vite frontend)
 │   └── avix-docker/         ← Headless daemon
-├── docs/architecture/       ← 00-12 docs
+├── docs/architecture/       ← 00-14 docs
 └── ...
 ```
 

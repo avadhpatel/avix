@@ -22,6 +22,7 @@ pub fn parse(input: &str) -> Result<ParsedCommand, String> {
             "logs" | "log" => Ok(ParsedCommand::ToggleLogs),
             "notifs" | "notifications" | "n" => Ok(ParsedCommand::ToggleNotifications),
             "new-agent-form" | "new" | "f" => Ok(ParsedCommand::ToggleNewAgentForm),
+            "catalog" => Ok(ParsedCommand::Catalog),
             _ => Err(format!("Unknown command: {}", trimmed)),
         },
         2 => match parts[0].as_str() {

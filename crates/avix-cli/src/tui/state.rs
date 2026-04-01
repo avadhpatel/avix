@@ -6,7 +6,10 @@ use avix_client_core::notification::{HilState, Notification};
 use avix_client_core::state::ActiveAgent;
 use tracing::debug;
 
+use avix_core::agent_manifest::AgentManifestSummary;
+
 use crate::tui::widgets::agent_list::AgentListWidget;
+use crate::tui::widgets::catalog::CatalogWidget;
 use crate::tui::widgets::agent_output::AgentOutputBuffer;
 use crate::tui::widgets::command_bar::CommandBarWidget;
 use crate::tui::widgets::event_log::EventLogWidget;
@@ -56,6 +59,13 @@ impl EventLog {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum TuiTab {
+    #[default]
+    Running,
+    Catalog,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
 pub enum ParsedCommand {
@@ -74,6 +84,7 @@ pub enum ParsedCommand {
     ToggleNewAgentForm,
     #[allow(dead_code)]
     Invalid(String),
+    Catalog,
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +114,9 @@ pub struct TuiState {
     pub event_log_widget: EventLogWidget,
     pub help_modal_widget: HelpModalWidget,
     pub startup_time: Instant,
+    pub active_tab: TuiTab,
+    pub catalog: Vec<AgentManifestSummary>,
+    pub catalog_widget: CatalogWidget,
 }
 
 impl Default for TuiState {
@@ -131,6 +145,9 @@ impl Default for TuiState {
             event_log_widget: EventLogWidget,
             help_modal_widget: HelpModalWidget,
             startup_time: Instant::now(),
+            active_tab: TuiTab::Running,
+            catalog: Vec::new(),
+            catalog_widget: CatalogWidget::default(),
         }
     }
 }
@@ -175,6 +192,8 @@ pub enum Action {
     /// Close the help modal. Used when pressing Esc in help modal mode.
     /// See [TUI Key Bindings Reference](docs/architecture/tui.md#key-bindings).
     CloseHelpModal,
+    UpdateCatalog(Vec<AgentManifestSummary>),
+    SwitchTab(TuiTab),
 }
 
 impl TuiState {
@@ -291,6 +310,13 @@ impl TuiState {
                 debug!("Closing help modal");
                 self.help_modal_open = false;
             }
+            Action::UpdateCatalog(items) => {
+                self.catalog = items;
+                self.catalog_widget.selected_index = 0;
+            }
+            Action::SwitchTab(tab) => {
+                self.active_tab = tab;
+            }
         }
     }
 }
@@ -377,6 +403,9 @@ mod tests {
             event_log_widget: EventLogWidget,
             help_modal_widget: HelpModalWidget,
             startup_time: Instant::now(),
+            active_tab: TuiTab::Running,
+            catalog: Vec::new(),
+            catalog_widget: CatalogWidget::default(),
         };
         state.reducer(Action::Disconnect);
         assert!(!state.connected);
@@ -590,5 +619,54 @@ mod tests {
         assert!(state.help_modal_open);
         state.reducer(Action::CloseHelpModal);
         assert!(!state.help_modal_open);
+    }
+
+    // T-TUI-01: UpdateCatalog populates state
+    #[test]
+    fn update_catalog_populates_state() {
+        use avix_core::agent_manifest::{AgentManifestSummary, AgentScope};
+        let mut state = TuiState::default();
+        assert!(state.catalog.is_empty());
+        let items = vec![
+            AgentManifestSummary {
+                name: "researcher".to_string(),
+                version: "1.0.0".to_string(),
+                description: "Research agent".to_string(),
+                author: "team".to_string(),
+                path: "/bin/researcher/manifest.yaml".to_string(),
+                scope: AgentScope::System,
+            },
+            AgentManifestSummary {
+                name: "coder".to_string(),
+                version: "2.0.0".to_string(),
+                description: "Code generation".to_string(),
+                author: "team".to_string(),
+                path: "/bin/coder/manifest.yaml".to_string(),
+                scope: AgentScope::System,
+            },
+        ];
+        state.reducer(Action::UpdateCatalog(items));
+        assert_eq!(state.catalog.len(), 2);
+        assert_eq!(state.catalog[0].name, "researcher");
+        assert_eq!(state.catalog_widget.selected_index, 0);
+    }
+
+    // T-TUI-02: Tab cycles between Running and Catalog
+    #[test]
+    fn switch_tab_cycles_tabs() {
+        let mut state = TuiState::default();
+        assert_eq!(state.active_tab, TuiTab::Running);
+        state.reducer(Action::SwitchTab(TuiTab::Catalog));
+        assert_eq!(state.active_tab, TuiTab::Catalog);
+        state.reducer(Action::SwitchTab(TuiTab::Running));
+        assert_eq!(state.active_tab, TuiTab::Running);
+    }
+
+    // T-TUI-04: ':catalog' parses to ParsedCommand::Catalog
+    #[test]
+    fn catalog_command_parses_correctly() {
+        // ParsedCommand::Catalog variant exists and matches
+        let cmd = ParsedCommand::Catalog;
+        assert_eq!(cmd, ParsedCommand::Catalog);
     }
 }

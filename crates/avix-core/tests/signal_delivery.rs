@@ -174,6 +174,7 @@ async fn agent_pause_resume_via_signal() {
         denied_tools: vec![],
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
+            invocation_id: String::new(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -244,6 +245,7 @@ async fn agent_kill_sets_killed_flag() {
         denied_tools: vec![],
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
+            invocation_id: String::new(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await

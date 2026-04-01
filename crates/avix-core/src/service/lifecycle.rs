@@ -312,6 +312,37 @@ impl ServiceManager {
     }
 }
 
+/// A lightweight summary of a running service, returned by `list_running()`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ServiceSummary {
+    pub name: String,
+    pub pid: u32,
+    /// `"running"` once the service has registered its endpoint; `"starting"` before that.
+    pub status: String,
+    pub registered_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl ServiceManager {
+    /// Return a snapshot of all spawned services with their current status.
+    pub async fn list_running(&self) -> Vec<ServiceSummary> {
+        self.services
+            .read()
+            .await
+            .iter()
+            .map(|(name, rec)| ServiceSummary {
+                name: name.clone(),
+                pid: rec.token.pid.as_u32(),
+                status: if rec.endpoint.is_some() {
+                    "running".into()
+                } else {
+                    "starting".into()
+                },
+                registered_at: rec.registered_at,
+            })
+            .collect()
+    }
+}
+
 fn visibility_from_spec(spec: ToolVisibilitySpec) -> ToolVisibility {
     match spec {
         ToolVisibilitySpec::All => ToolVisibility::All,

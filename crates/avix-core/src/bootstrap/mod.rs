@@ -50,6 +50,8 @@ pub struct Runtime {
     /// Shared event bus — created at bootstrap so phase2_kernel and phase4_atp_gateway
     /// both reference the same instance.
     event_bus: Arc<AtpEventBus>,
+    /// Proc handler retained so phase3 can wire in service_manager and tool_registry.
+    proc_handler: Option<Arc<ProcHandler>>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -124,6 +126,7 @@ impl Runtime {
             runtime_dir,
             kernel_sock,
             event_bus: Arc::new(AtpEventBus::default()),
+            proc_handler: None,
         })
     }
 
@@ -216,6 +219,8 @@ impl Runtime {
             self.runtime_dir.clone(),
             factory,
         ));
+        // Retain a reference so phase3 can wire in service_manager and tool_registry.
+        self.proc_handler = Some(Arc::clone(&proc_handler));
         let kernel_server = KernelIpcServer::new(self.kernel_sock.clone(), proc_handler);
         kernel_server.start().await?;
         tracing::info!(sock = %self.kernel_sock.display(), "kernel IPC server started");
@@ -228,6 +233,13 @@ impl Runtime {
             ServiceManager::new_with_registry(self.runtime_dir.clone());
         let service_manager = Arc::new(service_manager);
         let service_registry = Arc::new(ServiceRegistry::new());
+
+        // Wire service_manager and tool_registry into the kernel IPC server so that
+        // kernel/sys/service-list and kernel/sys/tool-list IPC methods are available.
+        if let Some(ph) = &self.proc_handler {
+            ph.set_service_manager(Arc::clone(&service_manager)).await;
+            ph.set_tool_registry(Arc::clone(&tool_registry)).await;
+        }
 
         // ── router.svc ────────────────────────────────────────────────────────
         let router_sock = self.runtime_dir.join("router.sock");

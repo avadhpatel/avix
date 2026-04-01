@@ -4,7 +4,10 @@ use tauri::State;
 use avix_client_core::atp::types::HilOutcome;
 use avix_client_core::commands::spawn_agent::spawn_agent as core_spawn_agent;
 use avix_client_core::commands::{
-    list_agents as core_list_agents, pipe_text as core_pipe_text, resolve_hil as core_resolve_hil,
+    get_invocation as core_get_invocation, list_agents as core_list_agents,
+    list_installed as core_list_installed, list_invocations as core_list_invocations,
+    list_services as core_list_services, list_tools as core_list_tools,
+    pipe_text as core_pipe_text, resolve_hil as core_resolve_hil,
 };
 use avix_client_core::state::SharedState;
 
@@ -100,6 +103,101 @@ pub async fn list_agents(state: State<'_, SharedState>) -> Result<String, String
             match core_list_agents(dispatcher).await {
                 Ok(agents) => serde_json::to_string(&agents).map_err(|e| e.to_string()),
                 Err(e) => Err(format!("Failed to list agents: {:?}", e)),
+            }
+        } else {
+            Err("Not connected".to_string())
+        }
+    } else {
+        Err("No dispatcher".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn list_installed(state: State<'_, SharedState>, username: String) -> Result<String, String> {
+    let s = state.read().await;
+    if let Some(dispatcher) = &s.dispatcher {
+        if let Some(_session) = s.connection_status.session_id() {
+            match core_list_installed(dispatcher, &username).await {
+                Ok(agents) => serde_json::to_string(&agents).map_err(|e| e.to_string()),
+                Err(e) => Err(format!("Failed to list installed: {:?}", e)),
+            }
+        } else {
+            Err("Not connected".to_string())
+        }
+    } else {
+        Err("No dispatcher".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn list_invocations(
+    state: State<'_, SharedState>,
+    username: String,
+    agent_name: Option<String>,
+) -> Result<String, String> {
+    let s = state.read().await;
+    if let Some(dispatcher) = &s.dispatcher {
+        if let Some(_session) = s.connection_status.session_id() {
+            match core_list_invocations(dispatcher, &username, agent_name.as_deref()).await {
+                Ok(records) => serde_json::to_string(&records).map_err(|e| e.to_string()),
+                Err(e) => Err(format!("Failed to list invocations: {:?}", e)),
+            }
+        } else {
+            Err("Not connected".to_string())
+        }
+    } else {
+        Err("No dispatcher".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn get_invocation(
+    state: State<'_, SharedState>,
+    invocation_id: String,
+) -> Result<Option<String>, String> {
+    let s = state.read().await;
+    if let Some(dispatcher) = &s.dispatcher {
+        if let Some(_session) = s.connection_status.session_id() {
+            match core_get_invocation(dispatcher, &invocation_id).await {
+                Ok(Some(record)) => {
+                    serde_json::to_string(&record).map(Some).map_err(|e| e.to_string())
+                }
+                Ok(None) => Ok(None),
+                Err(e) => Err(format!("Failed to get invocation: {:?}", e)),
+            }
+        } else {
+            Err("Not connected".to_string())
+        }
+    } else {
+        Err("No dispatcher".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn get_services(state: State<'_, SharedState>) -> Result<String, String> {
+    let s = state.read().await;
+    if let Some(dispatcher) = &s.dispatcher {
+        if let Some(_session) = s.connection_status.session_id() {
+            match core_list_services(dispatcher).await {
+                Ok(services) => serde_json::to_string(&services).map_err(|e| e.to_string()),
+                Err(e) => Err(format!("Failed to list services: {:?}", e)),
+            }
+        } else {
+            Err("Not connected".to_string())
+        }
+    } else {
+        Err("No dispatcher".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn get_tools(state: State<'_, SharedState>) -> Result<String, String> {
+    let s = state.read().await;
+    if let Some(dispatcher) = &s.dispatcher {
+        if let Some(_session) = s.connection_status.session_id() {
+            match core_list_tools(dispatcher).await {
+                Ok(tools) => serde_json::to_string(&tools).map_err(|e| e.to_string()),
+                Err(e) => Err(format!("Failed to list tools: {:?}", e)),
             }
         } else {
             Err("Not connected".to_string())

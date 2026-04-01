@@ -10,7 +10,9 @@ use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt};
 use avix_client_core::atp::types::Cmd as AtpCmd_;
 use avix_client_core::atp::{AtpClient, Dispatcher};
 use avix_client_core::commands::spawn_agent::spawn_agent;
-use avix_client_core::commands::{kill_agent, list_agents, resolve_hil};
+use avix_client_core::commands::{
+    get_invocation, kill_agent, list_agents, list_installed, list_invocations, resolve_hil,
+};
 use avix_client_core::config::ClientConfig;
 use avix_client_core::persistence;
 
@@ -343,6 +345,26 @@ enum AgentCmd {
         /// PID of the agent
         pid: u64,
     },
+    /// List installed agents available to the current user
+    Catalog {
+        /// Username to query (defaults to current user)
+        #[arg(long)]
+        username: Option<String>,
+    },
+    /// List invocation history
+    History {
+        /// Filter by agent name
+        #[arg(long)]
+        agent: Option<String>,
+        /// Username to query (defaults to current user)
+        #[arg(long)]
+        username: Option<String>,
+    },
+    /// Show a specific invocation (summary + conversation)
+    Show {
+        /// Invocation ID
+        invocation_id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -384,6 +406,89 @@ fn emit<T: serde::Serialize>(json_mode: bool, human_fn: impl FnOnce(&T) -> Strin
     } else {
         println!("{}", human_fn(&value));
     }
+}
+
+fn format_catalog(agents: &Vec<serde_json::Value>) -> String {
+    if agents.is_empty() {
+        return "No agents installed.".to_string();
+    }
+    let mut out = format!("{:<24} {:<10} {:<8} {}\n", "NAME", "VERSION", "SCOPE", "DESCRIPTION");
+    out.push_str(&"-".repeat(72));
+    out.push('\n');
+    for a in agents {
+        let name = a["name"].as_str().unwrap_or("?");
+        let version = a["version"].as_str().unwrap_or("?");
+        let scope = a["scope"].as_str().unwrap_or("?");
+        let desc = a["description"].as_str().unwrap_or("");
+        out.push_str(&format!("{:<24} {:<10} {:<8} {}\n", name, version, scope, desc));
+    }
+    out
+}
+
+fn format_history(records: &Vec<serde_json::Value>) -> String {
+    if records.is_empty() {
+        return "No invocation history.".to_string();
+    }
+    let mut out = format!(
+        "{:<12} {:<20} {:<12} {:<26} {}\n",
+        "ID", "AGENT", "STATUS", "SPAWNED", "TOKENS"
+    );
+    out.push_str(&"-".repeat(80));
+    out.push('\n');
+    for r in records {
+        let id = r["id"].as_str().unwrap_or("?");
+        let short_id = if id.len() > 8 { &id[..8] } else { id };
+        let agent = r["agentName"].as_str().unwrap_or("?");
+        let status = r["status"].as_str().unwrap_or("?");
+        let spawned = r["spawnedAt"].as_str().unwrap_or("?");
+        let tokens = r["tokensConsumed"].as_u64().unwrap_or(0);
+        out.push_str(&format!(
+            "{:<12} {:<20} {:<12} {:<26} {}\n",
+            short_id, agent, status, spawned, tokens
+        ));
+    }
+    out
+}
+
+fn format_invocation(inv: &serde_json::Value) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "ID:      {}\n",
+        inv["id"].as_str().unwrap_or("?")
+    ));
+    out.push_str(&format!(
+        "Agent:   {}\n",
+        inv["agentName"].as_str().unwrap_or("?")
+    ));
+    out.push_str(&format!(
+        "Status:  {}\n",
+        inv["status"].as_str().unwrap_or("?")
+    ));
+    out.push_str(&format!(
+        "Goal:    {}\n",
+        inv["goal"].as_str().unwrap_or("")
+    ));
+    out.push_str(&format!(
+        "Spawned: {}\n",
+        inv["spawnedAt"].as_str().unwrap_or("?")
+    ));
+    if let Some(ended) = inv["endedAt"].as_str() {
+        out.push_str(&format!("Ended:   {}\n", ended));
+    }
+    out.push_str(&format!(
+        "Tokens:  {}\n",
+        inv["tokensConsumed"].as_u64().unwrap_or(0)
+    ));
+    out.push('\n');
+    if let Some(messages) = inv["conversation"].as_array() {
+        out.push_str("--- Conversation ---\n");
+        for msg in messages {
+            let role = msg["role"].as_str().unwrap_or("?");
+            let content = msg["content"].as_str().unwrap_or("");
+            out.push_str(&format!("[{}] {}\n", role, content));
+        }
+    }
+    out
 }
 
 fn log_filename(cmd: &Cmd) -> &str {
@@ -558,6 +663,7 @@ async fn main() -> Result<()> {
                     denied_tools: vec![],
                     context_limit: 0,
                     runtime_dir: runtime.runtime_dir().to_path_buf(),
+                    invocation_id: uuid::Uuid::new_v4().to_string(),
                 };
                 let registry = Arc::new(MockToolRegistry::new());
                 let mut executor = RuntimeExecutor::spawn_with_registry(params, registry).await?;
@@ -647,6 +753,33 @@ async fn main() -> Result<()> {
                     let dispatcher = connect_config().await?;
                     kill_agent(&dispatcher, pid).await?;
                     emit(cli.json, |_: &()| format!("Killed agent {}", pid), ());
+                }
+                AgentCmd::Catalog { username } => {
+                    let dispatcher = connect_config().await?;
+                    let user = username
+                        .as_deref()
+                        .unwrap_or("default");
+                    let agents = list_installed(&dispatcher, user).await?;
+                    emit(cli.json, format_catalog, agents);
+                }
+                AgentCmd::History { agent, username } => {
+                    let dispatcher = connect_config().await?;
+                    let user = username
+                        .as_deref()
+                        .unwrap_or("default");
+                    let records =
+                        list_invocations(&dispatcher, user, agent.as_deref()).await?;
+                    emit(cli.json, format_history, records);
+                }
+                AgentCmd::Show { invocation_id } => {
+                    let dispatcher = connect_config().await?;
+                    match get_invocation(&dispatcher, &invocation_id).await? {
+                        Some(inv) => emit(cli.json, format_invocation, inv),
+                        None => {
+                            eprintln!("Invocation '{}' not found.", invocation_id);
+                            std::process::exit(1);
+                        }
+                    }
                 }
             },
 

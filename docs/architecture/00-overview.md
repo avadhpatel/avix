@@ -188,5 +188,6 @@ These are hard rules. Violating any of them is a bug.
 | 08-llm-service.md | llm.svc multi-modality, provider routing, streaming (`llm/stream_complete`) |
 | 09-runtime-executor-tools.md | Tool categories, 7-step turn loop, HIL scenarios |
 | 13-streaming.md | End-to-end LLM streaming: SSE parsing, IPC notification protocol, `StreamChunk`, `agent.output.chunk` ATP events, TUI integration |
+| 14-agent-persistence.md | Agent discovery (ManifestScanner), invocation records (InvocationStore), conversation JSONL, ATP/CLI/TUI/GUI surface |
 
 **Comprehensive narrative reference:** `docs/Avix-Architecture.md`

@@ -158,6 +158,10 @@ pub struct RuntimeExecutor {
     pub conversation_history: Vec<(String, String)>,
     /// Event bus — when set, agent_tool_call / agent_tool_result events are published live.
     event_bus: Option<Arc<AtpEventBus>>,
+    /// Invocation store — when set, conversation is flushed on shutdown.
+    invocation_store: Option<Arc<crate::invocation::InvocationStore>>,
+    /// Invocation UUID assigned at spawn by ProcHandler (empty string if not tracked).
+    invocation_id: String,
 
     // ── status tracking fields ────────────────────────────────────────────────
     /// When this agent was spawned (used for wallTimeSec in status.yaml).
@@ -226,6 +230,8 @@ impl RuntimeExecutor {
             memory_context: None,
             conversation_history: Vec::new(),
             event_bus: None,
+            invocation_store: None,
+            invocation_id: params.invocation_id.clone(),
             spawned_at: chrono::Utc::now(),
             context_used: 0,
             context_limit: params.context_limit,
@@ -268,6 +274,17 @@ impl RuntimeExecutor {
     /// Attach a `MemFs` handle so `pipe/open` writes `/proc/<pid>/pipes/<pipeId>.yaml`.
     pub fn with_vfs(mut self, vfs: Arc<VfsRouter>) -> Self {
         self.vfs = Some(vfs);
+        self
+    }
+
+    /// Attach an `InvocationStore` so conversation history is flushed to disk on shutdown.
+    pub fn with_invocation_store(
+        mut self,
+        store: Arc<crate::invocation::InvocationStore>,
+        id: String,
+    ) -> Self {
+        self.invocation_store = Some(store);
+        self.invocation_id = id;
         self
     }
 
@@ -953,12 +970,52 @@ impl RuntimeExecutor {
     }
 
     pub async fn shutdown(&mut self) {
+        self.shutdown_with_status(
+            crate::invocation::InvocationStatus::Completed,
+            None,
+        )
+        .await;
+    }
+
+    /// Shutdown the executor, deregistering tools and flushing invocation history.
+    ///
+    /// Called by the factory wrapper after `run_with_client()` returns or errors.
+    pub async fn shutdown_with_status(
+        &mut self,
+        status: crate::invocation::InvocationStatus,
+        exit_reason: Option<String>,
+    ) {
+        // 1. Deregister Category 2 tools.
         match &self.registry_ref {
             RegistryRef::Mock(reg) => {
                 for name in self.registered_cat2.clone() {
                     reg.deregister_tool(self.pid.as_u32(), &name).await;
                 }
                 self.registered_cat2.clear();
+            }
+        }
+
+        // 2. Flush conversation history and finalize invocation record.
+        if !self.invocation_id.is_empty() {
+            if let Some(store) = &self.invocation_store {
+                let _ = store
+                    .write_conversation(
+                        &self.invocation_id,
+                        &self.spawned_by,
+                        &self.agent_name,
+                        &self.conversation_history,
+                    )
+                    .await;
+                let _ = store
+                    .finalize(
+                        &self.invocation_id,
+                        status,
+                        chrono::Utc::now(),
+                        self.tokens_consumed,
+                        self.tool_calls_total,
+                        exit_reason,
+                    )
+                    .await;
             }
         }
     }
@@ -1713,6 +1770,7 @@ mod tests {
             denied_tools: vec![],
             context_limit: 0,
             runtime_dir: std::path::PathBuf::new(),
+            invocation_id: String::new(),
         }
     }
 
@@ -1792,6 +1850,7 @@ mod tests {
             denied_tools: vec![],
             context_limit: 0,
             runtime_dir: std::path::PathBuf::new(),
+            invocation_id: String::new(),
         };
         let mut executor = RuntimeExecutor::spawn_with_registry(params, registry)
             .await
@@ -2339,5 +2398,161 @@ mod tests {
         });
         let result = executor.run_until_complete("test").await;
         assert!(result.is_ok());
+    }
+
+    // T-REX-20: shutdown_with_status(Completed) finalizes invocation
+    #[tokio::test]
+    async fn test_shutdown_with_status_completed_finalizes_invocation() {
+        use crate::invocation::{InvocationRecord, InvocationStatus, InvocationStore};
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let store = Arc::new(InvocationStore::open(dir.path().join("inv.redb")).await.unwrap());
+        let rec = InvocationRecord::new(
+            "inv-rex-20".into(),
+            "test-agent".into(),
+            "kernel".into(),
+            200,
+            "test goal".into(),
+            "sess-1".into(),
+        );
+        store.create(&rec).await.unwrap();
+
+        let mut executor = make_executor(200, &[]).await;
+        executor.invocation_store = Some(Arc::clone(&store));
+        executor.invocation_id = "inv-rex-20".into();
+        executor.conversation_history = vec![
+            ("user".into(), "hello".into()),
+            ("assistant".into(), "hi".into()),
+        ];
+        executor.tokens_consumed = 1234;
+        executor.tool_calls_total = 5;
+
+        executor.shutdown_with_status(InvocationStatus::Completed, None).await;
+
+        let loaded = store.get("inv-rex-20").await.unwrap().unwrap();
+        assert_eq!(loaded.status, InvocationStatus::Completed);
+        assert!(loaded.ended_at.is_some());
+        assert_eq!(loaded.tokens_consumed, 1234);
+        assert_eq!(loaded.tool_calls_total, 5);
+    }
+
+    // T-REX-21: shutdown_with_status(Killed)
+    #[tokio::test]
+    async fn test_shutdown_with_status_killed() {
+        use crate::invocation::{InvocationRecord, InvocationStatus, InvocationStore};
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let store = Arc::new(InvocationStore::open(dir.path().join("inv.redb")).await.unwrap());
+        let rec = InvocationRecord::new(
+            "inv-rex-21".into(),
+            "test-agent".into(),
+            "kernel".into(),
+            201,
+            "test goal".into(),
+            "sess-1".into(),
+        );
+        store.create(&rec).await.unwrap();
+
+        let mut executor = make_executor(201, &[]).await;
+        executor.invocation_store = Some(Arc::clone(&store));
+        executor.invocation_id = "inv-rex-21".into();
+
+        executor
+            .shutdown_with_status(InvocationStatus::Killed, Some("killed".into()))
+            .await;
+
+        let loaded = store.get("inv-rex-21").await.unwrap().unwrap();
+        assert_eq!(loaded.status, InvocationStatus::Killed);
+        assert_eq!(loaded.exit_reason.as_deref(), Some("killed"));
+    }
+
+    // T-REX-22: shutdown_with_status(Failed)
+    #[tokio::test]
+    async fn test_shutdown_with_status_failed() {
+        use crate::invocation::{InvocationRecord, InvocationStatus, InvocationStore};
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let store = Arc::new(InvocationStore::open(dir.path().join("inv.redb")).await.unwrap());
+        let rec = InvocationRecord::new(
+            "inv-rex-22".into(),
+            "test-agent".into(),
+            "kernel".into(),
+            202,
+            "test goal".into(),
+            "sess-1".into(),
+        );
+        store.create(&rec).await.unwrap();
+
+        let mut executor = make_executor(202, &[]).await;
+        executor.invocation_store = Some(Arc::clone(&store));
+        executor.invocation_id = "inv-rex-22".into();
+
+        executor
+            .shutdown_with_status(InvocationStatus::Failed, Some("token expired".into()))
+            .await;
+
+        let loaded = store.get("inv-rex-22").await.unwrap().unwrap();
+        assert_eq!(loaded.status, InvocationStatus::Failed);
+        assert_eq!(loaded.exit_reason.as_deref(), Some("token expired"));
+    }
+
+    // T-REX-23: executor without store — shutdown_with_status doesn't panic
+    #[tokio::test]
+    async fn test_shutdown_with_status_no_store_no_panic() {
+        use crate::invocation::InvocationStatus;
+        let mut executor = make_executor(203, &[]).await;
+        // No invocation_store set
+        executor
+            .shutdown_with_status(InvocationStatus::Completed, None)
+            .await;
+        // If we got here, no panic
+    }
+
+    // T-REX-24: 3-message conversation produces 3-line JSONL
+    #[tokio::test]
+    async fn test_shutdown_flushes_3_message_conversation_as_jsonl() {
+        use crate::invocation::{InvocationRecord, InvocationStatus, InvocationStore};
+        use crate::memfs::local_provider::LocalProvider;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let provider = LocalProvider::new(dir.path()).unwrap();
+        let store = Arc::new(
+            InvocationStore::open(dir.path().join("inv.redb"))
+                .await
+                .unwrap()
+                .with_local(provider),
+        );
+        let rec = InvocationRecord::new(
+            "inv-rex-24".into(),
+            "test-agent".into(),
+            "kernel".into(),
+            204,
+            "test goal".into(),
+            "sess-1".into(),
+        );
+        store.create(&rec).await.unwrap();
+
+        let mut executor = make_executor(204, &[]).await;
+        executor.invocation_store = Some(Arc::clone(&store));
+        executor.invocation_id = "inv-rex-24".into();
+        executor.conversation_history = vec![
+            ("user".into(), "msg1".into()),
+            ("assistant".into(), "msg2".into()),
+            ("user".into(), "msg3".into()),
+        ];
+
+        executor
+            .shutdown_with_status(InvocationStatus::Completed, None)
+            .await;
+
+        let path = dir
+            .path()
+            .join("kernel/agents/test-agent/invocations/inv-rex-24/conversation.jsonl");
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(content.lines().count(), 3);
     }
 }
