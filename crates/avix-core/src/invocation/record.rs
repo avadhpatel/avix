@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub enum InvocationStatus {
     #[default]
     Running,
+    Idle,
     Completed,
     Failed,
     Killed,
@@ -109,5 +110,26 @@ mod tests {
         let r = make_record();
         let json = serde_json::to_string(&r).unwrap();
         assert!(!json.contains("exitReason"));
+    }
+
+    #[test]
+    fn idle_status_serialises_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&InvocationStatus::Idle)
+                .unwrap()
+                .trim(),
+            "\"idle\""
+        );
+    }
+
+    #[test]
+    fn idle_roundtrip_json() {
+        let r = InvocationRecord {
+            status: InvocationStatus::Idle,
+            ..make_record()
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let r2: InvocationRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(r2.status, InvocationStatus::Idle);
     }
 }

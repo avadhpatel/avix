@@ -16,6 +16,8 @@ use crate::process::entry::{ProcessEntry, ProcessKind, ProcessStatus};
 use crate::process::table::ProcessTable;
 use crate::service::lifecycle::ServiceManager;
 use crate::service::ServiceSummary;
+use crate::session::SessionRecord;
+use crate::session::PersistentSessionStore;
 use crate::tool_registry::{ToolRegistry, ToolSummary};
 use crate::trace::Tracer;
 use crate::types::token::{CapabilityToken, IssuedTo};
@@ -79,6 +81,8 @@ pub struct ProcHandler {
     task_handles: Arc<Mutex<HashMap<u32, tokio::task::AbortHandle>>>,
     /// Persistent store for agent invocation records (optional).
     invocation_store: Option<Arc<InvocationStore>>,
+    /// Persistent store for session records (optional).
+    session_store: Option<Arc<PersistentSessionStore>>,
     /// Scanner for discovering installed agent manifests (optional).
     manifest_scanner: Option<Arc<ManifestScanner>>,
     /// Maps running PID → invocation UUID, for finalization on kill.
@@ -108,6 +112,7 @@ impl ProcHandler {
             executor_factory: None,
             task_handles: Arc::new(Mutex::new(HashMap::new())),
             invocation_store: None,
+            session_store: None,
             manifest_scanner: None,
             active_invocations: Arc::new(Mutex::new(HashMap::new())),
             service_manager: Arc::new(Mutex::new(None)),
@@ -133,6 +138,7 @@ impl ProcHandler {
             executor_factory: Some(factory),
             task_handles: Arc::new(Mutex::new(HashMap::new())),
             invocation_store: None,
+            session_store: None,
             manifest_scanner: None,
             active_invocations: Arc::new(Mutex::new(HashMap::new())),
             service_manager: Arc::new(Mutex::new(None)),
@@ -156,6 +162,12 @@ impl ProcHandler {
     /// Attach a manifest scanner for agent discovery.
     pub fn with_manifest_scanner(mut self, scanner: Arc<ManifestScanner>) -> Self {
         self.manifest_scanner = Some(scanner);
+        self
+    }
+
+    /// Attach a persistent session store.
+    pub fn with_session_store(mut self, store: Arc<PersistentSessionStore>) -> Self {
+        self.session_store = Some(store);
         self
     }
 
@@ -279,6 +291,38 @@ impl ProcHandler {
     ) -> Result<u32, AvixError> {
         info!(name, goal, session_id, "spawning agent");
 
+        // Resolve session: attach to existing OR create new
+        let effective_session_id = if session_id.is_empty() {
+            if let Some(store) = &self.session_store {
+                let record = SessionRecord::new(
+                    Uuid::new_v4(),
+                    caller_identity.to_string(),
+                    name.to_string(),
+                    name.to_string(),
+                    goal.to_string(),
+                );
+                if let Err(e) = store.create(&record).await {
+                    warn!(error = %e, "failed to create session record");
+                }
+                info!(session_id = %record.id, "created new session");
+                record.id.to_string()
+            } else {
+                Uuid::new_v4().to_string()
+            }
+        } else {
+            // Session ID provided - attach to existing session
+            if let Some(store) = &self.session_store {
+                if let Ok(Some(mut session)) = store.get(&Uuid::parse_str(session_id)?).await {
+                    session.add_participant(name, true);
+                    if let Err(e) = store.update(&session).await {
+                        warn!(error = %e, "failed to update session with participant");
+                    }
+                    info!(session_id = %session.id, participant = name, "added participant to session");
+                }
+            }
+            session_id.to_string()
+        };
+
         // Allocate PID (simple increment for now)
         let pid = self.allocate_pid().await?;
         info!(pid, "allocated PID");
@@ -300,7 +344,7 @@ impl ProcHandler {
         self.process_table.insert(entry).await;
 
         // Persist to agents.yaml
-        self.persist_agent_record(pid, name, goal, session_id)
+        self.persist_agent_record(pid, name, goal, &effective_session_id)
             .await?;
         info!(pid, "persisted agent record to agents.yaml");
 
@@ -316,7 +360,7 @@ impl ProcHandler {
                 caller_identity.to_string(),
                 pid,
                 goal.to_string(),
-                session_id.to_string(),
+                effective_session_id.clone(),
             );
             if let Err(e) = store.create(&record).await {
                 warn!(pid, invocation_id = %invocation_id, error = %e, "failed to create invocation record");
@@ -355,7 +399,7 @@ impl ProcHandler {
                 agent_name: name.to_string(),
                 goal: goal.to_string(),
                 spawned_by: caller_identity.to_string(),
-                session_id: session_id.to_string(),
+                session_id: effective_session_id.clone(),
                 token,
                 system_prompt: None,
                 selected_model: String::new(), // factory resolves via llm.svc
@@ -453,6 +497,88 @@ impl ProcHandler {
             Some(s) => s.get(invocation_id).await,
             None => Ok(None),
         }
+    }
+
+    // ── Session operations ─────────────────────────────────────────────────────
+
+    /// Create a new session.
+    pub async fn create_session(
+        &self,
+        username: &str,
+        origin_agent: &str,
+        title: &str,
+        goal: &str,
+    ) -> Result<SessionRecord, AvixError> {
+        let store = match &self.session_store {
+            Some(s) => s,
+            None => return Err(AvixError::NotFound("session store not configured".into())),
+        };
+        let record = SessionRecord::new(
+            Uuid::new_v4(),
+            username.to_string(),
+            origin_agent.to_string(),
+            title.to_string(),
+            goal.to_string(),
+        );
+        store.create(&record).await?;
+        info!(session_id = %record.id, "created session");
+        Ok(record)
+    }
+
+    /// List all sessions for a user.
+    pub async fn list_sessions(&self, username: &str) -> Result<Vec<SessionRecord>, AvixError> {
+        match &self.session_store {
+            Some(s) => s.list_for_user(username).await,
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Get a specific session by ID.
+    pub async fn get_session(&self, session_id: &Uuid) -> Result<Option<SessionRecord>, AvixError> {
+        match &self.session_store {
+            Some(s) => s.get(session_id).await,
+            None => Ok(None),
+        }
+    }
+
+    /// Resume a session by spawning a new invocation in it.
+    pub async fn resume_session(
+        &self,
+        session_id: &Uuid,
+        input: Option<&str>,
+    ) -> Result<u32, AvixError> {
+        let store = match &self.session_store {
+            Some(s) => s,
+            None => return Err(AvixError::NotFound("session store not configured".into())),
+        };
+        
+        let session = store.get(session_id).await?
+            .ok_or_else(|| AvixError::NotFound(format!("session {} not found", session_id)))?;
+        
+        // Only allow resuming Idle or Running sessions
+        use crate::session::SessionStatus;
+        if !matches!(session.status, SessionStatus::Idle | SessionStatus::Running) {
+            return Err(AvixError::InvalidInput(format!(
+                "session {} is not Idle or Running (status: {:?})", 
+                session_id, session.status
+            )));
+        }
+        
+        // Build the goal from input or use session's goal
+        let goal = input.unwrap_or(&session.goal).to_string();
+        
+        // Spawn the agent in this session - this will:
+        // 1. Attach to existing session
+        // 2. Update primary_agent to the new agent
+        let pid = self.spawn(
+            &session.primary_agent,
+            &goal,
+            &session_id.to_string(),
+            &session.username,
+        ).await?;
+        
+        info!(session_id = %session_id, pid, "resumed session");
+        Ok(pid)
     }
 
     /// Allocate a new unique PID.

@@ -10,6 +10,19 @@ Consider files in this folder temporary and can be deleted as per dev's needs.
 
 ## Active Plans
 
+### Session Management (spec: `docs/architecture/14-agent-persistence.md`)
+
+Implement first-class Session abstraction for multi-turn agent workflows.
+Phase 1 delivers Sessions v1.0: Idle status, SessionRecord persistence, and session-aware spawn/resume.
+
+| File | What it builds | Priority | Depends On |
+|------|---------------|----------|------------|
+| `session-gap-A-sessions-v1.md` | `Idle` status for Invocations/Sessions, `SessionRecord` + `SessionStore` (redb + VFS), auto-session on spawn, ATP `session-*` ops, CLI `session *` commands | **High** | — |
+
+**Status:** Phase 1 (Tasks 1-3) complete — Types and persistence layer implemented
+
+---
+
 ### VFS Persistence
 
 | File | Description | Priority | Depends On |

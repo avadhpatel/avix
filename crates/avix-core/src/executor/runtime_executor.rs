@@ -165,6 +165,8 @@ pub struct RuntimeExecutor {
     invocation_store: Option<Arc<crate::invocation::InvocationStore>>,
     /// Invocation UUID assigned at spawn by ProcHandler (empty string if not tracked).
     invocation_id: String,
+    /// Session store — when set, session status is updated on Idle transitions.
+    session_store: Option<Arc<crate::session::PersistentSessionStore>>,
 
     // ── status tracking fields ────────────────────────────────────────────────
     /// When this agent was spawned (used for wallTimeSec in status.yaml).
@@ -236,6 +238,7 @@ impl RuntimeExecutor {
             tracer: None,
             invocation_store: None,
             invocation_id: params.invocation_id.clone(),
+            session_store: None,
             spawned_at: chrono::Utc::now(),
             context_used: 0,
             context_limit: params.context_limit,
@@ -295,6 +298,12 @@ impl RuntimeExecutor {
     ) -> Self {
         self.invocation_store = Some(store);
         self.invocation_id = id;
+        self
+    }
+
+    /// Attach a `SessionStore` so session status is updated on Idle transitions.
+    pub fn with_session_store(mut self, store: Arc<crate::session::PersistentSessionStore>) -> Self {
+        self.session_store = Some(store);
         self
     }
 
@@ -1005,7 +1014,27 @@ impl RuntimeExecutor {
             }
         }
 
-        // 2. Flush conversation history and finalize invocation record.
+        // 2. Handle Idle transition (agent waiting for input)
+        if exit_reason.as_deref() == Some("waiting_for_input") {
+            if !self.invocation_id.is_empty() {
+                if let Some(store) = &self.invocation_store {
+                    let _ = store
+                        .update_status(&self.invocation_id, crate::invocation::InvocationStatus::Idle)
+                        .await;
+                }
+            }
+            if !self.session_id.is_empty() {
+                if let Some(store) = &self.session_store {
+                    if let Ok(Some(mut session)) = store.get(&uuid::Uuid::parse_str(&self.session_id).unwrap_or_default()).await {
+                        session.mark_idle();
+                        let _ = store.update(&session).await;
+                    }
+                }
+            }
+            return;
+        }
+
+        // 3. Flush conversation history and finalize invocation record.
         if !self.invocation_id.is_empty() {
             if let Some(store) = &self.invocation_store {
                 let _ = store

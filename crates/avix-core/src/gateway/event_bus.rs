@@ -22,6 +22,9 @@ pub fn event_scope(kind: &AtpEventKind) -> (Role, bool) {
     match kind {
         AtpEventKind::SessionReady => (Role::Guest, true),
         AtpEventKind::SessionClosing => (Role::Guest, true),
+        AtpEventKind::SessionAgentAttached => (Role::User, true),
+        AtpEventKind::SessionAgentDetached => (Role::User, true),
+        AtpEventKind::SessionStatusChanged => (Role::User, true),
         AtpEventKind::TokenExpiring => (Role::Guest, true),
         AtpEventKind::AgentOutput => (Role::User, true),
         AtpEventKind::AgentStatus => (Role::User, true),

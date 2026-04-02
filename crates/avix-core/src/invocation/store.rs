@@ -118,6 +118,34 @@ impl InvocationStore {
         Ok(())
     }
 
+    /// Update only the status of a record (e.g., transition to Idle).
+    pub async fn update_status(&self, id: &str, status: InvocationStatus) -> Result<(), AvixError> {
+        let mut record = match self.get(id).await? {
+            Some(r) => r,
+            None => return Ok(()),
+        };
+        record.status = status;
+
+        let json = serde_json::to_string(&record).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let db = self.db.lock().await;
+        let write_txn = db
+            .begin_write()
+            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        {
+            let mut table = write_txn
+                .open_table(TABLE)
+                .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+            table
+                .insert(id, json.as_str())
+                .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        }
+        write_txn
+            .commit()
+            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        self.write_yaml_artefact(&record).await;
+        Ok(())
+    }
+
     /// Append the full conversation history as a JSONL file.
     ///
     /// Each entry is `{"role": "<role>", "content": "<content>"}`.

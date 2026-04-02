@@ -38,6 +38,9 @@ pub enum AvixError {
     #[error("IPC frame too large")]
     IpcFrameTooLarge,
 
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("not found: {0}")]
     NotFound(String),
 
@@ -75,5 +78,11 @@ impl From<serde_json::Error> for AvixError {
 impl From<std::io::Error> for AvixError {
     fn from(e: std::io::Error) -> Self {
         AvixError::Io(e.to_string())
+    }
+}
+
+impl From<uuid::Error> for AvixError {
+    fn from(e: uuid::Error) -> Self {
+        AvixError::InvalidInput(e.to_string())
     }
 }

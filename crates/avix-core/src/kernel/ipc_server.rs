@@ -189,6 +189,64 @@ async fn dispatch_request(
             }
         }
 
+        // Session operations
+        "kernel/proc/session/create" => {
+            let username = params["username"].as_str().unwrap_or("");
+            let origin_agent = params["origin_agent"].as_str().unwrap_or("agent");
+            let title = params["title"].as_str().unwrap_or("New Session");
+            let goal = params["goal"].as_str().unwrap_or("");
+            match proc_handler.create_session(username, origin_agent, title, goal).await {
+                Ok(record) => JsonRpcResponse::ok(id, json!({ "session_id": record.id.to_string() })),
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/session/create failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+
+        "kernel/proc/session/list" => {
+            let username = params["username"].as_str().unwrap_or("");
+            match proc_handler.list_sessions(username).await {
+                Ok(sessions) => JsonRpcResponse::ok(id, json!(sessions)),
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/session/list failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+
+        "kernel/proc/session/get" => {
+            let session_id = params["id"].as_str().unwrap_or("");
+            let uuid = match uuid::Uuid::parse_str(session_id) {
+                Ok(u) => u,
+                Err(_) => return JsonRpcResponse::err(id, -32002, "invalid session ID", None),
+            };
+            match proc_handler.get_session(&uuid).await {
+                Ok(Some(session)) => JsonRpcResponse::ok(id, json!(session)),
+                Ok(None) => JsonRpcResponse::err(id, -32003, &format!("session {session_id} not found"), None),
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/session/get failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+
+        "kernel/proc/session/resume" => {
+            let session_id = params["session_id"].as_str().unwrap_or("");
+            let input = params["input"].as_str();
+            let uuid = match uuid::Uuid::parse_str(session_id) {
+                Ok(u) => u,
+                Err(_) => return JsonRpcResponse::err(id, -32002, "invalid session ID", None),
+            };
+            match proc_handler.resume_session(&uuid, input).await {
+                Ok(pid) => JsonRpcResponse::ok(id, json!({ "pid": pid })),
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/session/resume failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+
         "kernel/sys/service-list" => {
             debug!("handling kernel/sys/service-list");
             let response = proc_handler.list_services().await;

@@ -26,6 +26,12 @@ pub enum AtpEventKind {
     SessionReady,
     #[serde(rename = "session.closing")]
     SessionClosing,
+    #[serde(rename = "session.agent.attached")]
+    SessionAgentAttached,
+    #[serde(rename = "session.agent.detached")]
+    SessionAgentDetached,
+    #[serde(rename = "session.status")]
+    SessionStatusChanged,
     #[serde(rename = "token.expiring")]
     TokenExpiring,
     #[serde(rename = "agent.spawned")]

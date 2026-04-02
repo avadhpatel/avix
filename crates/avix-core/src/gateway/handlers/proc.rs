@@ -24,6 +24,12 @@ pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
             drop(_enter); // drop before await
             ipc_forward(&id, &ipc_method, cmd.cmd.body, ctx.ipc.as_ref()).await
         }
+        "session-create" | "session-list" | "session-get" | "session-resume" => {
+            // Transform kebab-case to path: session-create -> kernel/proc/session/create
+            let ipc_method = format!("kernel/proc/{}", op.replace('-', "/"));
+            tracing::info!(op, ipc_method = %ipc_method, "forwarding session op to kernel IPC");
+            ipc_forward(&id, &ipc_method, cmd.cmd.body, ctx.ipc.as_ref()).await
+        }
         op => {
             tracing::warn!(op, "unknown proc op");
             unknown_op(id, op)
