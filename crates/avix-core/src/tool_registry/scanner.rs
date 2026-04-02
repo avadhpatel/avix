@@ -43,20 +43,24 @@ impl ToolScanner {
         let entries = Self::scan(service_dir)?
             .into_iter()
             .filter_map(|desc| {
-                ToolName::parse(&desc.name).ok().map(|name| ToolEntry {
-                    name,
-                    owner: service_name.to_string(),
-                    state: match desc.status.state.as_str() {
-                        "available" => ToolState::Available,
-                        "degraded" => ToolState::Degraded,
-                        _ => ToolState::Unavailable,
-                    },
-                    visibility: match &desc.visibility {
-                        ToolVisibilitySpec::All => ToolVisibility::All,
-                        ToolVisibilitySpec::User(u) => ToolVisibility::User(u.clone()),
-                        ToolVisibilitySpec::Crew(c) => ToolVisibility::Crew(c.clone()),
-                    },
-                    descriptor: serde_json::to_value(&desc).unwrap_or_default(),
+                ToolName::parse(&desc.name).ok().map(|name| {
+                    let caps = desc.capabilities_required.clone();
+                    ToolEntry::new(
+                        name,
+                        service_name.to_string(),
+                        match desc.status.state.as_str() {
+                            "available" => ToolState::Available,
+                            "degraded" => ToolState::Degraded,
+                            _ => ToolState::Unavailable,
+                        },
+                        match &desc.visibility {
+                            ToolVisibilitySpec::All => ToolVisibility::All,
+                            ToolVisibilitySpec::User(u) => ToolVisibility::User(u.clone()),
+                            ToolVisibilitySpec::Crew(c) => ToolVisibility::Crew(c.clone()),
+                        },
+                        serde_json::to_value(&desc).unwrap_or_default(),
+                    )
+                    .with_capabilities(caps)
                 })
             })
             .collect();

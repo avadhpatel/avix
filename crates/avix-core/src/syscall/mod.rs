@@ -1,9 +1,13 @@
 use crate::types::token::CapabilityToken;
 
+pub mod descriptor;
 pub mod domain;
 pub mod handler;
+pub mod registry;
 
+pub use descriptor::SyscallDescriptor;
 pub use handler::SyscallHandler;
+pub use registry::SyscallRegistry;
 
 #[derive(Debug, Clone)]
 pub struct SyscallContext {

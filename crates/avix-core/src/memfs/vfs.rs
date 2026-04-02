@@ -7,7 +7,7 @@ use crate::error::AvixError;
 
 #[derive(Debug, Default)]
 pub struct MemFs {
-    files: Arc<RwLock<HashMap<String, Vec<u8>>>>,
+    pub files: Arc<RwLock<HashMap<String, Vec<u8>>>>,
 }
 
 impl MemFs {

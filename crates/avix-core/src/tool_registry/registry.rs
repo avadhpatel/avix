@@ -2,7 +2,8 @@ use super::entry::ToolEntry;
 use super::events::ToolChangedEvent;
 use crate::error::AvixError;
 use crate::gateway::event_bus::AtpEventBus;
-use crate::types::tool::{ToolState, ToolVisibility};
+use crate::syscall::SyscallRegistry;
+use crate::types::tool::{ToolName, ToolState, ToolVisibility};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock, Semaphore};
@@ -80,6 +81,34 @@ impl ToolRegistry {
             tools: names,
         });
         Ok(())
+    }
+
+    pub async fn add_kernel_syscalls(&self, sysreg: &SyscallRegistry) -> Result<(), AvixError> {
+        let mut entries = Vec::new();
+        for syscall in sysreg.list() {
+            let name = ToolName::parse(&syscall.name)
+                .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+            let descriptor = serde_json::json!({
+                "name": syscall.name,
+                "description": syscall.description,
+                "short": syscall.short,
+                "detailed": syscall.detailed,
+                "domain": syscall.domain,
+                "handler_signature": syscall.handler_signature,
+                "capabilities_required": syscall.capabilities_required,
+            });
+            entries.push(
+                ToolEntry::new(
+                    name,
+                    "kernel".to_string(),
+                    ToolState::Available,
+                    ToolVisibility::All,
+                    descriptor,
+                )
+                .with_capabilities(syscall.capabilities_required.clone()),
+            );
+        }
+        self.add("kernel", entries).await
     }
 
     pub async fn lookup(&self, name: &str) -> Result<ToolEntry, AvixError> {
@@ -181,6 +210,16 @@ impl ToolRegistry {
         self.inner.read().await.len()
     }
 
+    /// Return all tool entries with full details (for /tools/ VFS population)
+    pub async fn get_all_entries(&self) -> Vec<ToolEntry> {
+        self.inner
+            .read()
+            .await
+            .values()
+            .map(|rec| rec.entry.clone())
+            .collect()
+    }
+
     /// Return a snapshot of every registered tool with its name, namespace, description,
     /// and current state. The description is extracted from the JSON descriptor's
     /// `"description"` field when present.
@@ -216,7 +255,7 @@ impl ToolRegistry {
 }
 
 /// A lightweight summary of a registered tool, returned by `list_all()`.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolSummary {
     pub name: String,
     pub namespace: String,
@@ -236,13 +275,13 @@ mod tests {
     use crate::types::tool::ToolName;
 
     fn make_entry(name: &str) -> ToolEntry {
-        ToolEntry {
-            name: ToolName::parse(name).unwrap(),
-            owner: "test-svc".into(),
-            state: ToolState::Available,
-            visibility: ToolVisibility::All,
-            descriptor: serde_json::json!({}),
-        }
+        ToolEntry::new(
+            ToolName::parse(name).unwrap(),
+            "test-svc".into(),
+            ToolState::Available,
+            ToolVisibility::All,
+            serde_json::json!({}),
+        )
     }
 
     #[tokio::test]

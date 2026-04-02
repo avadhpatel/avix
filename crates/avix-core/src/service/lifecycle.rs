@@ -324,12 +324,19 @@ impl ServiceManager {
                 .tools
                 .into_iter()
                 .filter_map(|spec| {
-                    ToolName::parse(&spec.name).ok().map(|name| ToolEntry {
-                        name,
-                        owner: svc_name.clone(),
-                        state: ToolState::Available,
-                        visibility: visibility_from_spec(spec.visibility),
-                        descriptor: spec.descriptor,
+                    let caps = spec.descriptor
+                        .get("capabilities_required")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .unwrap_or_default();
+                    ToolName::parse(&spec.name).ok().map(|name| {
+                        ToolEntry::new(
+                            name,
+                            svc_name.clone(),
+                            ToolState::Available,
+                            visibility_from_spec(spec.visibility),
+                            spec.descriptor,
+                        ).with_capabilities(caps)
                     })
                 })
                 .collect();
@@ -350,7 +357,7 @@ impl ServiceManager {
 }
 
 /// A lightweight summary of a running service, returned by `list_running()`.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ServiceSummary {
     pub name: String,
     pub pid: u32,

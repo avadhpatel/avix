@@ -21,7 +21,7 @@ use crate::trace::Tracer;
 use crate::types::token::{CapabilityToken, IssuedTo};
 use crate::types::Pid;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolListResponse {
     pub total: usize,
     pub available: usize,
@@ -29,7 +29,7 @@ pub struct ToolListResponse {
     pub tools: Vec<ToolSummary>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceListResponse {
     pub total: usize,
     pub running: usize,

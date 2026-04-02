@@ -64,6 +64,7 @@ async fn build_dispatcher(
                 state: ToolState::Available,
                 visibility: ToolVisibility::All,
                 descriptor: json!({}),
+                capabilities_required: vec![],
             }],
         )
         .await
@@ -157,6 +158,7 @@ async fn dispatch_unavailable_tool_returns_eunavail() {
                 state: ToolState::Unavailable,
                 visibility: ToolVisibility::All,
                 descriptor: json!({}),
+                capabilities_required: vec![],
             }],
         )
         .await
@@ -235,6 +237,7 @@ async fn dispatch_at_capacity_returns_ebusy() {
                 state: ToolState::Available,
                 visibility: ToolVisibility::All,
                 descriptor: json!({}),
+                capabilities_required: vec![],
             }],
         )
         .await
@@ -326,6 +329,7 @@ async fn dispatch_slow_service_returns_etimeout() {
                 state: ToolState::Available,
                 visibility: ToolVisibility::All,
                 descriptor: json!({}),
+                capabilities_required: vec![],
             }],
         )
         .await
@@ -403,11 +407,12 @@ async fn dispatch_injects_caller() {
         .add(
             "echo-svc",
             vec![ToolEntry {
-                name: ToolName::parse("echo/ping").unwrap(),
+                name: ToolName::parse("slow/op").unwrap(),
                 owner: "echo-svc".into(),
                 state: ToolState::Available,
                 visibility: ToolVisibility::All,
                 descriptor: json!({}),
+                capabilities_required: vec![],
             }],
         )
         .await

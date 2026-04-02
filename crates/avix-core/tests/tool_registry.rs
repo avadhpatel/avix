@@ -10,6 +10,7 @@ fn make_entry(name: &str) -> ToolEntry {
         state: ToolState::Available,
         visibility: ToolVisibility::All,
         descriptor: serde_json::json!({"name": name}),
+        capabilities_required: vec![],
     }
 }
 
@@ -20,6 +21,7 @@ fn user_entry(name: &str, user: &str) -> ToolEntry {
         state: ToolState::Available,
         visibility: ToolVisibility::User(user.to_string()),
         descriptor: serde_json::json!({"name": name}),
+        capabilities_required: vec![],
     }
 }
 
