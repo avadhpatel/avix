@@ -87,6 +87,15 @@ impl User {
         self.shell == "nologin"
     }
 
+    pub fn is_admin(&self) -> bool {
+        self.uid == 0
+            || self
+                .tools
+                .as_ref()
+                .map(|t| t.contains(&"all".to_string()))
+                .unwrap_or(false)
+    }
+
     /// Returns the canonical VFS path for this user's workspace.
     pub fn workspace_path(&self) -> String {
         self.workspace
@@ -345,5 +354,32 @@ spec:
         assert!(v.is_unlimited());
         let v2: QuotaValue = serde_yaml::from_str("42").unwrap();
         assert_eq!(v2.count(), Some(42));
+    }
+
+    #[test]
+    fn is_admin_by_uid() {
+        let cfg = UsersConfig::from_str(full_yaml()).unwrap();
+        let root = cfg.find_user("root").unwrap();
+        assert!(root.is_admin());
+        let alice = cfg.find_user("alice").unwrap();
+        assert!(!alice.is_admin());
+    }
+
+    #[test]
+    fn is_admin_by_tools_all() {
+        let yaml = r#"
+apiVersion: avix/v1
+kind: Users
+spec:
+  users:
+    - username: bob
+      uid: 1001
+      workspace: /users/bob/workspace
+      shell: /bin/sh
+      tools: [all]
+"#;
+        let cfg = UsersConfig::from_str(yaml).unwrap();
+        let bob = cfg.find_user("bob").unwrap();
+        assert!(bob.is_admin());
     }
 }

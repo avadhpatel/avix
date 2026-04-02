@@ -10,7 +10,7 @@ use avix_core::{
         mangle::{mangle, unmangle, validate_tool_name},
         RouterDispatcher, ServiceRegistry,
     },
-    tool_registry::{ToolEntry, ToolRegistry, ToolState, ToolVisibility},
+    tool_registry::{ToolEntry, ToolPermissions, ToolRegistry, ToolState, ToolVisibility},
     types::{tool::ToolName, Pid},
 };
 use serde_json::json;
@@ -65,6 +65,7 @@ async fn build_dispatcher(
                 visibility: ToolVisibility::All,
                 descriptor: json!({}),
                 capabilities_required: vec![],
+                permissions: ToolPermissions::default(),
             }],
         )
         .await
@@ -159,6 +160,7 @@ async fn dispatch_unavailable_tool_returns_eunavail() {
                 visibility: ToolVisibility::All,
                 descriptor: json!({}),
                 capabilities_required: vec![],
+                permissions: ToolPermissions::default(),
             }],
         )
         .await
@@ -238,6 +240,7 @@ async fn dispatch_at_capacity_returns_ebusy() {
                 visibility: ToolVisibility::All,
                 descriptor: json!({}),
                 capabilities_required: vec![],
+                permissions: ToolPermissions::default(),
             }],
         )
         .await

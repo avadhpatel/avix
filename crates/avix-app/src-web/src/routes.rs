@@ -283,9 +283,7 @@ pub async fn invoke_handler(
             let services = core_list_services(&dispatcher)
                 .await
                 .map_err(|e| internal(format!("{e:?}")))?;
-            let json_str =
-                serde_json::to_string(&services).map_err(|e| internal(e.to_string()))?;
-            Ok(Json(Value::String(json_str)))
+            Ok(Json(serde_json::to_value(services).map_err(|e| internal(e.to_string()))?))
         }
 
         "get_tools" => {
@@ -298,9 +296,7 @@ pub async fn invoke_handler(
             let tools = core_list_tools(&dispatcher)
                 .await
                 .map_err(|e| internal(format!("{e:?}")))?;
-            let json_str =
-                serde_json::to_string(&tools).map_err(|e| internal(e.to_string()))?;
-            Ok(Json(Value::String(json_str)))
+            Ok(Json(serde_json::to_value(tools).map_err(|e| internal(e.to_string()))?))
         }
 
         other => {

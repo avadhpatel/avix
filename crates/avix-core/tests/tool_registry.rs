@@ -11,6 +11,7 @@ fn make_entry(name: &str) -> ToolEntry {
         visibility: ToolVisibility::All,
         descriptor: serde_json::json!({"name": name}),
         capabilities_required: vec![],
+        permissions: avix_core::tool_registry::ToolPermissions::default(),
     }
 }
 
@@ -22,6 +23,7 @@ fn user_entry(name: &str, user: &str) -> ToolEntry {
         visibility: ToolVisibility::User(user.to_string()),
         descriptor: serde_json::json!({"name": name}),
         capabilities_required: vec![],
+        permissions: avix_core::tool_registry::ToolPermissions::default(),
     }
 }
 

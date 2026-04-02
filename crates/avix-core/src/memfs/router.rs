@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use super::context::{VfsCallerContext, VfsPermissions};
 use super::local_provider::LocalProvider;
 use super::path::VfsPath;
 use super::vfs::MemFs;
@@ -21,6 +22,10 @@ pub struct VfsRouter {
     mem_mounts: RwLock<Vec<(String, Arc<MemFs>)>>,
     /// Tool registry reference for /tools/ population
     tool_registry: RwLock<Option<Arc<crate::tool_registry::ToolRegistry>>>,
+    /// Permissions store reference
+    permissions_store: RwLock<Option<Arc<crate::tool_registry::ToolPermissionsStore>>>,
+    /// Current caller context (set per-request)
+    caller: RwLock<Option<VfsCallerContext>>,
     default: MemFs,
 }
 
@@ -45,6 +50,8 @@ impl VfsRouter {
             mounts: RwLock::new(Vec::new()),
             mem_mounts: RwLock::new(Vec::new()),
             tool_registry: RwLock::new(None),
+            permissions_store: RwLock::new(None),
+            caller: RwLock::new(None),
             default: MemFs::new(),
         }
     }
@@ -53,6 +60,48 @@ impl VfsRouter {
     pub async fn set_tool_registry(&self, registry: Arc<crate::tool_registry::ToolRegistry>) {
         let mut tr = self.tool_registry.write().await;
         *tr = Some(registry);
+    }
+
+    /// Set the permissions store for access control
+    pub async fn set_permissions_store(&self, store: Arc<crate::tool_registry::ToolPermissionsStore>) {
+        let mut ps = self.permissions_store.write().await;
+        *ps = Some(store);
+    }
+
+    /// Set the caller context for the current request (for access control)
+    pub async fn set_caller(&self, caller: Option<VfsCallerContext>) {
+        let mut c = self.caller.write().await;
+        *c = caller;
+    }
+
+    /// Get current caller context
+    pub async fn caller(&self) -> Option<VfsCallerContext> {
+        let c = self.caller.read().await;
+        c.clone()
+    }
+
+    /// Check if caller has permission to access a path
+    pub async fn check_access(&self, path: &VfsPath, required: &str) -> Result<(), AvixError> {
+        let caller = self.caller.read().await;
+        let caller = match caller.as_ref() {
+            Some(c) => c,
+            None => return Err(AvixError::CapabilityDenied("no caller context".to_string())),
+        };
+
+        let perms = VfsPermissions::for_path(path.as_str());
+        
+        match required {
+            "r" if !perms.can_read(caller) => {
+                Err(AvixError::CapabilityDenied(format!("no read permission on {}", path.as_str())))
+            }
+            "w" if !perms.can_write(caller) => {
+                Err(AvixError::CapabilityDenied(format!("no write permission on {}", path.as_str())))
+            }
+            "x" if !perms.can_execute(caller) => {
+                Err(AvixError::CapabilityDenied(format!("no execute permission on {}", path.as_str())))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Add a `LocalProvider` that handles all VFS paths starting with `prefix`.
@@ -99,6 +148,17 @@ impl VfsRouter {
     // ── Public VFS API (mirrors MemFs exactly) ────────────────────────────────
 
     pub async fn write(&self, path: &VfsPath, content: Vec<u8>) -> Result<(), AvixError> {
+        // Check write permission if caller context is set
+        if let Some(caller) = self.caller.read().await.as_ref() {
+            let perms = VfsPermissions::for_path(path.as_str());
+            if !perms.can_write(caller) {
+                return Err(AvixError::CapabilityDenied(format!(
+                    "permission denied: cannot write {} (effective: {})",
+                    path.as_str(), perms.effective_for(caller)
+                )));
+            }
+        }
+
         let mounts = self.mounts.read().await;
         if let Some((provider, rel)) = self.route(path.as_str(), &mounts).await {
             return provider.write(&rel, content).await;
@@ -116,6 +176,17 @@ impl VfsRouter {
     }
 
     pub async fn read(&self, path: &VfsPath) -> Result<Vec<u8>, AvixError> {
+        // Check read permission if caller context is set
+        if let Some(caller) = self.caller.read().await.as_ref() {
+            let perms = VfsPermissions::for_path(path.as_str());
+            if !perms.can_read(caller) {
+                return Err(AvixError::CapabilityDenied(format!(
+                    "permission denied: cannot read {} (effective: {})",
+                    path.as_str(), perms.effective_for(caller)
+                )));
+            }
+        }
+
         // Special handling for /tools/ paths - lazy population from registry
         if path.as_str().starts_with("/tools") {
             let needs_population = {
@@ -195,7 +266,7 @@ impl VfsRouter {
         // For each tool, generate its YAML descriptor
         let entries = registry.get_all_entries().await;
         for entry in entries {
-            let yaml = Self::generate_tool_yaml(&entry);
+            let yaml = Self::generate_tool_yaml(&entry, None);
             files.insert(format!("/tools/{}.yaml", entry.name.as_str().replace('/', "-")), yaml.into());
         }
 
@@ -206,7 +277,7 @@ impl VfsRouter {
         Ok(())
     }
 
-    fn generate_tool_yaml(entry: &crate::tool_registry::entry::ToolEntry) -> String {
+    fn generate_tool_yaml(entry: &crate::tool_registry::entry::ToolEntry, caller: Option<&VfsCallerContext>) -> String {
         use crate::types::tool::ToolState;
         
         let name = entry.name.as_str();
@@ -219,10 +290,22 @@ impl VfsRouter {
         let domain = desc.get("domain").and_then(|v| v.as_str()).unwrap_or("");
         let caps = &entry.capabilities_required;
 
-        let state = match entry.state {
-            ToolState::Available => "available",
-            ToolState::Unavailable => "unavailable",
-            ToolState::Degraded => "degraded",
+        // Determine if tool is available for this caller
+        let state = if let Some(c) = caller {
+            if let Some(token) = &c.token {
+                let has_caps = caps.iter().all(|cap| token.has_tool(cap));
+                if has_caps { "available" } else { "unavailable" }
+            } else if c.is_admin {
+                "available"
+            } else {
+                "unavailable"
+            }
+        } else {
+            match entry.state {
+                ToolState::Available => "available",
+                ToolState::Unavailable => "unavailable",
+                ToolState::Degraded => "degraded",
+            }
         };
 
         let mut yaml = String::new();
@@ -240,6 +323,18 @@ impl VfsRouter {
         }
         yaml.push_str(&format!("state: {}\n", state));
         yaml.push_str(&format!("owner: {}\n", entry.owner));
+        
+        // Add permissions from tool entry
+        yaml.push_str("permissions:\n");
+        yaml.push_str(&format!("  owner: {}\n", entry.permissions.owner));
+        yaml.push_str(&format!("  crew: {}\n", if entry.permissions.crew.is_empty() { "---" } else { &entry.permissions.crew }));
+        yaml.push_str(&format!("  all: {}\n", entry.permissions.all));
+        
+        // Add request_access for unavailable tools
+        if state == "unavailable" && !caps.is_empty() {
+            yaml.push_str("request_access: cap/request-tool\n");
+        }
+        
         if !handler_sig.is_empty() {
             yaml.push_str(&format!("handler_signature: {}\n", handler_sig));
         }
@@ -248,6 +343,17 @@ impl VfsRouter {
     }
 
     pub async fn delete(&self, path: &VfsPath) -> Result<(), AvixError> {
+        // Check write permission for delete
+        if let Some(caller) = self.caller.read().await.as_ref() {
+            let perms = VfsPermissions::for_path(path.as_str());
+            if !perms.can_write(caller) {
+                return Err(AvixError::CapabilityDenied(format!(
+                    "permission denied: cannot delete {} (effective: {})",
+                    path.as_str(), perms.effective_for(caller)
+                )));
+            }
+        }
+
         let mounts = self.mounts.read().await;
         if let Some((provider, rel)) = self.route(path.as_str(), &mounts).await {
             return provider.delete(&rel).await;
@@ -275,10 +381,8 @@ impl VfsRouter {
         // Check in-memory mounts
         let mem_mounts = self.mem_mounts.read().await;
         for (prefix, fs) in mem_mounts.iter() {
-            if path.as_str() == prefix || path.as_str().starts_with(&format!("{prefix}/")) {
-                if fs.exists(path).await {
-                    return true;
-                }
+            if path.as_str() == prefix || path.as_str().starts_with(&format!("{prefix}/")) && fs.exists(path).await {
+                return true;
             }
         }
         drop(mem_mounts);

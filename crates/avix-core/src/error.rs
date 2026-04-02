@@ -71,3 +71,9 @@ impl From<serde_json::Error> for AvixError {
         AvixError::Serialization(e.to_string())
     }
 }
+
+impl From<std::io::Error> for AvixError {
+    fn from(e: std::io::Error) -> Self {
+        AvixError::Io(e.to_string())
+    }
+}
