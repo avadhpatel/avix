@@ -21,6 +21,22 @@ use crate::trace::Tracer;
 use crate::types::token::{CapabilityToken, IssuedTo};
 use crate::types::Pid;
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolListResponse {
+    pub total: usize,
+    pub available: usize,
+    pub unavailable: usize,
+    pub tools: Vec<ToolSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ServiceListResponse {
+    pub total: usize,
+    pub running: usize,
+    pub starting: usize,
+    pub services: Vec<ServiceSummary>,
+}
+
 /// Persistent record of a spawned agent, stored in /etc/avix/agents.yaml.
 /// Used for daemon restart to re-adopt running agents.
 /// Links: docs/architecture/08-llm-service.md#configuration
@@ -158,21 +174,49 @@ impl ProcHandler {
         *self.tool_registry.lock().await = Some(tr);
     }
 
-    /// List all running services. Returns empty vec if service manager not yet wired.
-    pub async fn list_services(&self) -> Vec<ServiceSummary> {
+    /// List all running services. Returns response with metadata.
+    pub async fn list_services(&self) -> ServiceListResponse {
         if let Some(sm) = self.service_manager.lock().await.as_ref() {
-            sm.list_running().await
+            let services = sm.list_running().await;
+            let running = services.iter().filter(|s| s.status == "running").count();
+            let starting = services.iter().filter(|s| s.status == "starting").count();
+            ServiceListResponse {
+                total: services.len(),
+                running,
+                starting,
+                services,
+            }
         } else {
-            vec![]
+            warn!("service_manager not wired - returning empty service list");
+            ServiceListResponse {
+                total: 0,
+                running: 0,
+                starting: 0,
+                services: vec![],
+            }
         }
     }
 
-    /// List all registered tools. Returns empty vec if tool registry not yet wired.
-    pub async fn list_tools(&self) -> Vec<ToolSummary> {
+    /// List all registered tools. Returns response with metadata.
+    pub async fn list_tools(&self) -> ToolListResponse {
         if let Some(tr) = self.tool_registry.lock().await.as_ref() {
-            tr.list_all().await
+            let tools = tr.list_all().await;
+            let available = tools.iter().filter(|t| t.state == "available").count();
+            let unavailable = tools.iter().filter(|t| t.state != "available").count();
+            ToolListResponse {
+                total: tools.len(),
+                available,
+                unavailable,
+                tools,
+            }
         } else {
-            vec![]
+            warn!("tool_registry not wired - returning empty tool list");
+            ToolListResponse {
+                total: 0,
+                available: 0,
+                unavailable: 0,
+                tools: vec![],
+            }
         }
     }
 
@@ -652,5 +696,97 @@ mod tests {
 
         handler.remove_agent_record(pid).await.unwrap();
         assert_eq!(handler.load_agents_yaml().await.unwrap().agents.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn list_services_returns_empty_response_when_not_wired() {
+        let dir = TempDir::new().unwrap();
+        let yaml_path = dir.path().join("agents.yaml");
+        let table = Arc::new(ProcessTable::new());
+        let master_key = b"test-master-key-32-bytes-padded!".to_vec();
+        let handler = ProcHandler::new(table, yaml_path, master_key);
+
+        let response = handler.list_services().await;
+        assert_eq!(response.total, 0);
+        assert_eq!(response.running, 0);
+        assert_eq!(response.starting, 0);
+        assert!(response.services.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_tools_returns_empty_response_when_not_wired() {
+        let dir = TempDir::new().unwrap();
+        let yaml_path = dir.path().join("agents.yaml");
+        let table = Arc::new(ProcessTable::new());
+        let master_key = b"test-master-key-32-bytes-padded!".to_vec();
+        let handler = ProcHandler::new(table, yaml_path, master_key);
+
+        let response = handler.list_tools().await;
+        assert_eq!(response.total, 0);
+        assert_eq!(response.available, 0);
+        assert_eq!(response.unavailable, 0);
+        assert!(response.tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn service_list_response_serializes_to_json() {
+        let response = ServiceListResponse {
+            total: 5,
+            running: 3,
+            starting: 2,
+            services: vec![ServiceSummary {
+                name: "test-svc".to_string(),
+                pid: 42,
+                status: "running".to_string(),
+                registered_at: None,
+            }],
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"total\":5"));
+        assert!(json.contains("\"running\":3"));
+        assert!(json.contains("\"starting\":2"));
+        assert!(json.contains("\"test-svc\""));
+    }
+
+    #[tokio::test]
+    async fn tool_list_response_serializes_to_json() {
+        let response = ToolListResponse {
+            total: 10,
+            available: 8,
+            unavailable: 2,
+            tools: vec![ToolSummary {
+                name: "fs/read".to_string(),
+                namespace: "fs".to_string(),
+                description: "Read a file".to_string(),
+                state: "available".to_string(),
+            }],
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"total\":10"));
+        assert!(json.contains("\"available\":8"));
+        assert!(json.contains("\"unavailable\":2"));
+        assert!(json.contains("\"fs/read\""));
+    }
+
+    #[tokio::test]
+    async fn service_list_response_deserializes_from_json() {
+        let json = r#"{"total":3,"running":2,"starting":1,"services":[{"name":"svc1","pid":10,"status":"running","registered_at":null}]}"#;
+        let response: ServiceListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.total, 3);
+        assert_eq!(response.running, 2);
+        assert_eq!(response.starting, 1);
+        assert_eq!(response.services.len(), 1);
+        assert_eq!(response.services[0].name, "svc1");
+    }
+
+    #[tokio::test]
+    async fn tool_list_response_deserializes_from_json() {
+        let json = r#"{"total":5,"available":4,"unavailable":1,"tools":[{"name":"test/tool","namespace":"test","description":"desc","state":"available"}]}"#;
+        let response: ToolListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.total, 5);
+        assert_eq!(response.available, 4);
+        assert_eq!(response.unavailable, 1);
+        assert_eq!(response.tools.len(), 1);
+        assert_eq!(response.tools[0].name, "test/tool");
     }
 }

@@ -1,6 +1,7 @@
 use super::entry::ToolEntry;
 use super::events::ToolChangedEvent;
 use crate::error::AvixError;
+use crate::gateway::event_bus::AtpEventBus;
 use crate::types::tool::{ToolState, ToolVisibility};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -46,6 +47,18 @@ impl ToolRegistry {
             events: tx,
         };
         (reg, EventReceiver(rx))
+    }
+
+    pub async fn start_atp_bridge(self: Arc<Self>, bus: Arc<AtpEventBus>) {
+        let mut rx = self.events.subscribe();
+        tokio::spawn(async move {
+            while let Ok(evt) = rx.recv().await {
+                for tool in &evt.tools {
+                    bus.tool_changed(tool, &evt.op);
+                }
+            }
+            tracing::debug!("tool registry ATP bridge terminated");
+        });
     }
 
     pub async fn add(&self, _owner: &str, entries: Vec<ToolEntry>) -> Result<(), AvixError> {
@@ -283,5 +296,25 @@ mod tests {
         let result =
             tokio::time::timeout(std::time::Duration::from_millis(20), events.recv()).await;
         assert!(result.is_err(), "expected timeout, got an event");
+    }
+
+    #[tokio::test]
+    async fn atp_bridge_forwards_tool_events_to_event_bus() {
+        use crate::gateway::event_bus::AtpEventBus;
+
+        let reg = Arc::new(ToolRegistry::new());
+        let bus = Arc::new(AtpEventBus::new());
+
+        reg.clone().start_atp_bridge(Arc::clone(&bus)).await;
+
+        reg.add("test-svc", vec![make_entry("test/echo")]).await.unwrap();
+
+        let mut rx = bus.subscribe();
+        let ev = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("event should be received")
+            .expect("event should be ok");
+
+        assert_eq!(ev.event.event, crate::gateway::atp::types::AtpEventKind::ToolChanged);
     }
 }

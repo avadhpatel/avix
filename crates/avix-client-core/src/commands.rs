@@ -166,21 +166,67 @@ pub async fn get_invocation(
     }
 }
 
-/// List all running services. Returns an array of service summary objects.
-pub async fn list_services(dispatcher: &Dispatcher) -> Result<Vec<Value>, ClientError> {
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ServiceListResponse {
+    pub total: usize,
+    pub running: usize,
+    pub starting: usize,
+    #[serde(default)]
+    pub services: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ToolListResponse {
+    pub total: usize,
+    pub available: usize,
+    pub unavailable: usize,
+    #[serde(default)]
+    pub tools: Vec<serde_json::Value>,
+}
+
+/// List all running services. Returns response with metadata.
+pub async fn list_services(dispatcher: &Dispatcher) -> Result<ServiceListResponse, ClientError> {
     let body = dispatch(dispatcher, "sys", "service-list", serde_json::json!({})).await?;
     match body {
-        Some(Value::Array(arr)) => Ok(arr),
-        Some(_) | None => Ok(vec![]),
+        Some(Value::Object(map)) => {
+            serde_json::from_value(Value::Object(map))
+                .map_err(|e| ClientError::Other(e.into()))
+        }
+        Some(Value::Array(arr)) => Ok(ServiceListResponse {
+            total: arr.len(),
+            running: 0,
+            starting: 0,
+            services: arr,
+        }),
+        Some(_) | None => Ok(ServiceListResponse {
+            total: 0,
+            running: 0,
+            starting: 0,
+            services: vec![],
+        }),
     }
 }
 
-/// List all registered tools. Returns an array of tool summary objects.
-pub async fn list_tools(dispatcher: &Dispatcher) -> Result<Vec<Value>, ClientError> {
+/// List all registered tools. Returns response with metadata.
+pub async fn list_tools(dispatcher: &Dispatcher) -> Result<ToolListResponse, ClientError> {
     let body = dispatch(dispatcher, "sys", "tool-list", serde_json::json!({})).await?;
     match body {
-        Some(Value::Array(arr)) => Ok(arr),
-        Some(_) | None => Ok(vec![]),
+        Some(Value::Object(map)) => {
+            serde_json::from_value(Value::Object(map))
+                .map_err(|e| ClientError::Other(e.into()))
+        }
+        Some(Value::Array(arr)) => Ok(ToolListResponse {
+            total: arr.len(),
+            available: 0,
+            unavailable: 0,
+            tools: arr,
+        }),
+        Some(_) | None => Ok(ToolListResponse {
+            total: 0,
+            available: 0,
+            unavailable: 0,
+            tools: vec![],
+        }),
     }
 }
 
@@ -530,5 +576,168 @@ mod tests {
             _ => panic!("unexpected"),
         };
         assert!(agents.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_services_parses_new_response_format() {
+        let fake = FakeDispatcher::new();
+        fake.set_reply(
+            "sys/service-list",
+            ok_reply(serde_json::json!({
+                "total": 3,
+                "running": 2,
+                "starting": 1,
+                "services": [
+                    {"name": "router.svc", "status": "running", "pid": 10}
+                ]
+            })),
+        );
+
+        let cmd = Cmd::new("sys", "service-list", "tok", serde_json::json!({}));
+        let reply = fake.call(cmd).await.unwrap();
+
+        let response: ServiceListResponse = match reply.body {
+            Some(Value::Object(map)) => serde_json::from_value(Value::Object(map)).unwrap(),
+            _ => panic!("expected object"),
+        };
+        assert_eq!(response.total, 3);
+        assert_eq!(response.running, 2);
+        assert_eq!(response.starting, 1);
+        assert_eq!(response.services.len(), 1);
+        assert_eq!(response.services[0]["name"], "router.svc");
+    }
+
+    #[tokio::test]
+    async fn list_services_handles_empty_response() {
+        let fake = FakeDispatcher::new();
+        fake.set_reply(
+            "sys/service-list",
+            ok_reply(serde_json::json!({
+                "total": 0,
+                "running": 0,
+                "starting": 0,
+                "services": []
+            })),
+        );
+
+        let cmd = Cmd::new("sys", "service-list", "tok", serde_json::json!({}));
+        let reply = fake.call(cmd).await.unwrap();
+
+        let response: ServiceListResponse = match reply.body {
+            Some(Value::Object(map)) => serde_json::from_value(Value::Object(map)).unwrap(),
+            _ => panic!("expected object"),
+        };
+        assert_eq!(response.total, 0);
+        assert!(response.services.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_services_handles_legacy_array_format() {
+        let fake = FakeDispatcher::new();
+        fake.set_reply(
+            "sys/service-list",
+            ok_reply(serde_json::json!([
+                {"name": "svc1", "status": "running"}
+            ])),
+        );
+
+        let cmd = Cmd::new("sys", "service-list", "tok", serde_json::json!({}));
+        let reply = fake.call(cmd).await.unwrap();
+
+        let response: ServiceListResponse = match reply.body {
+            Some(Value::Object(map)) => serde_json::from_value(Value::Object(map)).unwrap(),
+            _ => panic!("expected object"),
+        };
+        assert_eq!(response.total, 1);
+        assert_eq!(response.services.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_tools_parses_new_response_format() {
+        let fake = FakeDispatcher::new();
+        fake.set_reply(
+            "sys/tool-list",
+            ok_reply(serde_json::json!({
+                "total": 5,
+                "available": 4,
+                "unavailable": 1,
+                "tools": [
+                    {"name": "fs/read", "namespace": "fs", "description": "Read file", "state": "available"}
+                ]
+            })),
+        );
+
+        let cmd = Cmd::new("sys", "tool-list", "tok", serde_json::json!({}));
+        let reply = fake.call(cmd).await.unwrap();
+
+        let response: ToolListResponse = match reply.body {
+            Some(Value::Object(map)) => serde_json::from_value(Value::Object(map)).unwrap(),
+            _ => panic!("expected object"),
+        };
+        assert_eq!(response.total, 5);
+        assert_eq!(response.available, 4);
+        assert_eq!(response.unavailable, 1);
+        assert_eq!(response.tools.len(), 1);
+        assert_eq!(response.tools[0]["name"], "fs/read");
+    }
+
+    #[tokio::test]
+    async fn list_tools_handles_empty_response() {
+        let fake = FakeDispatcher::new();
+        fake.set_reply(
+            "sys/tool-list",
+            ok_reply(serde_json::json!({
+                "total": 0,
+                "available": 0,
+                "unavailable": 0,
+                "tools": []
+            })),
+        );
+
+        let cmd = Cmd::new("sys", "tool-list", "tok", serde_json::json!({}));
+        let reply = fake.call(cmd).await.unwrap();
+
+        let response: ToolListResponse = match reply.body {
+            Some(Value::Object(map)) => serde_json::from_value(Value::Object(map)).unwrap(),
+            _ => panic!("expected object"),
+        };
+        assert_eq!(response.total, 0);
+        assert!(response.tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_tools_handles_null_body() {
+        let fake = FakeDispatcher::new();
+        fake.set_reply("sys/tool-list", ok_reply(serde_json::Value::Null));
+
+        let cmd = Cmd::new("sys", "tool-list", "tok", serde_json::json!({}));
+        let reply = fake.call(cmd).await.unwrap();
+
+        let response: ToolListResponse = match reply.body {
+            Some(Value::Object(map)) => serde_json::from_value(Value::Object(map)).unwrap(),
+            _ => panic!("expected object"),
+        };
+        assert_eq!(response.total, 0);
+        assert!(response.tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_services_handles_error_reply() {
+        let fake = FakeDispatcher::new();
+        fake.set_reply("sys/service-list", err_reply("EUNAVAIL", "service unavailable"));
+
+        let cmd = Cmd::new("sys", "service-list", "tok", serde_json::json!({}));
+        let result = fake.call(cmd).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_tools_handles_error_reply() {
+        let fake = FakeDispatcher::new();
+        fake.set_reply("sys/tool-list", err_reply("EUNAVAIL", "tool registry unavailable"));
+
+        let cmd = Cmd::new("sys", "tool-list", "tok", serde_json::json!({}));
+        let result = fake.call(cmd).await;
+        assert!(result.is_err());
     }
 }

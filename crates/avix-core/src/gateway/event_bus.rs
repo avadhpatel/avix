@@ -189,6 +189,16 @@ impl AtpEventBus {
         self.publish(ev, None, min_role);
     }
 
+    pub fn sys_service(&self, service: &str, status: &str) {
+        let (min_role, _owner_scoped) = event_scope(&AtpEventKind::SysService);
+        let ev = AtpEvent::new(
+            AtpEventKind::SysService,
+            "",
+            serde_json::json!({ "service": service, "status": status }),
+        );
+        self.publish(ev, None, min_role);
+    }
+
     pub fn sys_alert(&self, message: &str) {
         let (min_role, _owner_scoped) = event_scope(&AtpEventKind::SysAlert);
         let ev = AtpEvent::new(
@@ -430,5 +440,16 @@ mod tests {
         let ev = rx.try_recv().unwrap();
         assert!(ev.owner_session.is_none());
         assert_eq!(ev.min_role, Role::Guest);
+    }
+
+    #[test]
+    fn convenience_sys_service_publishes_event() {
+        let bus = AtpEventBus::new();
+        let mut rx = bus.subscribe();
+        bus.sys_service("router.svc", "running");
+        let ev = rx.try_recv().unwrap();
+        assert_eq!(ev.event.event, AtpEventKind::SysService);
+        assert!(ev.owner_session.is_none());
+        assert_eq!(ev.min_role, Role::Admin);
     }
 }

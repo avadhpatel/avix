@@ -190,13 +190,17 @@ async fn dispatch_request(
         }
 
         "kernel/sys/service-list" => {
-            let summaries = proc_handler.list_services().await;
-            JsonRpcResponse::ok(id, serde_json::json!(summaries))
+            debug!("handling kernel/sys/service-list");
+            let response = proc_handler.list_services().await;
+            debug!(total = response.total, running = response.running, "service-list response");
+            JsonRpcResponse::ok(id, serde_json::json!(response))
         }
 
         "kernel/sys/tool-list" => {
-            let summaries = proc_handler.list_tools().await;
-            JsonRpcResponse::ok(id, serde_json::json!(summaries))
+            debug!("handling kernel/sys/tool-list");
+            let response = proc_handler.list_tools().await;
+            debug!(total = response.total, available = response.available, "tool-list response");
+            JsonRpcResponse::ok(id, serde_json::json!(response))
         }
 
         other => {

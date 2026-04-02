@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
 
 use serde::Deserialize;
@@ -9,6 +9,7 @@ use serde::Deserialize;
 use super::token::ServiceToken;
 use super::unit::ServiceUnit;
 use crate::error::AvixError;
+use crate::gateway::event_bus::AtpEventBus;
 use crate::tool_registry::descriptor::ToolVisibilitySpec;
 use crate::tool_registry::entry::ToolEntry;
 use crate::tool_registry::{ToolRegistry, ToolScanner};
@@ -16,6 +17,14 @@ use crate::types::{
     tool::{ToolName, ToolState, ToolVisibility},
     Pid,
 };
+
+const SERVICE_EVENT_CAPACITY: usize = 64;
+
+#[derive(Debug, Clone)]
+pub struct ServiceEvent {
+    pub service: String,
+    pub status: String,
+}
 
 pub struct ServiceSpawnRequest {
     pub name: String,
@@ -105,20 +114,24 @@ pub struct ServiceManager {
     pid_counter: Arc<std::sync::atomic::AtomicU32>,
     tool_registry: Option<Arc<ToolRegistry>>,
     runtime_dir: PathBuf,
+    events: broadcast::Sender<ServiceEvent>,
 }
 
 impl ServiceManager {
     pub fn new_for_test(runtime_dir: PathBuf) -> Self {
+        let (tx, _) = broadcast::channel(SERVICE_EVENT_CAPACITY);
         Self {
             services: Arc::new(RwLock::new(HashMap::new())),
             token_to_svc: Arc::new(RwLock::new(HashMap::new())),
             pid_counter: Arc::new(std::sync::atomic::AtomicU32::new(10)),
             tool_registry: None,
             runtime_dir,
+            events: tx,
         }
     }
 
     pub fn new_with_registry(runtime_dir: PathBuf) -> (Self, Arc<ToolRegistry>) {
+        let (tx, _) = broadcast::channel(SERVICE_EVENT_CAPACITY);
         let reg = Arc::new(ToolRegistry::new());
         let mgr = Self {
             services: Arc::new(RwLock::new(HashMap::new())),
@@ -126,6 +139,7 @@ impl ServiceManager {
             pid_counter: Arc::new(std::sync::atomic::AtomicU32::new(10)),
             tool_registry: Some(Arc::clone(&reg)),
             runtime_dir,
+            events: tx,
         };
         (mgr, reg)
     }
@@ -151,7 +165,11 @@ impl ServiceManager {
             caller_scoped: req.caller_scoped,
         };
         self.services.write().await.insert(req.name.clone(), record);
-        self.token_to_svc.write().await.insert(token_str, req.name);
+        self.token_to_svc.write().await.insert(token_str, req.name.clone());
+        let _ = self.events.send(ServiceEvent {
+            service: req.name,
+            status: "starting".to_string(),
+        });
         Ok(token)
     }
 
@@ -178,7 +196,7 @@ impl ServiceManager {
         let record = guard
             .get_mut(&svc_name)
             .ok_or_else(|| AvixError::ConfigParse("service not found".into()))?;
-        record.endpoint = Some(req.endpoint);
+        record.endpoint = Some(req.endpoint.clone());
         record.registered_at = Some(chrono::Utc::now());
         let pid = record.token.pid;
         drop(guard);
@@ -189,6 +207,11 @@ impl ServiceManager {
         if let Some(reg) = &self.tool_registry {
             reg.add(&svc_name, entries).await?;
         }
+
+        let _ = self.events.send(ServiceEvent {
+            service: svc_name,
+            status: "running".to_string(),
+        });
 
         Ok(IpcRegisterResult {
             registered: true,
@@ -271,6 +294,10 @@ impl ServiceManager {
             .get(name)
             .map(|r| r.caller_scoped)
             .unwrap_or(false);
+        let _ = self.events.send(ServiceEvent {
+            service: name.to_string(),
+            status: "restarting".to_string(),
+        });
         self.spawn_and_get_token(ServiceSpawnRequest {
             name: name.to_string(),
             binary: String::new(),
@@ -278,6 +305,16 @@ impl ServiceManager {
             max_concurrent: 20,
         })
         .await
+    }
+
+    pub async fn start_atp_bridge(self: Arc<Self>, bus: Arc<AtpEventBus>) {
+        let mut rx = self.events.subscribe();
+        tokio::spawn(async move {
+            while let Ok(evt) = rx.recv().await {
+                bus.sys_service(&evt.service, &evt.status);
+            }
+            tracing::debug!("service manager ATP bridge terminated");
+        });
     }
 
     pub async fn handle_tool_add(&self, params: IpcToolAddParams) -> Result<(), AvixError> {
@@ -603,5 +640,28 @@ namespace = "/tools/{name}/"
             .await
             .unwrap();
         assert!(!mgr.is_caller_scoped("plain-svc").await);
+    }
+
+    #[tokio::test]
+    async fn atp_bridge_forwards_events_to_event_bus() {
+        use crate::gateway::event_bus::AtpEventBus;
+
+        let dir = TempDir::new().unwrap();
+        let mgr = Arc::new(ServiceManager::new_for_test(dir.path().to_path_buf()));
+        let bus = Arc::new(AtpEventBus::new());
+
+        mgr.clone().start_atp_bridge(Arc::clone(&bus)).await;
+
+        mgr.spawn_and_get_token(ServiceSpawnRequest::simple("test-svc", "/bin/test"))
+            .await
+            .unwrap();
+
+        let mut rx = bus.subscribe();
+        let ev = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("event should be received")
+            .expect("event should be ok");
+
+        assert_eq!(ev.event.event, crate::gateway::atp::types::AtpEventKind::SysService);
     }
 }

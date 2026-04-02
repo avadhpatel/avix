@@ -265,6 +265,10 @@ impl Runtime {
             ph.set_tool_registry(Arc::clone(&tool_registry)).await;
         }
 
+        // Bridge internal tool/service events to the ATP event bus for UI notifications.
+        Arc::clone(&tool_registry).start_atp_bridge(Arc::clone(&self.event_bus)).await;
+        Arc::clone(&service_manager).start_atp_bridge(Arc::clone(&self.event_bus)).await;
+
         // ── router.svc ────────────────────────────────────────────────────────
         let router_sock = self.runtime_dir.join("router.sock");
         let dispatcher = Arc::new(RouterDispatcher::new(
