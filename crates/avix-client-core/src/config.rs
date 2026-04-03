@@ -35,7 +35,11 @@ impl Default for ClientConfig {
 
 impl ClientConfig {
     pub fn load() -> Result<Self, ClientError> {
-        let path = persistence::app_data_dir().join("client.yaml");
+        Self::load_from(None)
+    }
+
+    pub fn load_from(path: Option<PathBuf>) -> Result<Self, ClientError> {
+        let path = path.unwrap_or_else(|| persistence::app_data_dir().join("client.yaml"));
         info!("Config load {}", path.display());
         let config = persistence::load_yaml(&path)?;
         debug!("Config {:?}", config);
