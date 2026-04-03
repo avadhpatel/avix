@@ -514,9 +514,7 @@ impl ProcHandler {
         } else {
             Ok(records
                 .into_iter()
-                .filter(|r| {
-                    !matches!(r.status, InvocationStatus::Running | InvocationStatus::Idle)
-                })
+                .filter(|r| !matches!(r.status, InvocationStatus::Running | InvocationStatus::Idle))
                 .collect())
         }
     }
@@ -553,7 +551,10 @@ impl ProcHandler {
             .await?
             .ok_or_else(|| AvixError::NotFound(format!("invocation {id} not found")))?;
 
-        if !matches!(record.status, InvocationStatus::Running | InvocationStatus::Idle) {
+        if !matches!(
+            record.status,
+            InvocationStatus::Running | InvocationStatus::Idle
+        ) {
             return Err(AvixError::InvalidInput(
                 "cannot snapshot a finalized invocation".into(),
             ));

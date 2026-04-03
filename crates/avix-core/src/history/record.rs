@@ -204,14 +204,7 @@ mod tests {
     #[test]
     fn part_record_roundtrip_json() {
         let msg_id = Uuid::new_v4();
-        let part = PartRecord::tool_call(
-            msg_id,
-            2,
-            "c1",
-            "fs/write",
-            serde_json::json!({}),
-            None,
-        );
+        let part = PartRecord::tool_call(msg_id, 2, "c1", "fs/write", serde_json::json!({}), None);
         let json = serde_json::to_string(&part).unwrap();
         let parsed: PartRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.part_type, PartType::ToolCall);
@@ -221,7 +214,10 @@ mod tests {
     // T-REC-07
     #[test]
     fn role_serializes_lowercase() {
-        assert_eq!(serde_json::to_string(&Role::Assistant).unwrap(), "\"assistant\"");
+        assert_eq!(
+            serde_json::to_string(&Role::Assistant).unwrap(),
+            "\"assistant\""
+        );
         assert_eq!(serde_json::to_string(&Role::Tool).unwrap(), "\"tool\"");
         assert_eq!(serde_json::to_string(&Role::System).unwrap(), "\"system\"");
     }
@@ -229,8 +225,17 @@ mod tests {
     // T-REC-08
     #[test]
     fn part_type_serializes_lowercase() {
-        assert_eq!(serde_json::to_string(&PartType::ToolCall).unwrap(), "\"toolcall\"");
-        assert_eq!(serde_json::to_string(&PartType::FileDiff).unwrap(), "\"filediff\"");
-        assert_eq!(serde_json::to_string(&PartType::Thought).unwrap(), "\"thought\"");
+        assert_eq!(
+            serde_json::to_string(&PartType::ToolCall).unwrap(),
+            "\"toolcall\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PartType::FileDiff).unwrap(),
+            "\"filediff\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PartType::Thought).unwrap(),
+            "\"thought\""
+        );
     }
 }

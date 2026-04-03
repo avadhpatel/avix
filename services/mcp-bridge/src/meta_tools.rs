@@ -12,8 +12,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use avix_core::ipc::message::{JsonRpcRequest, JsonRpcResponse};
 use crate::connection::McpServerConnection;
+use avix_core::ipc::message::{JsonRpcRequest, JsonRpcResponse};
 
 // ── Wire names ────────────────────────────────────────────────────────────────
 

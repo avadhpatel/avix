@@ -166,7 +166,10 @@ async fn dispatch_request(
             // `live` defaults to true to preserve backward compatibility:
             // callers that omit `live` get all records (including running).
             let live = params["live"].as_bool().unwrap_or(true);
-            match proc_handler.list_invocations(username, agent_name, live).await {
+            match proc_handler
+                .list_invocations(username, agent_name, live)
+                .await
+            {
                 Ok(records) => JsonRpcResponse::ok(id, json!(records)),
                 Err(e) => {
                     warn!(error = %e, "kernel/proc/invocation-list failed");
@@ -195,10 +198,7 @@ async fn dispatch_request(
         "kernel/proc/invocation-snapshot" => {
             let inv_id = params["id"].as_str().unwrap_or("");
             match proc_handler.snapshot_invocation(inv_id).await {
-                Ok(record) => JsonRpcResponse::ok(
-                    id,
-                    json!({ "success": true, "record": record }),
-                ),
+                Ok(record) => JsonRpcResponse::ok(id, json!({ "success": true, "record": record })),
                 Err(e @ AvixError::NotFound(_)) => {
                     warn!(error = %e, "kernel/proc/invocation-snapshot: not found");
                     JsonRpcResponse::err(id, -32003, &e.to_string(), None)
@@ -215,9 +215,11 @@ async fn dispatch_request(
         }
 
         // ── History: message operations ──────────────────────────────────────
-
         "kernel/proc/message-create" => {
-            let msg_val = params.get("message").cloned().unwrap_or(serde_json::Value::Null);
+            let msg_val = params
+                .get("message")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             match serde_json::from_value::<crate::history::record::MessageRecord>(msg_val) {
                 Ok(msg) => match proc_handler.create_message(&msg).await {
                     Ok(()) => JsonRpcResponse::ok(id, json!({ "ok": true })),
@@ -268,9 +270,11 @@ async fn dispatch_request(
         }
 
         // ── History: part operations ─────────────────────────────────────────
-
         "kernel/proc/part-create" => {
-            let part_val = params.get("part").cloned().unwrap_or(serde_json::Value::Null);
+            let part_val = params
+                .get("part")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             match serde_json::from_value::<crate::history::record::PartRecord>(part_val) {
                 Ok(part) => match proc_handler.create_part(&part).await {
                     Ok(()) => JsonRpcResponse::ok(id, json!({ "ok": true })),
@@ -291,12 +295,9 @@ async fn dispatch_request(
             match uuid::Uuid::parse_str(raw_id) {
                 Ok(uuid) => match proc_handler.get_part(&uuid).await {
                     Ok(Some(part)) => JsonRpcResponse::ok(id, json!(part)),
-                    Ok(None) => JsonRpcResponse::err(
-                        id,
-                        -32003,
-                        &format!("part {raw_id} not found"),
-                        None,
-                    ),
+                    Ok(None) => {
+                        JsonRpcResponse::err(id, -32003, &format!("part {raw_id} not found"), None)
+                    }
                     Err(e) => {
                         warn!(error = %e, "kernel/proc/part-get failed");
                         JsonRpcResponse::err(id, -32000, &e.to_string(), None)

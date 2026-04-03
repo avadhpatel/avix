@@ -45,8 +45,7 @@ impl HistoryStore {
     // ── Message operations ────────────────────────────────────────────────────
 
     pub async fn create_message(&self, msg: &MessageRecord) -> Result<(), AvixError> {
-        let json =
-            serde_json::to_string(msg).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let json = serde_json::to_string(msg).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         let key = msg.id.to_string();
         let db = self.db.lock().await;
         let write_txn = db
@@ -284,9 +283,18 @@ mod tests {
         let store = open_store().await;
         let session_id = Uuid::new_v4();
 
-        store.create_message(&make_msg(session_id, 3)).await.unwrap();
-        store.create_message(&make_msg(session_id, 1)).await.unwrap();
-        store.create_message(&make_msg(session_id, 2)).await.unwrap();
+        store
+            .create_message(&make_msg(session_id, 3))
+            .await
+            .unwrap();
+        store
+            .create_message(&make_msg(session_id, 1))
+            .await
+            .unwrap();
+        store
+            .create_message(&make_msg(session_id, 2))
+            .await
+            .unwrap();
 
         let msgs = store.list_messages(&session_id).await.unwrap();
         assert_eq!(msgs.len(), 3);
@@ -326,9 +334,18 @@ mod tests {
         let store = open_store().await;
         let msg_id = Uuid::new_v4();
 
-        store.create_part(&PartRecord::text(msg_id, 2, "third")).await.unwrap();
-        store.create_part(&PartRecord::text(msg_id, 0, "first")).await.unwrap();
-        store.create_part(&PartRecord::text(msg_id, 1, "second")).await.unwrap();
+        store
+            .create_part(&PartRecord::text(msg_id, 2, "third"))
+            .await
+            .unwrap();
+        store
+            .create_part(&PartRecord::text(msg_id, 0, "first"))
+            .await
+            .unwrap();
+        store
+            .create_part(&PartRecord::text(msg_id, 1, "second"))
+            .await
+            .unwrap();
 
         let parts = store.list_parts(&msg_id).await.unwrap();
         assert_eq!(parts[0].data["content"], "first");
@@ -347,8 +364,12 @@ mod tests {
         store.create_message(&msg1).await.unwrap();
         store
             .create_part(&PartRecord::tool_call(
-                msg1.id, 0, "c1", "fs/read",
-                serde_json::json!({}), None,
+                msg1.id,
+                0,
+                "c1",
+                "fs/read",
+                serde_json::json!({}),
+                None,
             ))
             .await
             .unwrap();
@@ -362,8 +383,12 @@ mod tests {
         store.create_message(&msg2).await.unwrap();
         store
             .create_part(&PartRecord::tool_call(
-                msg2.id, 0, "c2", "fs/write",
-                serde_json::json!({}), None,
+                msg2.id,
+                0,
+                "c2",
+                "fs/write",
+                serde_json::json!({}),
+                None,
             ))
             .await
             .unwrap();
@@ -382,11 +407,24 @@ mod tests {
         let msg = make_msg(session_id, 1);
         store.create_message(&msg).await.unwrap();
         store
-            .create_part(&PartRecord::file_diff(msg.id, 0, "/foo.rs", Some("+fn main(){}"), None))
+            .create_part(&PartRecord::file_diff(
+                msg.id,
+                0,
+                "/foo.rs",
+                Some("+fn main(){}"),
+                None,
+            ))
             .await
             .unwrap();
         store
-            .create_part(&PartRecord::tool_call(msg.id, 1, "c1", "fs/read", serde_json::json!({}), None))
+            .create_part(&PartRecord::tool_call(
+                msg.id,
+                1,
+                "c1",
+                "fs/read",
+                serde_json::json!({}),
+                None,
+            ))
             .await
             .unwrap();
 
