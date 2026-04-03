@@ -65,21 +65,6 @@ enum Cmd {
         #[command(subcommand)]
         sub: ClientCmd,
     },
-    /// Manage agent sessions
-    Session {
-        #[command(subcommand)]
-        sub: SessionCmd,
-    },
-    /// Manage installed services
-    Service {
-        #[command(subcommand)]
-        sub: ServiceCmd,
-    },
-    /// Manage runtime secrets
-    Secret {
-        #[command(subcommand)]
-        sub: SecretCmd,
-    },
 }
 
 // ── Service commands ──────────────────────────────────────────────────────────
@@ -310,12 +295,19 @@ enum ServerConfigCmd {
 #[derive(Subcommand)]
 enum ClientCmd {
     /// Test connectivity to the Avix server (reads config.yaml)
-    Connect,
+    Connect {
+        /// Custom client config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
     /// Launch the TUI dashboard
     Tui {
         /// Enable structured trace output (comma-separated: notifications or all)
         #[arg(long)]
         trace: Option<String>,
+        /// Custom client config file
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
     /// ATP protocol commands
     Atp {
@@ -337,6 +329,24 @@ enum ClientCmd {
         /// Follow logs continuously
         #[arg(long)]
         follow: bool,
+        /// Custom client config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Manage installed services
+    Service {
+        #[command(subcommand)]
+        sub: ServiceCmd,
+    },
+    /// Manage runtime secrets
+    Secret {
+        #[command(subcommand)]
+        sub: SecretCmd,
+    },
+    /// Manage agent sessions
+    Session {
+        #[command(subcommand)]
+        sub: SessionCmd,
     },
 }
 
@@ -580,17 +590,17 @@ fn log_filename(cmd: &Cmd) -> &str {
             ClientCmd::Hil { .. } => "hil",
             ClientCmd::Logs { .. } => "logs",
             ClientCmd::Agent { .. } => "agent",
+            ClientCmd::Service { .. } => "service",
+            ClientCmd::Secret { .. } => "secret",
+            ClientCmd::Session { .. } => "session",
             _ => "client",
         },
-        Cmd::Session { .. } => "session",
-        Cmd::Service { .. } => "service",
-        Cmd::Secret { .. } => "secret",
     }
 }
 
 /// Connect to the ATP server using config.yaml and return a dispatcher.
-async fn connect_config(server_url: Option<String>) -> Result<Dispatcher, anyhow::Error> {
-    let mut config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+async fn connect_config(config: Option<PathBuf>, server_url: Option<String>) -> Result<Dispatcher, anyhow::Error> {
+    let mut config = ClientConfig::load_from(config).unwrap_or_else(|_| ClientConfig::default());
     if let Some(url) = server_url {
         config.server_url = url;
     }
@@ -793,12 +803,12 @@ async fn main() -> Result<()> {
 
         // ── Client commands ───────────────────────────────────────────────────
         Cmd::Client { sub } => match sub {
-            ClientCmd::Connect => {
-                connect_config(None).await?;
+            ClientCmd::Connect { config } => {
+                connect_config(config, None).await?;
                 emit(cli.json, |_: &()| "Connected to server".to_string(), ());
             }
 
-            ClientCmd::Tui { trace } => {
+            ClientCmd::Tui { trace, config: _ } => {
                 let _tracer = trace.as_deref().map(|t| {
                     let flags = avix_client_core::trace::ClientTraceFlags::from_csv(t);
                     let log_dir = persistence::app_data_dir().join("logs");
@@ -819,7 +829,7 @@ async fn main() -> Result<()> {
                     goal,
                     capabilities,
                 } => {
-                    let dispatcher = connect_config(None).await?;
+                    let dispatcher = connect_config(None, None).await?;
                     let pid = spawn_agent(
                         &dispatcher,
                         &name,
@@ -834,7 +844,7 @@ async fn main() -> Result<()> {
                     );
                 }
                 AgentCmd::List => {
-                    let dispatcher = connect_config(None).await?;
+                    let dispatcher = connect_config(None, None).await?;
                     let agents = list_agents(&dispatcher).await?;
                     emit(
                         cli.json,
@@ -843,18 +853,18 @@ async fn main() -> Result<()> {
                     );
                 }
                 AgentCmd::Kill { pid } => {
-                    let dispatcher = connect_config(None).await?;
+                    let dispatcher = connect_config(None, None).await?;
                     kill_agent(&dispatcher, pid).await?;
                     emit(cli.json, |_: &()| format!("Killed agent {}", pid), ());
                 }
                 AgentCmd::Catalog { username } => {
-                    let dispatcher = connect_config(None).await?;
+                    let dispatcher = connect_config(None, None).await?;
                     let user = username.as_deref().unwrap_or("default");
                     let agents = list_installed(&dispatcher, user).await?;
                     emit(cli.json, format_catalog, agents);
                 }
                 AgentCmd::History { agent, username, live } => {
-                    let dispatcher = connect_config(None).await?;
+                    let dispatcher = connect_config(None, None).await?;
                     let user = username.as_deref().unwrap_or("default");
                     let records = if live {
                         list_invocations_live(&dispatcher, user, agent.as_deref()).await?
@@ -864,7 +874,7 @@ async fn main() -> Result<()> {
                     emit(cli.json, format_history, records);
                 }
                 AgentCmd::Show { invocation_id } => {
-                    let dispatcher = connect_config(None).await?;
+                    let dispatcher = connect_config(None, None).await?;
                     match get_invocation(&dispatcher, &invocation_id).await? {
                         Some(inv) => emit(cli.json, format_invocation, inv),
                         None => {
@@ -874,7 +884,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 AgentCmd::Snapshot { invocation_id } => {
-                    let dispatcher = connect_config(None).await?;
+                    let dispatcher = connect_config(None, None).await?;
                     let result = snapshot_invocation(&dispatcher, &invocation_id).await?;
                     emit(
                         cli.json,
@@ -897,7 +907,7 @@ async fn main() -> Result<()> {
                     token,
                     note,
                 } => {
-                    let dispatcher = connect_config(None).await?;
+                    let dispatcher = connect_config(None, None).await?;
                     resolve_hil(&dispatcher, pid, &hil_id, &token, true, note.as_deref()).await?;
                     emit(
                         cli.json,
@@ -911,7 +921,7 @@ async fn main() -> Result<()> {
                     token,
                     note,
                 } => {
-                    let dispatcher = connect_config(None).await?;
+                    let dispatcher = connect_config(None, None).await?;
                     resolve_hil(&dispatcher, pid, &hil_id, &token, false, note.as_deref()).await?;
                     emit(
                         cli.json,
@@ -921,469 +931,465 @@ async fn main() -> Result<()> {
                 }
             },
 
-            ClientCmd::Logs { follow: _ } => {
+            ClientCmd::Logs { follow: _, config } => {
+                let _config = config;
                 // For now, stub
                 emit(cli.json, |_: &()| "Logs output".to_string(), ());
             }
-        },
 
-        // ── Session commands ─────────────────────────────────────────────────────
-        Cmd::Session { sub } => match sub {
-            SessionCmd::Create {
-                title,
-                goal,
-                username,
-            } => {
-                let dispatcher = connect_config(None).await?;
-                let username = username.as_deref().unwrap_or("default");
-                let reply = dispatcher
-                    .call(&AtpCmd_::new(
-                        "proc",
-                        "session-create",
-                        "",
-                        serde_json::json!({
-                            "username": username,
-                            "title": title,
-                            "goal": goal,
-                        }),
-                    ))
-                    .await?;
-                if !reply.ok {
-                    anyhow::bail!(reply
-                        .message
-                        .unwrap_or_else(|| "create session failed".into()));
-                }
-                let body = reply.body.unwrap_or(serde_json::json!({}));
-                emit(
-                    cli.json,
-                    |b: &&serde_json::Value| {
-                        format!(
-                            "Created session: {}",
-                            b["session_id"].as_str().unwrap_or("unknown")
-                        )
-                    },
-                    &body,
-                );
-            }
-            SessionCmd::List { username, status } => {
-                let dispatcher = connect_config(None).await?;
-                let username = username.as_deref().unwrap_or("default");
-                let reply = dispatcher
-                    .call(&AtpCmd_::new(
-                        "proc",
-                        "session-list",
-                        "",
-                        serde_json::json!({ "username": username }),
-                    ))
-                    .await?;
-                if !reply.ok {
-                    anyhow::bail!(reply
-                        .message
-                        .unwrap_or_else(|| "list sessions failed".into()));
-                }
-                let body = reply.body.unwrap_or(serde_json::json!([]));
-                emit(
-                    cli.json,
-                    |b: &&serde_json::Value| {
-                        let sessions = b.as_array().map(|a| a.to_vec()).unwrap_or_default();
-                        if sessions.is_empty() {
-                            "No sessions found".to_string()
-                        } else {
-                            let filtered: Vec<_> = if let Some(ref s) = status {
-                                sessions
-                                    .iter()
-                                    .filter(|sess| sess["status"].as_str() == Some(s.as_str()))
-                                    .collect()
-                            } else {
-                                sessions.iter().collect()
-                            };
-                            if filtered.is_empty() {
-                                format!("No {} sessions found", status.as_ref().unwrap())
-                            } else {
-                                let lines: Vec<String> = filtered
-                                    .iter()
-                                    .map(|s| {
-                                        format!(
-                                            "  {} [{}] - {}",
-                                            s["id"].as_str().unwrap_or("?"),
-                                            s["status"].as_str().unwrap_or("?"),
-                                            s["title"].as_str().unwrap_or("")
-                                        )
-                                    })
-                                    .collect();
-                                format!("Sessions:\n{}", lines.join("\n"))
-                            }
-                        }
-                    },
-                    &body,
-                );
-            }
-            SessionCmd::Show { session_id } => {
-                let dispatcher = connect_config(None).await?;
-                let reply = dispatcher
-                    .call(&AtpCmd_::new(
-                        "proc",
-                        "session-get",
-                        "",
-                        serde_json::json!({ "id": session_id }),
-                    ))
-                    .await?;
-                if !reply.ok {
-                    anyhow::bail!(reply.message.unwrap_or_else(|| "get session failed".into()));
-                }
-                let body = reply.body.unwrap_or(serde_json::json!({}));
-                emit(
-                    cli.json,
-                    |b: &&serde_json::Value| {
-                        format!(
-                        "Session: {}\n  Title: {}\n  Goal: {}\n  Status: {}\n  Origin: {}\n  Primary: {}\n  Participants: {}",
-                        b["id"].as_str().unwrap_or("?"),
-                        b["title"].as_str().unwrap_or(""),
-                        b["goal"].as_str().unwrap_or(""),
-                        b["status"].as_str().unwrap_or("?"),
-                        b["origin_agent"].as_str().unwrap_or(""),
-                        b["primary_agent"].as_str().unwrap_or(""),
-                        b["participants"]
-                            .as_array()
-                            .map(|a| a.len())
-                            .unwrap_or(0)
-                    )
-                    },
-                    &body,
-                );
-            }
-            SessionCmd::Resume { session_id, input } => {
-                let dispatcher = connect_config(None).await?;
-                let reply = dispatcher
-                    .call(&AtpCmd_::new(
-                        "proc",
-                        "session-resume",
-                        "",
-                        serde_json::json!({
-                            "session_id": session_id,
-                            "input": input,
-                        }),
-                    ))
-                    .await?;
-                if !reply.ok {
-                    anyhow::bail!(reply
-                        .message
-                        .unwrap_or_else(|| "resume session failed".into()));
-                }
-                let body = reply.body.unwrap_or(serde_json::json!({}));
-                emit(
-                    cli.json,
-                    |b: &&serde_json::Value| {
-                        format!("Resumed session, PID: {}", b["pid"].as_u64().unwrap_or(0))
-                    },
-                    &body,
-                );
-            }
-        },
-
-        // ── Service commands ─────────────────────────────────────────────────────
-        Cmd::Service { sub } => match sub {
-            ServiceCmd::Install {
-                source,
-                checksum,
-                no_start,
-                root,
-            } => {
-                let _root = expand_home(root);
-
-                let source = if !source.starts_with("file://")
-                    && !source.starts_with("https://")
-                    && !source.starts_with("http://")
-                {
-                    format!(
-                        "file://{}",
-                        std::fs::canonicalize(&source)
-                            .with_context(|| format!("cannot resolve path: {source}"))?
-                            .display()
-                    )
-                } else {
-                    source
-                };
-
-                let dispatcher = connect_config(None).await?;
-                let reply = dispatcher
-                    .call(&AtpCmd_::new(
-                        "sys",
-                        "install",
-                        "",
-                        serde_json::json!({
-                            "source":    source,
-                            "checksum":  checksum,
-                            "autostart": !no_start,
-                        }),
-                    ))
-                    .await?;
-
-                if !reply.ok {
-                    let msg = reply.message.unwrap_or_else(|| "install failed".into());
-                    anyhow::bail!("{msg}");
-                }
-                let body = reply.body.unwrap_or_default();
-                emit(
-                    cli.json,
-                    |b: &serde_json::Value| {
-                        let name = b["name"].as_str().unwrap_or("?");
-                        let ver = b["version"].as_str().unwrap_or("?");
-                        let tools = b["tools"]
-                            .as_array()
-                            .map(|a| {
-                                a.iter()
-                                    .filter_map(|v| v.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            })
-                            .unwrap_or_default();
-                        format!("Installed {name} v{ver} — tools: {tools}")
-                    },
-                    body,
-                );
-            }
-
-            ServiceCmd::List { root } => {
-                let root = expand_home(root);
-                let units = ServiceManager::discover_installed(&root)
-                    .context("failed to read installed services")?;
-
-                #[derive(serde::Serialize)]
-                struct Row {
-                    name: String,
-                    version: String,
-                    tool_count: usize,
-                }
-                let rows: Vec<Row> = units
-                    .into_iter()
-                    .map(|u| Row {
-                        name: u.name,
-                        version: u.version,
-                        tool_count: u.tools.provides.len(),
-                    })
-                    .collect();
-
-                emit(
-                    cli.json,
-                    |rows: &Vec<Row>| {
-                        if rows.is_empty() {
-                            return "No services installed.".into();
-                        }
-                        let mut out = format!("{:<20} {:<10} {}\n", "NAME", "VERSION", "TOOLS");
-                        for r in rows {
-                            out.push_str(&format!(
-                                "{:<20} {:<10} {}\n",
-                                r.name, r.version, r.tool_count
-                            ));
-                        }
-                        out
-                    },
-                    rows,
-                );
-            }
-
-            ServiceCmd::Status { name, root, server_url: _ } => {
-                let root = expand_home(root);
-                let status_path = root.join("proc/services").join(&name).join("status.yaml");
-
-                if !status_path.exists() {
-                    anyhow::bail!("no status file for service '{name}' — is it running?");
-                }
-                let yaml = std::fs::read_to_string(&status_path)
-                    .with_context(|| format!("cannot read {}", status_path.display()))?;
-                let status: ServiceStatus =
-                    serde_yaml::from_str(&yaml).with_context(|| "failed to parse status.yaml")?;
-
-                emit(
-                    cli.json,
-                    |s: &ServiceStatus| {
-                        format!(
-                            "name:          {}\nversion:       {}\npid:           {}\nstate:         {:?}\nendpoint:      {}\ntools:         {}\nrestart_count: {}",
-                            s.name,
-                            s.version,
-                            s.pid.as_u32(),
-                            s.state,
-                            s.endpoint.as_deref().unwrap_or("-"),
-                            s.tools.join(", "),
-                            s.restart_count,
-                        )
-                    },
-                    status,
-                );
-            }
-
-            ServiceCmd::Start { name, server_url } => {
-                let dispatcher = connect_config(server_url).await?;
-                let reply = dispatcher
-                    .call(&AtpCmd_::new(
-                        "signal",
-                        "send",
-                        "",
-                        serde_json::json!({ "name": name, "signal": "SIGSTART" }),
-                    ))
-                    .await?;
-                if !reply.ok {
-                    anyhow::bail!(reply.message.unwrap_or_else(|| "start failed".into()));
-                }
-                emit(cli.json, |_: &()| format!("Started {name}"), ());
-            }
-
-            ServiceCmd::Stop { name, server_url } => {
-                let dispatcher = connect_config(server_url).await?;
-                let reply = dispatcher
-                    .call(&AtpCmd_::new(
-                        "signal",
-                        "send",
-                        "",
-                        serde_json::json!({ "name": name, "signal": "SIGTERM" }),
-                    ))
-                    .await?;
-                if !reply.ok {
-                    anyhow::bail!(reply.message.unwrap_or_else(|| "stop failed".into()));
-                }
-                emit(cli.json, |_: &()| format!("Stopped {name}"), ());
-            }
-
-            ServiceCmd::Restart { name, server_url } => {
-                let dispatcher = connect_config(server_url).await?;
-                for (signal, label) in [("SIGSTOP", "stop"), ("SIGSTART", "start")] {
+            // ── Session commands ─────────────────────────────────────────────────────
+            ClientCmd::Session { sub } => match sub {
+                SessionCmd::Create {
+                    title,
+                    goal,
+                    username,
+                } => {
+                    let dispatcher = connect_config(None, None).await?;
+                    let username = username.as_deref().unwrap_or("default");
                     let reply = dispatcher
                         .call(&AtpCmd_::new(
-                            "signal",
-                            "send",
+                            "proc",
+                            "session-create",
                             "",
-                            serde_json::json!({ "name": name, "signal": signal }),
+                            serde_json::json!({
+                                "username": username,
+                                "title": title,
+                                "goal": goal,
+                            }),
                         ))
                         .await?;
                     if !reply.ok {
                         anyhow::bail!(reply
                             .message
-                            .unwrap_or_else(|| format!("restart ({label}) failed")));
+                            .unwrap_or_else(|| "create session failed".into()));
                     }
+                    let body = reply.body.unwrap_or(serde_json::json!({}));
+                    emit(
+                        cli.json,
+                        |b: &&serde_json::Value| {
+                            format!(
+                                "Created session: {}",
+                                b["session_id"].as_str().unwrap_or("unknown")
+                            )
+                        },
+                        &body,
+                    );
                 }
-                emit(cli.json, |_: &()| format!("Restarted {name}"), ());
-            }
+                SessionCmd::List { username, status } => {
+                    let dispatcher = connect_config(None, None).await?;
+                    let username = username.as_deref().unwrap_or("default");
+                    let reply = dispatcher
+                        .call(&AtpCmd_::new(
+                            "proc",
+                            "session-list",
+                            "",
+                            serde_json::json!({ "username": username }),
+                        ))
+                        .await?;
+                    if !reply.ok {
+                        anyhow::bail!(reply
+                            .message
+                            .unwrap_or_else(|| "list sessions failed".into()));
+                    }
+                    let body = reply.body.unwrap_or(serde_json::json!([]));
+                    emit(
+                        cli.json,
+                        |b: &&serde_json::Value| {
+                            let sessions = b.as_array().map(|a| a.to_vec()).unwrap_or_default();
+                            if sessions.is_empty() {
+                                "No sessions found".to_string()
+                            } else {
+                                let filtered: Vec<_> = if let Some(ref s) = status {
+                                    sessions
+                                        .iter()
+                                        .filter(|sess| sess["status"].as_str() == Some(s.as_str()))
+                                        .collect()
+                                } else {
+                                    sessions.iter().collect()
+                                };
+                                if filtered.is_empty() {
+                                    format!("No {} sessions found", status.as_ref().unwrap())
+                                } else {
+                                    let lines: Vec<String> = filtered
+                                        .iter()
+                                        .map(|s| {
+                                            format!(
+                                                "  {} [{}] - {}",
+                                                s["id"].as_str().unwrap_or("?"),
+                                                s["status"].as_str().unwrap_or("?"),
+                                                s["title"].as_str().unwrap_or("")
+                                            )
+                                        })
+                                        .collect();
+                                    format!("Sessions:\n{}", lines.join("\n"))
+                                }
+                            }
+                        },
+                        &body,
+                    );
+                }
+                SessionCmd::Show { session_id } => {
+                    let dispatcher = connect_config(None, None).await?;
+                    let reply = dispatcher
+                        .call(&AtpCmd_::new(
+                            "proc",
+                            "session-get",
+                            "",
+                            serde_json::json!({ "id": session_id }),
+                        ))
+                        .await?;
+                    if !reply.ok {
+                        anyhow::bail!(reply.message.unwrap_or_else(|| "get session failed".into()));
+                    }
+                    let body = reply.body.unwrap_or(serde_json::json!({}));
+                    emit(
+                        cli.json,
+                        |b: &&serde_json::Value| {
+                            format!(
+                            "Session: {}\n  Title: {}\n  Goal: {}\n  Status: {}\n  Origin: {}\n  Primary: {}\n  Participants: {}",
+                            b["id"].as_str().unwrap_or("?"),
+                            b["title"].as_str().unwrap_or(""),
+                            b["goal"].as_str().unwrap_or(""),
+                            b["status"].as_str().unwrap_or("?"),
+                            b["origin_agent"].as_str().unwrap_or(""),
+                            b["primary_agent"].as_str().unwrap_or(""),
+                            b["participants"]
+                                .as_array()
+                                .map(|a| a.len())
+                                .unwrap_or(0)
+                        )
+                        },
+                        &body,
+                    );
+                }
+                SessionCmd::Resume { session_id, input } => {
+                    let dispatcher = connect_config(None, None).await?;
+                    let reply = dispatcher
+                        .call(&AtpCmd_::new(
+                            "proc",
+                            "session-resume",
+                            "",
+                            serde_json::json!({
+                                "session_id": session_id,
+                                "input": input,
+                            }),
+                        ))
+                        .await?;
+                    if !reply.ok {
+                        anyhow::bail!(reply
+                            .message
+                            .unwrap_or_else(|| "resume session failed".into()));
+                    }
+                    let body = reply.body.unwrap_or(serde_json::json!({}));
+                    emit(
+                        cli.json,
+                        |b: &&serde_json::Value| {
+                            format!("Resumed session, PID: {}", b["pid"].as_u64().unwrap_or(0))
+                        },
+                        &body,
+                    );
+                }
+            },
 
-            ServiceCmd::Uninstall { name, force, root } => {
-                let root = expand_home(root);
-                let svc_dir = root.join("services").join(&name);
+            // ── Service commands ─────────────────────────────────────────────────────
+            ClientCmd::Service { sub } => match sub {
+                ServiceCmd::Install {
+                    source,
+                    checksum,
+                    no_start,
+                    root: _,
+                } => {
+                    let source = if !source.starts_with("file://")
+                        && !source.starts_with("https://")
+                        && !source.starts_with("http://")
+                    {
+                        format!(
+                            "file://{}",
+                            std::fs::canonicalize(&source)
+                                .with_context(|| format!("cannot resolve path: {source}"))?
+                                .display()
+                        )
+                    } else {
+                        source
+                    };
 
-                if !svc_dir.exists() {
-                    anyhow::bail!("service '{name}' is not installed");
+                    let dispatcher = connect_config(None, None).await?;
+                    let reply = dispatcher
+                        .call(&AtpCmd_::new(
+                            "sys",
+                            "install",
+                            "",
+                            serde_json::json!({
+                                "source":    source,
+                                "checksum":  checksum,
+                                "autostart": !no_start,
+                            }),
+                        ))
+                        .await?;
+
+                    if !reply.ok {
+                        let msg = reply.message.unwrap_or_else(|| "install failed".into());
+                        anyhow::bail!("{msg}");
+                    }
+                    let body = reply.body.unwrap_or_default();
+                    emit(
+                        cli.json,
+                        |b: &serde_json::Value| {
+                            let name = b["name"].as_str().unwrap_or("?");
+                            let ver = b["version"].as_str().unwrap_or("?");
+                            let tools = b["tools"]
+                                .as_array()
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|v| v.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                })
+                                .unwrap_or_default();
+                            format!("Installed {name} v{ver} — tools: {tools}")
+                        },
+                        body,
+                    );
                 }
 
-                if force {
-                    // Best-effort kill — ignore errors (service may not be running)
-                    if let Ok(dispatcher) = connect_config(None).await {
-                        let _ = dispatcher
+                ServiceCmd::List { root } => {
+                    let root = expand_home(root);
+                    let units = ServiceManager::discover_installed(&root)
+                        .context("failed to read installed services")?;
+
+                    #[derive(serde::Serialize)]
+                    struct Row {
+                        name: String,
+                        version: String,
+                        tool_count: usize,
+                    }
+                    let rows: Vec<Row> = units
+                        .into_iter()
+                        .map(|u| Row {
+                            name: u.name,
+                            version: u.version,
+                            tool_count: u.tools.provides.len(),
+                        })
+                        .collect();
+
+                    emit(
+                        cli.json,
+                        |rows: &Vec<Row>| {
+                            if rows.is_empty() {
+                                return "No services installed.".into();
+                            }
+                            let mut out = format!("{:<20} {:<10} {}\n", "NAME", "VERSION", "TOOLS");
+                            for r in rows {
+                                out.push_str(&format!(
+                                    "{:<20} {:<10} {}\n",
+                                    r.name, r.version, r.tool_count
+                                ));
+                            }
+                            out
+                        },
+                        rows,
+                    );
+                }
+
+                ServiceCmd::Status { name, root, server_url: _ } => {
+                    let root = expand_home(root);
+                    let status_path = root.join("proc/services").join(&name).join("status.yaml");
+
+                    if !status_path.exists() {
+                        anyhow::bail!("no status file for service '{name}' — is it running?");
+                    }
+                    let yaml = std::fs::read_to_string(&status_path)
+                        .with_context(|| format!("cannot read {}", status_path.display()))?;
+                    let status: ServiceStatus =
+                        serde_yaml::from_str(&yaml).with_context(|| "failed to parse status.yaml")?;
+
+                    emit(
+                        cli.json,
+                        |s: &ServiceStatus| {
+                            format!(
+                                "name:          {}\nversion:       {}\npid:           {}\nstate:         {:?}\nendpoint:      {}\ntools:         {}\nrestart_count: {}",
+                                s.name,
+                                s.version,
+                                s.pid.as_u32(),
+                                s.state,
+                                s.endpoint.as_deref().unwrap_or("-"),
+                                s.tools.join(", "),
+                                s.restart_count,
+                            )
+                        },
+                        status,
+                    );
+                }
+
+                ServiceCmd::Start { name, server_url } => {
+                    let dispatcher = connect_config(None, server_url).await?;
+                    let reply = dispatcher
+                        .call(&AtpCmd_::new(
+                            "signal",
+                            "send",
+                            "",
+                            serde_json::json!({ "name": name, "signal": "SIGSTART" }),
+                        ))
+                        .await?;
+                    if !reply.ok {
+                        anyhow::bail!(reply.message.unwrap_or_else(|| "start failed".into()));
+                    }
+                    emit(cli.json, |_: &()| format!("Started {name}"), ());
+                }
+
+                ServiceCmd::Stop { name, server_url } => {
+                    let dispatcher = connect_config(None, server_url).await?;
+                    let reply = dispatcher
+                        .call(&AtpCmd_::new(
+                            "signal",
+                            "send",
+                            "",
+                            serde_json::json!({ "name": name, "signal": "SIGTERM" }),
+                        ))
+                        .await?;
+                    if !reply.ok {
+                        anyhow::bail!(reply.message.unwrap_or_else(|| "stop failed".into()));
+                    }
+                    emit(cli.json, |_: &()| format!("Stopped {name}"), ());
+                }
+
+                ServiceCmd::Restart { name, server_url } => {
+                    let dispatcher = connect_config(None, server_url).await?;
+                    for (signal, label) in [("SIGSTOP", "stop"), ("SIGSTART", "start")] {
+                        let reply = dispatcher
                             .call(&AtpCmd_::new(
                                 "signal",
                                 "send",
                                 "",
-                                serde_json::json!({ "name": name, "signal": "SIGKILL" }),
+                                serde_json::json!({ "name": name, "signal": signal }),
                             ))
-                            .await;
+                            .await?;
+                        if !reply.ok {
+                            anyhow::bail!(reply
+                                .message
+                                .unwrap_or_else(|| format!("restart ({label}) failed")));
+                        }
                     }
-                } else {
-                    // Check if service has a status file indicating it's running
-                    let status_path = root.join("proc/services").join(&name).join("status.yaml");
-                    if status_path.exists() {
-                        anyhow::bail!(
-                            "service '{name}' may be running — use --force to kill it first"
+                    emit(cli.json, |_: &()| format!("Restarted {name}"), ());
+                }
+
+                ServiceCmd::Uninstall { name, force, root } => {
+                    let root = expand_home(root);
+                    let svc_dir = root.join("services").join(&name);
+
+                    if !svc_dir.exists() {
+                        anyhow::bail!("service '{name}' is not installed");
+                    }
+
+                    if force {
+                        if let Ok(dispatcher) = connect_config(None, None).await {
+                            let _ = dispatcher
+                                .call(&AtpCmd_::new(
+                                    "signal",
+                                    "send",
+                                    "",
+                                    serde_json::json!({ "name": name, "signal": "SIGKILL" }),
+                                ))
+                                .await;
+                        }
+                    } else {
+                        let status_path = root.join("proc/services").join(&name).join("status.yaml");
+                        if status_path.exists() {
+                            anyhow::bail!(
+                                "service '{name}' may be running — use --force to kill it first"
+                            );
+                        }
+                    }
+
+                    std::fs::remove_dir_all(&svc_dir)
+                        .with_context(|| format!("failed to remove {}", svc_dir.display()))?;
+                    emit(cli.json, |_: &()| format!("Uninstalled {name}"), ());
+                }
+
+                ServiceCmd::Logs { name, follow: _ } => {
+                    emit(
+                        cli.json,
+                        |_: &()| format!("Logs for {name}: (not yet implemented)"),
+                        (),
+                    );
+                }
+            },
+
+            // ── Secret commands ───────────────────────────────────────────────────
+            ClientCmd::Secret { sub } => {
+                let master_key: [u8; 32] = {
+                    let raw = std::env::var("AVIX_MASTER_KEY").context("AVIX_MASTER_KEY is not set")?;
+                    let bytes = raw.as_bytes();
+                    let mut key = [0u8; 32];
+                    let len = bytes.len().min(32);
+                    key[..len].copy_from_slice(&bytes[..len]);
+                    key
+                };
+
+                match sub {
+                    SecretCmd::Set {
+                        name,
+                        value,
+                        for_service,
+                        for_user,
+                        root,
+                    } => {
+                        let root = expand_home(root);
+                        let owner = owner_from(for_service, for_user)?;
+                        let store = SecretStore::new(&root.join("secrets"), &master_key);
+                        store
+                            .set(&owner, &name, &value)
+                            .context("failed to set secret")?;
+                        emit(
+                            cli.json,
+                            |_: &()| format!("Secret '{name}' set for {owner}"),
+                            (),
+                        );
+                    }
+
+                    SecretCmd::List {
+                        for_service,
+                        for_user,
+                        root,
+                    } => {
+                        let root = expand_home(root);
+                        let owner = owner_from(for_service, for_user)?;
+                        let store = SecretStore::new(&root.join("secrets"), &master_key);
+                        let names = store.list(&owner);
+                        emit(
+                            cli.json,
+                            |names: &Vec<String>| {
+                                if names.is_empty() {
+                                    format!("No secrets for {owner}")
+                                } else {
+                                    names.join("\n")
+                                }
+                            },
+                            names,
+                        );
+                    }
+
+                    SecretCmd::Delete {
+                        name,
+                        for_service,
+                        for_user,
+                        root,
+                    } => {
+                        let root = expand_home(root);
+                        let owner = owner_from(for_service, for_user)?;
+                        let store = SecretStore::new(&root.join("secrets"), &master_key);
+                        store
+                            .delete(&owner, &name)
+                            .context("failed to delete secret")?;
+                        emit(
+                            cli.json,
+                            |_: &()| format!("Secret '{name}' deleted for {owner}"),
+                            (),
                         );
                     }
                 }
-
-                std::fs::remove_dir_all(&svc_dir)
-                    .with_context(|| format!("failed to remove {}", svc_dir.display()))?;
-                emit(cli.json, |_: &()| format!("Uninstalled {name}"), ());
-            }
-
-            ServiceCmd::Logs { name, follow: _ } => {
-                // Stub: read /proc/services/<name>/log if present
-                emit(
-                    cli.json,
-                    |_: &()| format!("Logs for {name}: (not yet implemented)"),
-                    (),
-                );
             }
         },
-
-        // ── Secret commands ───────────────────────────────────────────────────
-        Cmd::Secret { sub } => {
-            let master_key: [u8; 32] = {
-                let raw = std::env::var("AVIX_MASTER_KEY").context("AVIX_MASTER_KEY is not set")?;
-                let bytes = raw.as_bytes();
-                let mut key = [0u8; 32];
-                let len = bytes.len().min(32);
-                key[..len].copy_from_slice(&bytes[..len]);
-                key
-            };
-
-            match sub {
-                SecretCmd::Set {
-                    name,
-                    value,
-                    for_service,
-                    for_user,
-                    root,
-                } => {
-                    let root = expand_home(root);
-                    let owner = owner_from(for_service, for_user)?;
-                    let store = SecretStore::new(&root.join("secrets"), &master_key);
-                    store
-                        .set(&owner, &name, &value)
-                        .context("failed to set secret")?;
-                    emit(
-                        cli.json,
-                        |_: &()| format!("Secret '{name}' set for {owner}"),
-                        (),
-                    );
-                }
-
-                SecretCmd::List {
-                    for_service,
-                    for_user,
-                    root,
-                } => {
-                    let root = expand_home(root);
-                    let owner = owner_from(for_service, for_user)?;
-                    let store = SecretStore::new(&root.join("secrets"), &master_key);
-                    let names = store.list(&owner);
-                    emit(
-                        cli.json,
-                        |names: &Vec<String>| {
-                            if names.is_empty() {
-                                format!("No secrets for {owner}")
-                            } else {
-                                names.join("\n")
-                            }
-                        },
-                        names,
-                    );
-                }
-
-                SecretCmd::Delete {
-                    name,
-                    for_service,
-                    for_user,
-                    root,
-                } => {
-                    let root = expand_home(root);
-                    let owner = owner_from(for_service, for_user)?;
-                    let store = SecretStore::new(&root.join("secrets"), &master_key);
-                    store
-                        .delete(&owner, &name)
-                        .context("failed to delete secret")?;
-                    emit(
-                        cli.json,
-                        |_: &()| format!("Secret '{name}' deleted for {owner}"),
-                        (),
-                    );
-                }
-            }
-        }
     }
 
     Ok(())
@@ -1624,9 +1630,34 @@ mod tests {
     use clap::Parser;
 
     #[test]
+    fn client_connect_parses() {
+        let cli = Cli::try_parse_from(["avix", "client", "connect"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Cmd::Client {
+                sub: ClientCmd::Connect { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn client_connect_with_config_parses() {
+        let cli = Cli::try_parse_from(["avix", "client", "connect", "--config", "/custom/config.yaml"]).unwrap();
+        match cli.command {
+            Cmd::Client {
+                sub: ClientCmd::Connect { config },
+            } => assert_eq!(config, Some(PathBuf::from("/custom/config.yaml"))),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    // ── Service command tests ───────────────────────────────────────────────────
+
+    #[test]
     fn service_install_parses_source_and_checksum() {
         let cli = Cli::try_parse_from([
             "avix",
+            "client",
             "service",
             "install",
             "./pkg.tar.gz",
@@ -1635,14 +1666,15 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Cmd::Service {
-                sub:
-                    ServiceCmd::Install {
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::Install {
                         source,
                         checksum,
                         no_start,
                         ..
                     },
+                },
             } => {
                 assert_eq!(source, "./pkg.tar.gz");
                 assert_eq!(checksum.as_deref(), Some("sha256:abc123"));
@@ -1654,11 +1686,13 @@ mod tests {
 
     #[test]
     fn service_install_no_start_flag() {
-        let cli = Cli::try_parse_from(["avix", "service", "install", "./pkg.tar.gz", "--no-start"])
+        let cli = Cli::try_parse_from(["avix", "client", "service", "install", "./pkg.tar.gz", "--no-start"])
             .unwrap();
         match cli.command {
-            Cmd::Service {
-                sub: ServiceCmd::Install { no_start, .. },
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::Install { no_start, .. },
+                },
             } => assert!(no_start),
             _ => panic!("wrong variant"),
         }
@@ -1666,11 +1700,13 @@ mod tests {
 
     #[test]
     fn service_install_parses_root() {
-        let cli = Cli::try_parse_from(["avix", "service", "install", "./pkg.tar.gz", "--root", "/custom/root"])
+        let cli = Cli::try_parse_from(["avix", "client", "service", "install", "./pkg.tar.gz", "--root", "/custom/root"])
             .unwrap();
         match cli.command {
-            Cmd::Service {
-                sub: ServiceCmd::Install { root, .. },
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::Install { root, .. },
+                },
             } => assert_eq!(root.to_string_lossy(), "/custom/root"),
             _ => panic!("wrong variant"),
         }
@@ -1678,21 +1714,25 @@ mod tests {
 
     #[test]
     fn service_list_subcommand_parses() {
-        let cli = Cli::try_parse_from(["avix", "service", "list"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "client", "service", "list"]).unwrap();
         assert!(matches!(
             cli.command,
-            Cmd::Service {
-                sub: ServiceCmd::List { .. }
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::List { .. }
+                }
             }
         ));
     }
 
     #[test]
     fn service_status_parses_name() {
-        let cli = Cli::try_parse_from(["avix", "service", "status", "github-svc"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "client", "service", "status", "github-svc"]).unwrap();
         match cli.command {
-            Cmd::Service {
-                sub: ServiceCmd::Status { name, .. },
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::Status { name, .. },
+                },
             } => assert_eq!(name, "github-svc"),
             _ => panic!("wrong variant"),
         }
@@ -1700,10 +1740,12 @@ mod tests {
 
     #[test]
     fn service_start_parses() {
-        let cli = Cli::try_parse_from(["avix", "service", "start", "my-svc"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "client", "service", "start", "my-svc"]).unwrap();
         match cli.command {
-            Cmd::Service {
-                sub: ServiceCmd::Start { name, server_url },
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::Start { name, server_url },
+                },
             } => {
                 assert_eq!(name, "my-svc");
                 assert_eq!(server_url, None);
@@ -1714,10 +1756,12 @@ mod tests {
 
     #[test]
     fn service_start_parses_server_url() {
-        let cli = Cli::try_parse_from(["avix", "service", "start", "my-svc", "--server-url", "http://localhost:9999"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "client", "service", "start", "my-svc", "--server-url", "http://localhost:9999"]).unwrap();
         match cli.command {
-            Cmd::Service {
-                sub: ServiceCmd::Start { name, server_url },
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::Start { name, server_url },
+                },
             } => {
                 assert_eq!(name, "my-svc");
                 assert_eq!(server_url, Some("http://localhost:9999".to_string()));
@@ -1728,21 +1772,25 @@ mod tests {
 
     #[test]
     fn service_stop_parses() {
-        let cli = Cli::try_parse_from(["avix", "service", "stop", "my-svc"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "client", "service", "stop", "my-svc"]).unwrap();
         assert!(matches!(
             cli.command,
-            Cmd::Service {
-                sub: ServiceCmd::Stop { .. }
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::Stop { .. }
+                }
             }
         ));
     }
 
     #[test]
     fn service_stop_parses_server_url() {
-        let cli = Cli::try_parse_from(["avix", "service", "stop", "my-svc", "--server-url", "http://localhost:9999"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "client", "service", "stop", "my-svc", "--server-url", "http://localhost:9999"]).unwrap();
         match cli.command {
-            Cmd::Service {
-                sub: ServiceCmd::Stop { name, server_url },
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::Stop { name, server_url },
+                },
             } => {
                 assert_eq!(name, "my-svc");
                 assert_eq!(server_url, Some("http://localhost:9999".to_string()));
@@ -1753,21 +1801,25 @@ mod tests {
 
     #[test]
     fn service_restart_parses() {
-        let cli = Cli::try_parse_from(["avix", "service", "restart", "my-svc"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "client", "service", "restart", "my-svc"]).unwrap();
         assert!(matches!(
             cli.command,
-            Cmd::Service {
-                sub: ServiceCmd::Restart { .. }
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::Restart { .. }
+                }
             }
         ));
     }
 
     #[test]
     fn service_restart_parses_server_url() {
-        let cli = Cli::try_parse_from(["avix", "service", "restart", "my-svc", "--server-url", "http://localhost:9999"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "client", "service", "restart", "my-svc", "--server-url", "http://localhost:9999"]).unwrap();
         match cli.command {
-            Cmd::Service {
-                sub: ServiceCmd::Restart { name, server_url },
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::Restart { name, server_url },
+                },
             } => {
                 assert_eq!(name, "my-svc");
                 assert_eq!(server_url, Some("http://localhost:9999".to_string()));
@@ -1779,10 +1831,12 @@ mod tests {
     #[test]
     fn service_uninstall_force_flag() {
         let cli =
-            Cli::try_parse_from(["avix", "service", "uninstall", "github-svc", "--force"]).unwrap();
+            Cli::try_parse_from(["avix", "client", "service", "uninstall", "github-svc", "--force"]).unwrap();
         match cli.command {
-            Cmd::Service {
-                sub: ServiceCmd::Uninstall { name, force, .. },
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::Uninstall { name, force, .. },
+                },
             } => {
                 assert_eq!(name, "github-svc");
                 assert!(force);
@@ -1794,10 +1848,12 @@ mod tests {
     #[test]
     fn service_logs_follow_parses() {
         let cli =
-            Cli::try_parse_from(["avix", "service", "logs", "github-svc", "--follow"]).unwrap();
+            Cli::try_parse_from(["avix", "client", "service", "logs", "github-svc", "--follow"]).unwrap();
         match cli.command {
-            Cmd::Service {
-                sub: ServiceCmd::Logs { name, follow },
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::Logs { name, follow },
+                },
             } => {
                 assert_eq!(name, "github-svc");
                 assert!(follow);
@@ -1809,12 +1865,14 @@ mod tests {
     #[test]
     fn service_status_json_flag() {
         let cli =
-            Cli::try_parse_from(["avix", "--json", "service", "status", "github-svc"]).unwrap();
+            Cli::try_parse_from(["avix", "--json", "client", "service", "status", "github-svc"]).unwrap();
         assert!(cli.json);
         assert!(matches!(
             cli.command,
-            Cmd::Service {
-                sub: ServiceCmd::Status { .. }
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::Status { .. }
+                }
             }
         ));
     }
@@ -1822,11 +1880,13 @@ mod tests {
     #[test]
     fn service_install_no_checksum_defaults_none() {
         let cli =
-            Cli::try_parse_from(["avix", "service", "install", "https://example.com/x.tar.gz"])
+            Cli::try_parse_from(["avix", "client", "service", "install", "https://example.com/x.tar.gz"])
                 .unwrap();
         match cli.command {
-            Cmd::Service {
-                sub: ServiceCmd::Install { checksum, .. },
+            Cmd::Client {
+                sub: ClientCmd::Service {
+                    sub: ServiceCmd::Install { checksum, .. },
+                },
             } => assert!(checksum.is_none()),
             _ => panic!("wrong variant"),
         }
@@ -1838,6 +1898,7 @@ mod tests {
     fn secret_set_for_service_parses() {
         let cli = Cli::try_parse_from([
             "avix",
+            "client",
             "secret",
             "set",
             "github-app-key",
@@ -1847,15 +1908,16 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Cmd::Secret {
-                sub:
-                    SecretCmd::Set {
+            Cmd::Client {
+                sub: ClientCmd::Secret {
+                    sub: SecretCmd::Set {
                         name,
                         value,
                         for_service,
                         for_user,
                         ..
                     },
+                },
             } => {
                 assert_eq!(name, "github-app-key");
                 assert_eq!(value, "ghp_abc");
@@ -1870,6 +1932,7 @@ mod tests {
     fn secret_set_for_user_parses() {
         let cli = Cli::try_parse_from([
             "avix",
+            "client",
             "secret",
             "set",
             "my-token",
@@ -1879,15 +1942,16 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Cmd::Secret {
-                sub:
-                    SecretCmd::Set {
+            Cmd::Client {
+                sub: ClientCmd::Secret {
+                    sub: SecretCmd::Set {
                         name,
                         value,
                         for_service,
                         for_user,
                         ..
                     },
+                },
             } => {
                 assert_eq!(name, "my-token");
                 assert_eq!(value, "tok-xyz");
@@ -1901,10 +1965,12 @@ mod tests {
     #[test]
     fn secret_list_for_service_parses() {
         let cli =
-            Cli::try_parse_from(["avix", "secret", "list", "--for-service", "github-svc"]).unwrap();
+            Cli::try_parse_from(["avix", "client", "secret", "list", "--for-service", "github-svc"]).unwrap();
         match cli.command {
-            Cmd::Secret {
-                sub: SecretCmd::List { for_service, .. },
+            Cmd::Client {
+                sub: ClientCmd::Secret {
+                    sub: SecretCmd::List { for_service, .. },
+                },
             } => assert_eq!(for_service.as_deref(), Some("github-svc")),
             _ => panic!("wrong variant"),
         }
@@ -1912,10 +1978,12 @@ mod tests {
 
     #[test]
     fn secret_list_for_user_parses() {
-        let cli = Cli::try_parse_from(["avix", "secret", "list", "--for-user", "alice"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "client", "secret", "list", "--for-user", "alice"]).unwrap();
         match cli.command {
-            Cmd::Secret {
-                sub: SecretCmd::List { for_user, .. },
+            Cmd::Client {
+                sub: ClientCmd::Secret {
+                    sub: SecretCmd::List { for_user, .. },
+                },
             } => assert_eq!(for_user.as_deref(), Some("alice")),
             _ => panic!("wrong variant"),
         }
@@ -1925,6 +1993,7 @@ mod tests {
     fn secret_delete_for_service_parses() {
         let cli = Cli::try_parse_from([
             "avix",
+            "client",
             "secret",
             "delete",
             "my-key",
@@ -1933,14 +2002,68 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Cmd::Secret {
-                sub: SecretCmd::Delete {
-                    name, for_service, ..
+            Cmd::Client {
+                sub: ClientCmd::Secret {
+                    sub: SecretCmd::Delete {
+                        name, for_service, ..
+                    },
                 },
             } => {
                 assert_eq!(name, "my-key");
                 assert_eq!(for_service.as_deref(), Some("my-svc"));
             }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    // ── Session command tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn session_create_parses() {
+        let cli = Cli::try_parse_from([
+            "avix",
+            "client",
+            "session",
+            "create",
+            "--title", "My Session",
+            "--goal", "Do something",
+        ])
+        .unwrap();
+        match cli.command {
+            Cmd::Client {
+                sub: ClientCmd::Session {
+                    sub: SessionCmd::Create { title, goal, .. },
+                },
+            } => {
+                assert_eq!(title, "My Session");
+                assert_eq!(goal, "Do something");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn session_list_parses() {
+        let cli = Cli::try_parse_from(["avix", "client", "session", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Cmd::Client {
+                sub: ClientCmd::Session {
+                    sub: SessionCmd::List { .. }
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn session_show_parses() {
+        let cli = Cli::try_parse_from(["avix", "client", "session", "show", "sess-123"]).unwrap();
+        match cli.command {
+            Cmd::Client {
+                sub: ClientCmd::Session {
+                    sub: SessionCmd::Show { session_id },
+                },
+            } => assert_eq!(session_id, "sess-123"),
             _ => panic!("wrong variant"),
         }
     }

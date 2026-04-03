@@ -775,7 +775,15 @@ mod tests {
 
         // FakeDispatcher::call returns Ok(reply) regardless of reply.ok.
         // Verify the reply signals an error so callers (like list_services) can propagate it.
-        let reply = fake.call(Cmd::new("sys", "service-list", "tok", serde_json::json!({}))).await.unwrap();
+        let reply = fake
+            .call(Cmd::new(
+                "sys",
+                "service-list",
+                "tok",
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
         assert!(!reply.ok, "reply should not be ok for an error response");
         assert!(reply.error.is_some() || reply.message.is_some());
     }
@@ -790,7 +798,10 @@ mod tests {
 
         // FakeDispatcher::call returns Ok(reply) regardless of reply.ok.
         // Verify the reply signals an error so callers (like list_tools) can propagate it.
-        let reply = fake.call(Cmd::new("sys", "tool-list", "tok", serde_json::json!({}))).await.unwrap();
+        let reply = fake
+            .call(Cmd::new("sys", "tool-list", "tok", serde_json::json!({})))
+            .await
+            .unwrap();
         assert!(!reply.ok, "reply should not be ok for an error response");
         assert!(reply.error.is_some() || reply.message.is_some());
     }
