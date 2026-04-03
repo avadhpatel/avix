@@ -8,6 +8,7 @@ members = [
     "crates/avix-app/src-web",
     "crates/avix-docker",
     "crates/avix-tests-integration",
+    "services/workspace",
 ]
 resolver = "2"
 

@@ -14,13 +14,13 @@ use tracing::warn;
 
 use avix_client_core::{
     atp::types::HilOutcome,
+    commands::spawn_agent::spawn_agent as core_spawn_agent,
     commands::{
         get_invocation as core_get_invocation, list_agents as core_list_agents,
         list_installed as core_list_installed, list_invocations as core_list_invocations,
         list_services as core_list_services, list_tools as core_list_tools,
         pipe_text as core_pipe_text, resolve_hil as core_resolve_hil,
     },
-    commands::spawn_agent::spawn_agent as core_spawn_agent,
     persistence,
     state::SharedState,
 };
@@ -54,12 +54,10 @@ pub async fn invoke_handler(
 ) -> InvokeResult {
     let s = state.app.read().await;
     match req.command.as_str() {
-        "auth_status" => {
-            Ok(Json(serde_json::json!({
-                "authenticated": s.is_authenticated(),
-                "identity": s.config.identity,
-            })))
-        }
+        "auth_status" => Ok(Json(serde_json::json!({
+            "authenticated": s.is_authenticated(),
+            "identity": s.config.identity,
+        }))),
 
         "login" => {
             let identity = req.args["identity"]
@@ -89,10 +87,7 @@ pub async fn invoke_handler(
                 .as_str()
                 .ok_or_else(|| bad_request("missing name"))?
                 .to_string();
-            let description = req.args["description"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
+            let description = req.args["description"].as_str().unwrap_or("").to_string();
             let dispatcher = s
                 .dispatcher
                 .as_ref()
@@ -169,8 +164,7 @@ pub async fn invoke_handler(
                 .await
                 .map_err(|e| internal(format!("{e:?}")))?;
             // Return JSON-encoded string to match Tauri command's String return type.
-            let json_str =
-                serde_json::to_string(&agents).map_err(|e| internal(e.to_string()))?;
+            let json_str = serde_json::to_string(&agents).map_err(|e| internal(e.to_string()))?;
             Ok(Json(Value::String(json_str)))
         }
 
@@ -223,8 +217,7 @@ pub async fn invoke_handler(
             let agents = core_list_installed(&dispatcher, &username)
                 .await
                 .map_err(|e| internal(format!("{e:?}")))?;
-            let json_str =
-                serde_json::to_string(&agents).map_err(|e| internal(e.to_string()))?;
+            let json_str = serde_json::to_string(&agents).map_err(|e| internal(e.to_string()))?;
             Ok(Json(Value::String(json_str)))
         }
 
@@ -240,12 +233,10 @@ pub async fn invoke_handler(
                 .ok_or_else(|| bad_request("not connected"))?
                 .clone();
             drop(s);
-            let records =
-                core_list_invocations(&dispatcher, &username, agent_name.as_deref())
-                    .await
-                    .map_err(|e| internal(format!("{e:?}")))?;
-            let json_str =
-                serde_json::to_string(&records).map_err(|e| internal(e.to_string()))?;
+            let records = core_list_invocations(&dispatcher, &username, agent_name.as_deref())
+                .await
+                .map_err(|e| internal(format!("{e:?}")))?;
+            let json_str = serde_json::to_string(&records).map_err(|e| internal(e.to_string()))?;
             Ok(Json(Value::String(json_str)))
         }
 
@@ -283,7 +274,9 @@ pub async fn invoke_handler(
             let services = core_list_services(&dispatcher)
                 .await
                 .map_err(|e| internal(format!("{e:?}")))?;
-            Ok(Json(serde_json::to_value(services).map_err(|e| internal(e.to_string()))?))
+            Ok(Json(
+                serde_json::to_value(services).map_err(|e| internal(e.to_string()))?,
+            ))
         }
 
         "get_tools" => {
@@ -296,7 +289,9 @@ pub async fn invoke_handler(
             let tools = core_list_tools(&dispatcher)
                 .await
                 .map_err(|e| internal(format!("{e:?}")))?;
-            Ok(Json(serde_json::to_value(tools).map_err(|e| internal(e.to_string()))?))
+            Ok(Json(
+                serde_json::to_value(tools).map_err(|e| internal(e.to_string()))?,
+            ))
         }
 
         other => {

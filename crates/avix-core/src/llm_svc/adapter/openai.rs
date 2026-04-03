@@ -97,8 +97,7 @@ impl OpenAiAdapter {
 
                     if all_tool_results {
                         for block in blocks {
-                            let call_id =
-                                block["tool_use_id"].as_str().unwrap_or("").to_string();
+                            let call_id = block["tool_use_id"].as_str().unwrap_or("").to_string();
                             // content may be a string or an array of content blocks
                             let content_str = if let Some(s) = block["content"].as_str() {
                                 s.to_string()

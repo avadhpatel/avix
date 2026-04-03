@@ -89,9 +89,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // Embedded mode — start the daemon on atp_port, derive server_url from it.
         config.server_url = format!("http://localhost:{}", args.atp_port);
         config.auto_start_server = false; // we manage the process below
-        let root = args.root.clone().unwrap_or_else(|| {
-            persistence::app_data_dir().join("runtime")
-        });
+        let root = args
+            .root
+            .clone()
+            .unwrap_or_else(|| persistence::app_data_dir().join("runtime"));
         let trace_flags = args
             .trace
             .as_deref()
@@ -118,7 +119,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
             if tokio::time::Instant::now() >= deadline {
-                tracing::warn!("Embedded daemon did not start within 15s — proceeding without auto-login");
+                tracing::warn!(
+                    "Embedded daemon did not start within 15s — proceeding without auto-login"
+                );
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -149,8 +152,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Serve frontend static files with SPA fallback to index.html.
     let index_path = args.dist.join("index.html");
-    let serve_dir = ServeDir::new(&args.dist)
-        .not_found_service(ServeFile::new(&index_path));
+    let serve_dir = ServeDir::new(&args.dist).not_found_service(ServeFile::new(&index_path));
 
     let app = Router::new()
         .route("/api/invoke", post(invoke_handler))

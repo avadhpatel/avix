@@ -230,11 +230,7 @@ impl ToolRegistry {
             .values()
             .map(|rec| {
                 let name = rec.entry.name.as_str().to_string();
-                let namespace = name
-                    .split('/')
-                    .next()
-                    .unwrap_or("")
-                    .to_string();
+                let namespace = name.split('/').next().unwrap_or("").to_string();
                 let description = rec
                     .entry
                     .descriptor
@@ -248,7 +244,12 @@ impl ToolRegistry {
                     crate::types::tool::ToolState::Degraded => "degraded",
                 }
                 .to_string();
-                ToolSummary { name, namespace, description, state }
+                ToolSummary {
+                    name,
+                    namespace,
+                    description,
+                    state,
+                }
             })
             .collect()
     }
@@ -346,7 +347,9 @@ mod tests {
 
         reg.clone().start_atp_bridge(Arc::clone(&bus)).await;
 
-        reg.add("test-svc", vec![make_entry("test/echo")]).await.unwrap();
+        reg.add("test-svc", vec![make_entry("test/echo")])
+            .await
+            .unwrap();
 
         let mut rx = bus.subscribe();
         let ev = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
@@ -354,6 +357,9 @@ mod tests {
             .expect("event should be received")
             .expect("event should be ok");
 
-        assert_eq!(ev.event.event, crate::gateway::atp::types::AtpEventKind::ToolChanged);
+        assert_eq!(
+            ev.event.event,
+            crate::gateway::atp::types::AtpEventKind::ToolChanged
+        );
     }
 }

@@ -269,7 +269,10 @@ impl LlmClient for DirectHttpLlmClient {
 
         let chunk_stream = line_stream
             .scan(
-                (None::<String>, std::collections::HashMap::<String, String>::new()),
+                (
+                    None::<String>,
+                    std::collections::HashMap::<String, String>::new(),
+                ),
                 move |state, line_result| {
                     let adapter = Arc::clone(&adapter);
                     let (last_event, index_to_id) = state;
@@ -298,22 +301,17 @@ impl LlmClient for DirectHttpLlmClient {
                             // We maintain an index→real_id map and rewrite the call_id here.
                             let result = result.map(|opt| {
                                 opt.map(|chunk| match chunk {
-                                    StreamChunk::ToolCallStart {
-                                        ref call_id,
-                                        ..
-                                    } => {
+                                    StreamChunk::ToolCallStart { ref call_id, .. } => {
                                         // Extract the numeric index from the raw data and
                                         // store the mapping so we can fix up future deltas.
                                         if let Ok(v) =
                                             serde_json::from_str::<serde_json::Value>(&data)
                                         {
-                                            if let Some(tcs) = v["choices"][0]["delta"]
-                                                ["tool_calls"]
-                                                .as_array()
+                                            if let Some(tcs) =
+                                                v["choices"][0]["delta"]["tool_calls"].as_array()
                                             {
                                                 for tc in tcs {
-                                                    if tc["id"].as_str() == Some(call_id.as_str())
-                                                    {
+                                                    if tc["id"].as_str() == Some(call_id.as_str()) {
                                                         if let Some(idx) = tc["index"].as_u64() {
                                                             index_to_id.insert(
                                                                 idx.to_string(),
@@ -344,9 +342,7 @@ impl LlmClient for DirectHttpLlmClient {
                             });
 
                             match result {
-                                Ok(Some(chunk)) => {
-                                    futures::future::ready(Some(Some(Ok(chunk))))
-                                }
+                                Ok(Some(chunk)) => futures::future::ready(Some(Some(Ok(chunk)))),
                                 Ok(None) => futures::future::ready(Some(None)),
                                 Err(e) => futures::future::ready(Some(Some(Err(e)))),
                             }

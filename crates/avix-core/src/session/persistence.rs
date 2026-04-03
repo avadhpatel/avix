@@ -21,7 +21,9 @@ impl SessionStore {
     pub async fn open(path: impl Into<PathBuf>) -> Result<Self, AvixError> {
         let path = path.into();
         let db = Database::create(&path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        let write_txn = db.begin_write().map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let write_txn = db
+            .begin_write()
+            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         {
             write_txn
                 .open_table(TABLE)
@@ -107,11 +109,7 @@ impl SessionStore {
     }
 
     pub async fn delete(&self, id: &uuid::Uuid) -> Result<(), AvixError> {
-        let username = self
-            .get(id)
-            .await?
-            .map(|e| e.username)
-            .unwrap_or_default();
+        let username = self.get(id).await?.map(|e| e.username).unwrap_or_default();
         let db = self.db.lock().await;
         let write_txn = db
             .begin_write()
@@ -187,10 +185,7 @@ impl SessionStore {
             Ok(y) => y,
             Err(_) => return,
         };
-        let rel = format!(
-            "{}/sessions/{}/session.yaml",
-            record.username, record.id
-        );
+        let rel = format!("{}/sessions/{}/session.yaml", record.username, record.id);
         let _ = provider.write(&rel, yaml.into_bytes()).await;
     }
 
@@ -254,11 +249,11 @@ mod tests {
             "Analyze data".to_string(),
         );
         store.create(&record).await.unwrap();
-        
+
         record.mark_idle();
         record.summary = Some("Done with analysis".to_string());
         store.update(&record).await.unwrap();
-        
+
         let loaded = store.get(&record.id).await.unwrap().unwrap();
         assert_eq!(loaded.status, SessionStatus::Idle);
         assert_eq!(loaded.summary, Some("Done with analysis".to_string()));
@@ -267,18 +262,36 @@ mod tests {
     #[tokio::test]
     async fn list_for_user_filters_by_username() {
         let store = open_store().await;
-        
-        let r1 = SessionRecord::new(Uuid::new_v4(), "alice".to_string(), "a1".to_string(), "s1".to_string(), "g1".to_string());
-        let r2 = SessionRecord::new(Uuid::new_v4(), "alice".to_string(), "a2".to_string(), "s2".to_string(), "g2".to_string());
-        let r3 = SessionRecord::new(Uuid::new_v4(), "bob".to_string(), "b1".to_string(), "s3".to_string(), "g3".to_string());
-        
+
+        let r1 = SessionRecord::new(
+            Uuid::new_v4(),
+            "alice".to_string(),
+            "a1".to_string(),
+            "s1".to_string(),
+            "g1".to_string(),
+        );
+        let r2 = SessionRecord::new(
+            Uuid::new_v4(),
+            "alice".to_string(),
+            "a2".to_string(),
+            "s2".to_string(),
+            "g2".to_string(),
+        );
+        let r3 = SessionRecord::new(
+            Uuid::new_v4(),
+            "bob".to_string(),
+            "b1".to_string(),
+            "s3".to_string(),
+            "g3".to_string(),
+        );
+
         store.create(&r1).await.unwrap();
         store.create(&r2).await.unwrap();
         store.create(&r3).await.unwrap();
-        
+
         let alice_sessions = store.list_for_user("alice").await.unwrap();
         assert_eq!(alice_sessions.len(), 2);
-        
+
         let bob_sessions = store.list_for_user("bob").await.unwrap();
         assert_eq!(bob_sessions.len(), 1);
     }
@@ -287,11 +300,17 @@ mod tests {
     async fn delete_removes_record() {
         let store = open_store().await;
         let id = Uuid::new_v4();
-        let record = SessionRecord::new(id, "alice".to_string(), "a1".to_string(), "s1".to_string(), "g1".to_string());
+        let record = SessionRecord::new(
+            id,
+            "alice".to_string(),
+            "a1".to_string(),
+            "s1".to_string(),
+            "g1".to_string(),
+        );
         store.create(&record).await.unwrap();
-        
+
         store.delete(&id).await.unwrap();
-        
+
         let loaded = store.get(&id).await.unwrap();
         assert!(loaded.is_none());
     }

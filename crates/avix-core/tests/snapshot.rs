@@ -42,7 +42,7 @@ async fn spawn_test_executor(username: &str, pid: u32) -> RuntimeExecutor {
         denied_tools: vec![],
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
-            invocation_id: String::new(),
+        invocation_id: String::new(),
     };
     RuntimeExecutor::spawn_with_registry(params, registry)
         .await

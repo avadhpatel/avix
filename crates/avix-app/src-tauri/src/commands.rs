@@ -113,7 +113,10 @@ pub async fn list_agents(state: State<'_, SharedState>) -> Result<String, String
 }
 
 #[tauri::command]
-pub async fn list_installed(state: State<'_, SharedState>, username: String) -> Result<String, String> {
+pub async fn list_installed(
+    state: State<'_, SharedState>,
+    username: String,
+) -> Result<String, String> {
     let s = state.read().await;
     if let Some(dispatcher) = &s.dispatcher {
         if let Some(_session) = s.connection_status.session_id() {
@@ -159,9 +162,9 @@ pub async fn get_invocation(
     if let Some(dispatcher) = &s.dispatcher {
         if let Some(_session) = s.connection_status.session_id() {
             match core_get_invocation(dispatcher, &invocation_id).await {
-                Ok(Some(record)) => {
-                    serde_json::to_string(&record).map(Some).map_err(|e| e.to_string())
-                }
+                Ok(Some(record)) => serde_json::to_string(&record)
+                    .map(Some)
+                    .map_err(|e| e.to_string()),
                 Ok(None) => Ok(None),
                 Err(e) => Err(format!("Failed to get invocation: {:?}", e)),
             }
@@ -236,7 +239,9 @@ pub async fn login(
         .await
         .map_err(|e| format!("Login failed: {e:?}"))?;
     if save {
-        s.config.save().map_err(|e| format!("Failed to save config: {e:?}"))?;
+        s.config
+            .save()
+            .map_err(|e| format!("Failed to save config: {e:?}"))?;
     }
     Ok(())
 }

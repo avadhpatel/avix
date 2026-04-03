@@ -59,10 +59,9 @@ impl ToolPermissionsStore {
             .get(tool_name)
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?
         {
-            let perms: ToolPermissions =
-                serde_yaml::from_str(value.value()).map_err(|e| {
-                    AvixError::ConfigParse(format!("failed to parse permissions: {}", e))
-                })?;
+            let perms: ToolPermissions = serde_yaml::from_str(value.value()).map_err(|e| {
+                AvixError::ConfigParse(format!("failed to parse permissions: {}", e))
+            })?;
             Ok(Some(perms))
         } else {
             Ok(None)

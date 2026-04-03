@@ -86,6 +86,20 @@ Implement v2 of the agent run history system: live/interim persistence and riche
 
 ---
 
+### workspace.svc (spec: `docs/spec/workspace-svc.md`)
+
+High-level workspace abstraction service with automatic session history integration for project-centric file operations.
+
+| File | What it builds | Priority | Depends On |
+|------|---------------|----------|------------|
+| `workspace-gap-A-service-skeleton.md` | Service skeleton, registration, IPC listener, basic read tools (list/read/info), VFS integration, history skeleton | **High** | History v2 |
+| `workspace-gap-B-write-operations.md` | Write operations + caller extraction + create-project + delete tools | **High** | A |
+| `workspace-gap-C-snapshot-search.md` | Snapshot, search, set-default tools | **Medium** | B |
+
+**Status:** All gaps completed ✓
+
+---
+
 ---
 
 ## Development Workflow

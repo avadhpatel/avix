@@ -571,8 +571,7 @@ mod tests {
             mode: "cli".into(),
         };
         run_config_init(params).unwrap();
-        let content =
-            std::fs::read_to_string(dir.path().join("etc/mcp.json")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join("etc/mcp.json")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert!(parsed.get("mcpServers").is_some());
     }
@@ -589,12 +588,10 @@ mod tests {
             mode: "cli".into(),
         };
         run_config_init(make_params()).unwrap();
-        let content_first =
-            std::fs::read_to_string(dir.path().join("etc/mcp.json")).unwrap();
+        let content_first = std::fs::read_to_string(dir.path().join("etc/mcp.json")).unwrap();
         // Second init should return early (auth.conf already exists) without overwriting.
         run_config_init(make_params()).unwrap();
-        let content_second =
-            std::fs::read_to_string(dir.path().join("etc/mcp.json")).unwrap();
+        let content_second = std::fs::read_to_string(dir.path().join("etc/mcp.json")).unwrap();
         assert_eq!(content_first, content_second);
     }
 }

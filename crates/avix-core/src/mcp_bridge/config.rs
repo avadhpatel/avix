@@ -20,9 +20,8 @@ pub struct McpConfig {
 impl McpConfig {
     /// Load and parse `/etc/avix/mcp.json` from `path`.
     pub fn load(path: &Path) -> Result<Self, AvixError> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            AvixError::NotFound(format!("cannot read {}: {e}", path.display()))
-        })?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| AvixError::NotFound(format!("cannot read {}: {e}", path.display())))?;
         serde_json::from_str(&content)
             .map_err(|e| AvixError::ConfigParse(format!("mcp.json parse error: {e}")))
     }

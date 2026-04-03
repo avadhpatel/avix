@@ -63,7 +63,10 @@ impl VfsRouter {
     }
 
     /// Set the permissions store for access control
-    pub async fn set_permissions_store(&self, store: Arc<crate::tool_registry::ToolPermissionsStore>) {
+    pub async fn set_permissions_store(
+        &self,
+        store: Arc<crate::tool_registry::ToolPermissionsStore>,
+    ) {
         let mut ps = self.permissions_store.write().await;
         *ps = Some(store);
     }
@@ -89,17 +92,20 @@ impl VfsRouter {
         };
 
         let perms = VfsPermissions::for_path(path.as_str());
-        
+
         match required {
-            "r" if !perms.can_read(caller) => {
-                Err(AvixError::CapabilityDenied(format!("no read permission on {}", path.as_str())))
-            }
-            "w" if !perms.can_write(caller) => {
-                Err(AvixError::CapabilityDenied(format!("no write permission on {}", path.as_str())))
-            }
-            "x" if !perms.can_execute(caller) => {
-                Err(AvixError::CapabilityDenied(format!("no execute permission on {}", path.as_str())))
-            }
+            "r" if !perms.can_read(caller) => Err(AvixError::CapabilityDenied(format!(
+                "no read permission on {}",
+                path.as_str()
+            ))),
+            "w" if !perms.can_write(caller) => Err(AvixError::CapabilityDenied(format!(
+                "no write permission on {}",
+                path.as_str()
+            ))),
+            "x" if !perms.can_execute(caller) => Err(AvixError::CapabilityDenied(format!(
+                "no execute permission on {}",
+                path.as_str()
+            ))),
             _ => Ok(()),
         }
     }
@@ -154,7 +160,8 @@ impl VfsRouter {
             if !perms.can_write(caller) {
                 return Err(AvixError::CapabilityDenied(format!(
                     "permission denied: cannot write {} (effective: {})",
-                    path.as_str(), perms.effective_for(caller)
+                    path.as_str(),
+                    perms.effective_for(caller)
                 )));
             }
         }
@@ -182,7 +189,8 @@ impl VfsRouter {
             if !perms.can_read(caller) {
                 return Err(AvixError::CapabilityDenied(format!(
                     "permission denied: cannot read {} (effective: {})",
-                    path.as_str(), perms.effective_for(caller)
+                    path.as_str(),
+                    perms.effective_for(caller)
                 )));
             }
         }
@@ -202,13 +210,16 @@ impl VfsRouter {
                 }
                 !found
             };
-            
+
             if needs_population {
                 if let Some(registry) = self.tool_registry.read().await.as_ref() {
                     // Need to populate - drop read guard first, then get write guard
                     let fs = {
                         let mem_mounts = self.mem_mounts.read().await;
-                        mem_mounts.iter().find(|(p, _)| *p == "tools").map(|(_, f)| Arc::clone(f))
+                        mem_mounts
+                            .iter()
+                            .find(|(p, _)| *p == "tools")
+                            .map(|(_, f)| Arc::clone(f))
                     };
                     if let Some(fs) = fs {
                         Self::populate_tools_memfs(&fs, registry).await?;
@@ -233,13 +244,17 @@ impl VfsRouter {
         self.default.read(path).await
     }
 
-    async fn populate_tools_memfs(fs: &Arc<MemFs>, registry: &Arc<crate::tool_registry::ToolRegistry>) -> Result<(), AvixError> {
+    async fn populate_tools_memfs(
+        fs: &Arc<MemFs>,
+        registry: &Arc<crate::tool_registry::ToolRegistry>,
+    ) -> Result<(), AvixError> {
         let tools = registry.list_all().await;
         let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
         let mut files = fs.files.write().await;
 
         // Group tools by namespace (first path component)
-        let mut by_ns: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        let mut by_ns: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
         for name in &tool_names {
             let ns = name.split('/').next().unwrap_or("").to_string();
             by_ns.entry(ns).or_default().push(name.clone());
@@ -267,7 +282,10 @@ impl VfsRouter {
         let entries = registry.get_all_entries().await;
         for entry in entries {
             let yaml = Self::generate_tool_yaml(&entry, None);
-            files.insert(format!("/tools/{}.yaml", entry.name.as_str().replace('/', "-")), yaml.into());
+            files.insert(
+                format!("/tools/{}.yaml", entry.name.as_str().replace('/', "-")),
+                yaml.into(),
+            );
         }
 
         // Also add index file
@@ -277,16 +295,28 @@ impl VfsRouter {
         Ok(())
     }
 
-    fn generate_tool_yaml(entry: &crate::tool_registry::entry::ToolEntry, caller: Option<&VfsCallerContext>) -> String {
+    fn generate_tool_yaml(
+        entry: &crate::tool_registry::entry::ToolEntry,
+        caller: Option<&VfsCallerContext>,
+    ) -> String {
         use crate::types::tool::ToolState;
-        
+
         let name = entry.name.as_str();
         let desc = &entry.descriptor;
 
-        let description = desc.get("description").and_then(|v| v.as_str()).unwrap_or("");
-        let short = desc.get("short").and_then(|v| v.as_str()).unwrap_or(description);
+        let description = desc
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let short = desc
+            .get("short")
+            .and_then(|v| v.as_str())
+            .unwrap_or(description);
         let detailed = desc.get("detailed").and_then(|v| v.as_str()).unwrap_or("");
-        let handler_sig = desc.get("handler_signature").and_then(|v| v.as_str()).unwrap_or("");
+        let handler_sig = desc
+            .get("handler_signature")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let domain = desc.get("domain").and_then(|v| v.as_str()).unwrap_or("");
         let caps = &entry.capabilities_required;
 
@@ -294,7 +324,11 @@ impl VfsRouter {
         let state = if let Some(c) = caller {
             if let Some(token) = &c.token {
                 let has_caps = caps.iter().all(|cap| token.has_tool(cap));
-                if has_caps { "available" } else { "unavailable" }
+                if has_caps {
+                    "available"
+                } else {
+                    "unavailable"
+                }
             } else if c.is_admin {
                 "available"
             } else {
@@ -323,18 +357,25 @@ impl VfsRouter {
         }
         yaml.push_str(&format!("state: {}\n", state));
         yaml.push_str(&format!("owner: {}\n", entry.owner));
-        
+
         // Add permissions from tool entry
         yaml.push_str("permissions:\n");
         yaml.push_str(&format!("  owner: {}\n", entry.permissions.owner));
-        yaml.push_str(&format!("  crew: {}\n", if entry.permissions.crew.is_empty() { "---" } else { &entry.permissions.crew }));
+        yaml.push_str(&format!(
+            "  crew: {}\n",
+            if entry.permissions.crew.is_empty() {
+                "---"
+            } else {
+                &entry.permissions.crew
+            }
+        ));
         yaml.push_str(&format!("  all: {}\n", entry.permissions.all));
-        
+
         // Add request_access for unavailable tools
         if state == "unavailable" && !caps.is_empty() {
             yaml.push_str("request_access: cap/request-tool\n");
         }
-        
+
         if !handler_sig.is_empty() {
             yaml.push_str(&format!("handler_signature: {}\n", handler_sig));
         }
@@ -349,7 +390,8 @@ impl VfsRouter {
             if !perms.can_write(caller) {
                 return Err(AvixError::CapabilityDenied(format!(
                     "permission denied: cannot delete {} (effective: {})",
-                    path.as_str(), perms.effective_for(caller)
+                    path.as_str(),
+                    perms.effective_for(caller)
                 )));
             }
         }
@@ -381,7 +423,9 @@ impl VfsRouter {
         // Check in-memory mounts
         let mem_mounts = self.mem_mounts.read().await;
         for (prefix, fs) in mem_mounts.iter() {
-            if path.as_str() == prefix || path.as_str().starts_with(&format!("{prefix}/")) && fs.exists(path).await {
+            if path.as_str() == prefix
+                || path.as_str().starts_with(&format!("{prefix}/")) && fs.exists(path).await
+            {
                 return true;
             }
         }

@@ -7,7 +7,6 @@ use tokio::sync::Mutex;
 
 use crate::error::AvixError;
 use crate::gateway::event_bus::AtpEventBus;
-use crate::trace::Tracer;
 use crate::kernel::resource_request::{
     KernelResourceHandler, ResourceGrant, ResourceItem, ResourceRequest, Urgency,
 };
@@ -20,6 +19,7 @@ use crate::memory_svc::{
     vfs_layout::init_user_memory_tree,
 };
 use crate::snapshot::{capture, CaptureParams, CapturedBy, SnapshotMemory, SnapshotTrigger};
+use crate::trace::Tracer;
 use crate::types::{token::CapabilityToken, tool::ToolVisibility, Pid};
 
 use super::mock_kernel::MockKernelHandle;
@@ -167,6 +167,10 @@ pub struct RuntimeExecutor {
     invocation_id: String,
     /// Session store — when set, session status is updated on Idle transitions.
     session_store: Option<Arc<crate::session::PersistentSessionStore>>,
+    /// Snapshot interval — if set, persist_interim is called after every N tool calls.
+    snapshot_interval: Option<u32>,
+    /// Tool call counter for snapshot tracking.
+    tool_calls_since_last_snapshot: u32,
 
     // ── status tracking fields ────────────────────────────────────────────────
     /// When this agent was spawned (used for wallTimeSec in status.yaml).
@@ -239,6 +243,8 @@ impl RuntimeExecutor {
             invocation_store: None,
             invocation_id: params.invocation_id.clone(),
             session_store: None,
+            snapshot_interval: None,
+            tool_calls_since_last_snapshot: 0,
             spawned_at: chrono::Utc::now(),
             context_used: 0,
             context_limit: params.context_limit,
@@ -302,8 +308,17 @@ impl RuntimeExecutor {
     }
 
     /// Attach a `SessionStore` so session status is updated on Idle transitions.
-    pub fn with_session_store(mut self, store: Arc<crate::session::PersistentSessionStore>) -> Self {
+    pub fn with_session_store(
+        mut self,
+        store: Arc<crate::session::PersistentSessionStore>,
+    ) -> Self {
         self.session_store = Some(store);
+        self
+    }
+
+    /// Set snapshot interval — if set, persist_interim is called after every N tool calls.
+    pub fn with_snapshot_interval(mut self, interval: u32) -> Self {
+        self.snapshot_interval = Some(interval);
         self
     }
 
@@ -479,6 +494,7 @@ impl RuntimeExecutor {
             "SIGSAVE" => {
                 self.capture_and_write_snapshot(SnapshotTrigger::Sigsave, CapturedBy::Kernel)
                     .await;
+                self.take_interim_snapshot().await;
             }
             _ => {
                 tracing::debug!(pid = self.pid.as_u32(), signal, "signal received");
@@ -543,6 +559,39 @@ impl RuntimeExecutor {
             Err(e) => {
                 tracing::warn!(pid = self.pid.as_u32(), err = ?e, "snapshot serialisation failed")
             }
+        }
+    }
+
+    /// Take an interim snapshot by persisting current state to the invocation store.
+    /// Called periodically based on snapshot_interval or on SIGSAVE.
+    async fn take_interim_snapshot(&self) {
+        let store = match &self.invocation_store {
+            Some(s) => Arc::clone(s),
+            None => return,
+        };
+        let id = &self.invocation_id;
+        if id.is_empty() {
+            return;
+        }
+
+        let conversation: Vec<(String, String)> = self
+            .conversation_history
+            .iter()
+            .map(|(r, c)| (r.clone(), c.clone()))
+            .collect();
+
+        if let Err(e) = store
+            .persist_interim(
+                id,
+                &conversation,
+                self.tokens_consumed,
+                self.tool_calls_total,
+            )
+            .await
+        {
+            tracing::warn!(pid = self.pid.as_u32(), id = %id, err = ?e, "interim snapshot failed");
+        } else {
+            tracing::debug!(pid = self.pid.as_u32(), id = %id, "interim snapshot saved");
         }
     }
 
@@ -989,11 +1038,8 @@ impl RuntimeExecutor {
     }
 
     pub async fn shutdown(&mut self) {
-        self.shutdown_with_status(
-            crate::invocation::InvocationStatus::Completed,
-            None,
-        )
-        .await;
+        self.shutdown_with_status(crate::invocation::InvocationStatus::Completed, None)
+            .await;
     }
 
     /// Shutdown the executor, deregistering tools and flushing invocation history.
@@ -1019,13 +1065,19 @@ impl RuntimeExecutor {
             if !self.invocation_id.is_empty() {
                 if let Some(store) = &self.invocation_store {
                     let _ = store
-                        .update_status(&self.invocation_id, crate::invocation::InvocationStatus::Idle)
+                        .update_status(
+                            &self.invocation_id,
+                            crate::invocation::InvocationStatus::Idle,
+                        )
                         .await;
                 }
             }
             if !self.session_id.is_empty() {
                 if let Some(store) = &self.session_store {
-                    if let Ok(Some(mut session)) = store.get(&uuid::Uuid::parse_str(&self.session_id).unwrap_or_default()).await {
+                    if let Ok(Some(mut session)) = store
+                        .get(&uuid::Uuid::parse_str(&self.session_id).unwrap_or_default())
+                        .await
+                    {
                         session.mark_idle();
                         let _ = store.update(&session).await;
                     }
@@ -1576,6 +1628,13 @@ impl RuntimeExecutor {
             }
 
             let turn_id = uuid::Uuid::new_v4();
+
+            // Check for pending SIGSAVE snapshot request
+            if self.snapshot_requested.load(Ordering::Acquire) {
+                self.snapshot_requested.store(false, Ordering::Release);
+                self.take_interim_snapshot().await;
+            }
+
             let req = crate::llm_client::LlmCompleteRequest {
                 model: String::new(), // client picks its default
                 messages: messages.clone(),
@@ -1691,6 +1750,15 @@ impl RuntimeExecutor {
 
                         // Track lifetime tool call count
                         self.tool_calls_total = self.tool_calls_total.saturating_add(1);
+
+                        // Track tool calls for interim snapshot
+                        if let Some(interval) = self.snapshot_interval {
+                            self.tool_calls_since_last_snapshot += 1;
+                            if self.tool_calls_since_last_snapshot >= interval {
+                                self.take_interim_snapshot().await;
+                                self.tool_calls_since_last_snapshot = 0;
+                            }
+                        }
 
                         // Publish agent_tool_call event before dispatch
                         if let Some(bus) = &self.event_bus {
@@ -2485,7 +2553,11 @@ mod tests {
         use tempfile::tempdir;
 
         let dir = tempdir().unwrap();
-        let store = Arc::new(InvocationStore::open(dir.path().join("inv.redb")).await.unwrap());
+        let store = Arc::new(
+            InvocationStore::open(dir.path().join("inv.redb"))
+                .await
+                .unwrap(),
+        );
         let rec = InvocationRecord::new(
             "inv-rex-20".into(),
             "test-agent".into(),
@@ -2506,7 +2578,9 @@ mod tests {
         executor.tokens_consumed = 1234;
         executor.tool_calls_total = 5;
 
-        executor.shutdown_with_status(InvocationStatus::Completed, None).await;
+        executor
+            .shutdown_with_status(InvocationStatus::Completed, None)
+            .await;
 
         let loaded = store.get("inv-rex-20").await.unwrap().unwrap();
         assert_eq!(loaded.status, InvocationStatus::Completed);
@@ -2522,7 +2596,11 @@ mod tests {
         use tempfile::tempdir;
 
         let dir = tempdir().unwrap();
-        let store = Arc::new(InvocationStore::open(dir.path().join("inv.redb")).await.unwrap());
+        let store = Arc::new(
+            InvocationStore::open(dir.path().join("inv.redb"))
+                .await
+                .unwrap(),
+        );
         let rec = InvocationRecord::new(
             "inv-rex-21".into(),
             "test-agent".into(),
@@ -2553,7 +2631,11 @@ mod tests {
         use tempfile::tempdir;
 
         let dir = tempdir().unwrap();
-        let store = Arc::new(InvocationStore::open(dir.path().join("inv.redb")).await.unwrap());
+        let store = Arc::new(
+            InvocationStore::open(dir.path().join("inv.redb"))
+                .await
+                .unwrap(),
+        );
         let rec = InvocationRecord::new(
             "inv-rex-22".into(),
             "test-agent".into(),

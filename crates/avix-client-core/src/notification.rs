@@ -135,7 +135,8 @@ impl NotificationStore {
         if let (Some(hil), true) = (&n.hil, n.kind == NotificationKind::Hil) {
             self.tracer.hil_request(hil.pid, &hil.hil_id, &hil.prompt);
         }
-        self.tracer.notification_added(&kind_str, &id, &message, agent_pid);
+        self.tracer
+            .notification_added(&kind_str, &id, &message, agent_pid);
 
         let mut inner = self.inner.lock().await;
         inner.push(n.clone());

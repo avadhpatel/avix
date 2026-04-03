@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ipc::message::{JsonRpcResponse, JsonRpcRequest};
+use crate::ipc::message::{JsonRpcRequest, JsonRpcResponse};
 use crate::mcp_bridge::connection::McpServerConnection;
 
 // ── Wire names ────────────────────────────────────────────────────────────────
@@ -372,9 +372,8 @@ mod tests {
                 transport: McpTransport::Stdio,
                 health_check_interval_secs: 30,
             };
-            let conn = McpServerConnection::new_for_test(
-                server_name, namespace, cfg, tools, healthy,
-            );
+            let conn =
+                McpServerConnection::new_for_test(server_name, namespace, cfg, tools, healthy);
             map.insert(server_name.to_string(), conn);
         }
         RwLock::new(map)
@@ -393,13 +392,19 @@ mod tests {
 
     #[tokio::test]
     async fn servers_returns_yaml_manifest() {
-        let conns = make_connections(vec![
-            ("github", "github/", true, vec![("list-prs", "List PRs")]),
-        ]);
+        let conns = make_connections(vec![(
+            "github",
+            "github/",
+            true,
+            vec![("list-prs", "List PRs")],
+        )]);
         let req = make_req(TOOL_SERVERS, serde_json::json!({}));
         let resp = handle_servers(&req, &conns).await;
         assert!(resp.error.is_none());
-        let yaml = resp.result.unwrap()["content"].as_str().unwrap().to_string();
+        let yaml = resp.result.unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(yaml.contains("apiVersion: avix/v1"));
         assert!(yaml.contains("McpServerList"));
         assert!(yaml.contains("github"));
@@ -410,7 +415,10 @@ mod tests {
         let conns = make_connections(vec![]);
         let req = make_req(TOOL_SERVERS, serde_json::json!({}));
         let resp = handle_servers(&req, &conns).await;
-        let yaml = resp.result.unwrap()["content"].as_str().unwrap().to_string();
+        let yaml = resp.result.unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(yaml.contains("total: 0"));
     }
 
@@ -422,21 +430,28 @@ mod tests {
         ]);
         let req = make_req(TOOL_SERVERS, serde_json::json!({}));
         let resp = handle_servers(&req, &conns).await;
-        let yaml = resp.result.unwrap()["content"].as_str().unwrap().to_string();
+        let yaml = resp.result.unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(yaml.contains("connected"));
         assert!(yaml.contains("disconnected"));
     }
 
     #[tokio::test]
     async fn servers_tool_count_correct() {
-        let conns = make_connections(vec![
-            ("github", "github/", true, vec![
-                ("list-prs", ""), ("create-issue", ""), ("merge-pr", ""),
-            ]),
-        ]);
+        let conns = make_connections(vec![(
+            "github",
+            "github/",
+            true,
+            vec![("list-prs", ""), ("create-issue", ""), ("merge-pr", "")],
+        )]);
         let req = make_req(TOOL_SERVERS, serde_json::json!({}));
         let resp = handle_servers(&req, &conns).await;
-        let yaml = resp.result.unwrap()["content"].as_str().unwrap().to_string();
+        let yaml = resp.result.unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(yaml.contains("toolCount: 3"));
     }
 
@@ -444,13 +459,22 @@ mod tests {
 
     #[tokio::test]
     async fn server_status_returns_manifest_for_known_server() {
-        let conns = make_connections(vec![
-            ("github", "github/", true, vec![("list-prs", "List open PRs")]),
-        ]);
-        let req = make_req(TOOL_SERVER_STATUS, serde_json::json!({"server_name": "github"}));
+        let conns = make_connections(vec![(
+            "github",
+            "github/",
+            true,
+            vec![("list-prs", "List open PRs")],
+        )]);
+        let req = make_req(
+            TOOL_SERVER_STATUS,
+            serde_json::json!({"server_name": "github"}),
+        );
         let resp = handle_server_status(&req, &conns).await;
         assert!(resp.error.is_none());
-        let yaml = resp.result.unwrap()["content"].as_str().unwrap().to_string();
+        let yaml = resp.result.unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(yaml.contains("McpServerStatus"));
         assert!(yaml.contains("github"));
         assert!(yaml.contains("list-prs"));
@@ -469,7 +493,10 @@ mod tests {
     #[tokio::test]
     async fn server_status_unknown_server_returns_error() {
         let conns = make_connections(vec![]);
-        let req = make_req(TOOL_SERVER_STATUS, serde_json::json!({"server_name": "nonexistent"}));
+        let req = make_req(
+            TOOL_SERVER_STATUS,
+            serde_json::json!({"server_name": "nonexistent"}),
+        );
         let resp = handle_server_status(&req, &conns).await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32001);
@@ -477,13 +504,20 @@ mod tests {
 
     #[tokio::test]
     async fn server_status_includes_full_tool_names() {
-        let conns = make_connections(vec![
-            ("github", "github/", true, vec![("list-prs", "")]),
-        ]);
-        let req = make_req(TOOL_SERVER_STATUS, serde_json::json!({"server_name": "github"}));
+        let conns = make_connections(vec![("github", "github/", true, vec![("list-prs", "")])]);
+        let req = make_req(
+            TOOL_SERVER_STATUS,
+            serde_json::json!({"server_name": "github"}),
+        );
         let resp = handle_server_status(&req, &conns).await;
-        let yaml = resp.result.unwrap()["content"].as_str().unwrap().to_string();
-        assert!(yaml.contains("github/list-prs"), "expected full Avix tool name in output");
+        let yaml = resp.result.unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            yaml.contains("github/list-prs"),
+            "expected full Avix tool name in output"
+        );
     }
 
     // ── mcp/tools ────────────────────────────────────────────────────────────
@@ -491,12 +525,20 @@ mod tests {
     #[tokio::test]
     async fn tools_lists_all_tools_when_no_filter() {
         let conns = make_connections(vec![
-            ("github", "github/", true, vec![("list-prs", ""), ("create-issue", "")]),
+            (
+                "github",
+                "github/",
+                true,
+                vec![("list-prs", ""), ("create-issue", "")],
+            ),
             ("slack", "slack/", true, vec![("send-message", "")]),
         ]);
         let req = make_req(TOOL_TOOLS, serde_json::json!({}));
         let resp = handle_tools(&req, &conns).await;
-        let yaml = resp.result.unwrap()["content"].as_str().unwrap().to_string();
+        let yaml = resp.result.unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(yaml.contains("McpToolList"));
         assert!(yaml.contains("github/list-prs"));
         assert!(yaml.contains("github/create-issue"));
@@ -512,7 +554,10 @@ mod tests {
         ]);
         let req = make_req(TOOL_TOOLS, serde_json::json!({"server_name": "github"}));
         let resp = handle_tools(&req, &conns).await;
-        let yaml = resp.result.unwrap()["content"].as_str().unwrap().to_string();
+        let yaml = resp.result.unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(yaml.contains("github/list-prs"));
         assert!(!yaml.contains("slack/send-message"));
         assert!(yaml.contains("total: 1"));
@@ -521,7 +566,10 @@ mod tests {
     #[tokio::test]
     async fn tools_unknown_server_filter_returns_error() {
         let conns = make_connections(vec![]);
-        let req = make_req(TOOL_TOOLS, serde_json::json!({"server_name": "nonexistent"}));
+        let req = make_req(
+            TOOL_TOOLS,
+            serde_json::json!({"server_name": "nonexistent"}),
+        );
         let resp = handle_tools(&req, &conns).await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32001);
@@ -529,18 +577,25 @@ mod tests {
 
     #[tokio::test]
     async fn tools_output_is_sorted_by_name() {
-        let conns = make_connections(vec![
-            ("github", "github/", true, vec![
-                ("merge-pr", ""), ("create-issue", ""), ("list-prs", ""),
-            ]),
-        ]);
+        let conns = make_connections(vec![(
+            "github",
+            "github/",
+            true,
+            vec![("merge-pr", ""), ("create-issue", ""), ("list-prs", "")],
+        )]);
         let req = make_req(TOOL_TOOLS, serde_json::json!({}));
         let resp = handle_tools(&req, &conns).await;
-        let yaml = resp.result.unwrap()["content"].as_str().unwrap().to_string();
+        let yaml = resp.result.unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let create_pos = yaml.find("create-issue").unwrap();
         let list_pos = yaml.find("list-prs").unwrap();
         let merge_pos = yaml.find("merge-pr").unwrap();
-        assert!(create_pos < list_pos && list_pos < merge_pos, "tools should be sorted");
+        assert!(
+            create_pos < list_pos && list_pos < merge_pos,
+            "tools should be sorted"
+        );
     }
 
     // ── handle_meta_tool dispatch ─────────────────────────────────────────────

@@ -6,7 +6,6 @@ use crate::auth::atp_token::ATPTokenStore;
 use crate::auth::service::AuthService;
 use crate::config::LlmConfig;
 use crate::error::AvixError;
-use crate::mcp_bridge::{McpBridgeRunner, McpConfig};
 use crate::exec_svc::ExecIpcServer;
 use crate::gateway::config::GatewayConfig;
 use crate::gateway::event_bus::AtpEventBus;
@@ -14,6 +13,7 @@ use crate::gateway::server::GatewayServer;
 use crate::kernel::{phase3_re_adopt, KernelIpcServer, ProcHandler};
 use crate::llm_svc::routing::RoutingEngine;
 use crate::llm_svc::LlmIpcServer;
+use crate::mcp_bridge::{McpBridgeRunner, McpConfig};
 use crate::memfs::{VfsPath, VfsRouter};
 use crate::process::table::ProcessTable;
 use crate::router::{RouterDispatcher, RouterIpcServer, ServiceRegistry};
@@ -278,8 +278,12 @@ impl Runtime {
         tracing::debug!("/tools VFS mount registered (will be populated per-request)");
 
         // Bridge internal tool/service events to the ATP event bus for UI notifications.
-        Arc::clone(&tool_registry).start_atp_bridge(Arc::clone(&self.event_bus)).await;
-        Arc::clone(&service_manager).start_atp_bridge(Arc::clone(&self.event_bus)).await;
+        Arc::clone(&tool_registry)
+            .start_atp_bridge(Arc::clone(&self.event_bus))
+            .await;
+        Arc::clone(&service_manager)
+            .start_atp_bridge(Arc::clone(&self.event_bus))
+            .await;
 
         // ── router.svc ────────────────────────────────────────────────────────
         let router_sock = self.runtime_dir.join("router.sock");

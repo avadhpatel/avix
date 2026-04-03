@@ -7,8 +7,12 @@ use crate::mcp_bridge::config::McpServerConfig;
 
 /// State of the connection to an MCP server.
 pub enum ConnectionState {
-    Connected { client: Box<McpClient<StdioTransport>> },
-    Degraded { since: Instant },
+    Connected {
+        client: Box<McpClient<StdioTransport>>,
+    },
+    Degraded {
+        since: Instant,
+    },
     Disconnected,
     /// Used only in tests to simulate a healthy connected state without a
     /// real subprocess.
@@ -47,7 +51,9 @@ impl McpServerConnection {
             namespace,
             config,
             tools: Vec::new(),
-            state: ConnectionState::Connected { client: Box::new(client) },
+            state: ConnectionState::Connected {
+                client: Box::new(client),
+            },
         })
     }
 
@@ -57,18 +63,18 @@ impl McpServerConnection {
     /// to `Degraded`.
     pub async fn discover_tools(&mut self) -> Result<&[McpToolInfo], McpClientError> {
         match &mut self.state {
-            ConnectionState::Connected { client } => {
-                match client.list_tools().await {
-                    Ok(tools) => {
-                        self.tools = tools;
-                        Ok(&self.tools)
-                    }
-                    Err(e) => {
-                        self.state = ConnectionState::Degraded { since: Instant::now() };
-                        Err(e)
-                    }
+            ConnectionState::Connected { client } => match client.list_tools().await {
+                Ok(tools) => {
+                    self.tools = tools;
+                    Ok(&self.tools)
                 }
-            }
+                Err(e) => {
+                    self.state = ConnectionState::Degraded {
+                        since: Instant::now(),
+                    };
+                    Err(e)
+                }
+            },
             _ => Err(McpClientError::ServerGone),
         }
     }
@@ -97,7 +103,9 @@ impl McpServerConnection {
                 match client.call_tool(raw_name, params).await {
                     Ok(result) => Ok(result),
                     Err(e) => {
-                        self.state = ConnectionState::Degraded { since: Instant::now() };
+                        self.state = ConnectionState::Degraded {
+                            since: Instant::now(),
+                        };
                         Err(e)
                     }
                 }
@@ -113,7 +121,9 @@ impl McpServerConnection {
                 .await?;
         let mut client = McpClient::new(transport);
         client.initialize().await?;
-        self.state = ConnectionState::Connected { client: Box::new(client) };
+        self.state = ConnectionState::Connected {
+            client: Box::new(client),
+        };
         Ok(())
     }
 

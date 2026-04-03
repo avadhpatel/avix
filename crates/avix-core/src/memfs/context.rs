@@ -12,24 +12,30 @@ pub struct VfsCallerContext {
 }
 
 impl VfsCallerContext {
-    pub async fn from_token(root: &Path, token: &CapabilityToken) -> Result<Option<Self>, crate::error::AvixError> {
+    pub async fn from_token(
+        root: &Path,
+        token: &CapabilityToken,
+    ) -> Result<Option<Self>, crate::error::AvixError> {
         let users_path = root.join("etc/users.yaml");
         if !users_path.exists() {
             return Ok(None);
         }
-        
+
         let users_yaml = tokio::fs::read_to_string(&users_path).await?;
         let users: UsersConfig = serde_yaml::from_str(&users_yaml)
             .map_err(|e| crate::error::AvixError::ConfigParse(e.to_string()))?;
-        
+
         let issued_to = token.issued_to.as_ref().ok_or_else(|| {
             crate::error::AvixError::NotFound("no issued_to in token".to_string())
         })?;
-        
+
         let user = users.find_user(&issued_to.spawned_by).ok_or_else(|| {
-            crate::error::AvixError::NotFound(format!("user '{}' not found in users.yaml", issued_to.spawned_by))
+            crate::error::AvixError::NotFound(format!(
+                "user '{}' not found in users.yaml",
+                issued_to.spawned_by
+            ))
         })?;
-        
+
         Ok(Some(Self {
             username: user.username.clone(),
             crews: user.crews.clone(),

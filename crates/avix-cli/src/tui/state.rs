@@ -9,8 +9,8 @@ use tracing::debug;
 use avix_core::agent_manifest::AgentManifestSummary;
 
 use crate::tui::widgets::agent_list::AgentListWidget;
-use crate::tui::widgets::catalog::CatalogWidget;
 use crate::tui::widgets::agent_output::AgentOutputBuffer;
+use crate::tui::widgets::catalog::CatalogWidget;
 use crate::tui::widgets::command_bar::CommandBarWidget;
 use crate::tui::widgets::event_log::EventLogWidget;
 use crate::tui::widgets::help_modal::HelpModalWidget;

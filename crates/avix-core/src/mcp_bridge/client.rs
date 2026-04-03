@@ -277,7 +277,9 @@ impl<T: McpTransportIO> McpClient<T> {
             let tools_array = result
                 .get("tools")
                 .and_then(|v| v.as_array())
-                .ok_or_else(|| McpClientError::Protocol("tools/list: missing 'tools' array".into()))?;
+                .ok_or_else(|| {
+                    McpClientError::Protocol("tools/list: missing 'tools' array".into())
+                })?;
 
             for tool in tools_array {
                 let name = tool
@@ -471,11 +473,10 @@ mod tests {
             },
             "required": ["repo"]
         });
-        let transport = MockTransport::new(vec![
-            serde_json::json!({"jsonrpc":"2.0","id":1,"result":{
+        let transport =
+            MockTransport::new(vec![serde_json::json!({"jsonrpc":"2.0","id":1,"result":{
                 "tools": [{"name":"list-prs","description":"List PRs","inputSchema": schema}]
-            }}),
-        ]);
+            }})]);
         let mut client = McpClient::new(transport);
         let tools = client.list_tools().await.unwrap();
         assert_eq!(tools[0].input_schema, schema);
@@ -483,11 +484,10 @@ mod tests {
 
     #[tokio::test]
     async fn call_tool_returns_text_content() {
-        let transport = MockTransport::new(vec![
-            serde_json::json!({"jsonrpc":"2.0","id":1,"result":{
+        let transport =
+            MockTransport::new(vec![serde_json::json!({"jsonrpc":"2.0","id":1,"result":{
                 "content": [{"type":"text","text":"PR #1: Fix bug"}]
-            }}),
-        ]);
+            }})]);
         let mut client = McpClient::new(transport);
         let result = client
             .call_tool("list-prs", serde_json::json!({"repo": "myrepo"}))
@@ -502,9 +502,7 @@ mod tests {
             serde_json::json!({"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Tool not found"}}),
         ]);
         let mut client = McpClient::new(transport);
-        let result = client
-            .call_tool("nonexistent", serde_json::json!({}))
-            .await;
+        let result = client.call_tool("nonexistent", serde_json::json!({})).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             McpClientError::Protocol(msg) => assert!(msg.contains("Tool not found")),

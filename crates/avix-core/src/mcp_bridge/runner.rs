@@ -569,8 +569,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let sock_path = dir.path().join("kernel.sock");
         // No socket bound — but with empty tools it should return Ok without connecting.
-        let result =
-            deregister_tools_from_avix(&sock_path, "svc-token-abc", &[], false).await;
+        let result = deregister_tools_from_avix(&sock_path, "svc-token-abc", &[], false).await;
         assert!(result.is_ok());
     }
 

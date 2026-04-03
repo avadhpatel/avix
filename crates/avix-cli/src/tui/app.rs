@@ -333,10 +333,7 @@ async fn dispatch_parsed_command(
                             .filter_map(|v| {
                                 Some(AgentManifestSummary {
                                     name: v["name"].as_str()?.to_string(),
-                                    version: v["version"]
-                                        .as_str()
-                                        .unwrap_or("?")
-                                        .to_string(),
+                                    version: v["version"].as_str().unwrap_or("?").to_string(),
                                     description: v["description"]
                                         .as_str()
                                         .unwrap_or("")
@@ -771,29 +768,57 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                                         debug!("Connection successful");
                                         state.reducer(Action::Connect);
                                         // Fetch catalog on connect
-                                        if let Some(disp) = shared_state.read().await.dispatcher.clone() {
+                                        if let Some(disp) =
+                                            shared_state.read().await.dispatcher.clone()
+                                        {
                                             let action_tx_c = action_tx.clone();
                                             tokio::spawn(async move {
-                                                if let Ok(agents) = avix_client_core::commands::list_installed(&disp, "default").await {
-                                                    use avix_core::agent_manifest::{AgentManifestSummary, AgentScope};
-                                                    let summaries: Vec<AgentManifestSummary> = agents
-                                                        .iter()
-                                                        .filter_map(|v| {
-                                                            Some(AgentManifestSummary {
-                                                                name: v["name"].as_str()?.to_string(),
-                                                                version: v["version"].as_str().unwrap_or("?").to_string(),
-                                                                description: v["description"].as_str().unwrap_or("").to_string(),
-                                                                author: v["author"].as_str().unwrap_or("").to_string(),
-                                                                path: v["path"].as_str().unwrap_or("").to_string(),
-                                                                scope: if v["scope"].as_str() == Some("user") {
-                                                                    AgentScope::User
-                                                                } else {
-                                                                    AgentScope::System
-                                                                },
+                                                if let Ok(agents) =
+                                                    avix_client_core::commands::list_installed(
+                                                        &disp, "default",
+                                                    )
+                                                    .await
+                                                {
+                                                    use avix_core::agent_manifest::{
+                                                        AgentManifestSummary, AgentScope,
+                                                    };
+                                                    let summaries: Vec<AgentManifestSummary> =
+                                                        agents
+                                                            .iter()
+                                                            .filter_map(|v| {
+                                                                Some(AgentManifestSummary {
+                                                                    name: v["name"]
+                                                                        .as_str()?
+                                                                        .to_string(),
+                                                                    version: v["version"]
+                                                                        .as_str()
+                                                                        .unwrap_or("?")
+                                                                        .to_string(),
+                                                                    description: v["description"]
+                                                                        .as_str()
+                                                                        .unwrap_or("")
+                                                                        .to_string(),
+                                                                    author: v["author"]
+                                                                        .as_str()
+                                                                        .unwrap_or("")
+                                                                        .to_string(),
+                                                                    path: v["path"]
+                                                                        .as_str()
+                                                                        .unwrap_or("")
+                                                                        .to_string(),
+                                                                    scope: if v["scope"].as_str()
+                                                                        == Some("user")
+                                                                    {
+                                                                        AgentScope::User
+                                                                    } else {
+                                                                        AgentScope::System
+                                                                    },
+                                                                })
                                                             })
-                                                        })
-                                                        .collect();
-                                                    let _ = action_tx_c.send(Action::UpdateCatalog(summaries)).await;
+                                                            .collect();
+                                                    let _ = action_tx_c
+                                                        .send(Action::UpdateCatalog(summaries))
+                                                        .await;
                                                 }
                                             });
                                         }
@@ -846,27 +871,23 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                             };
                             state.reducer(Action::SwitchTab(next_tab));
                         }
-                        KeyCode::Up => {
-                            match state.active_tab {
-                                super::state::TuiTab::Catalog => {
-                                    state.catalog_widget.select_prev();
-                                }
-                                _ => {
-                                    state.agent_list_widget.select_prev(&state.agents);
-                                }
+                        KeyCode::Up => match state.active_tab {
+                            super::state::TuiTab::Catalog => {
+                                state.catalog_widget.select_prev();
                             }
-                        }
-                        KeyCode::Down => {
-                            match state.active_tab {
-                                super::state::TuiTab::Catalog => {
-                                    let items = state.catalog.clone();
-                                    state.catalog_widget.select_next(&items);
-                                }
-                                _ => {
-                                    state.agent_list_widget.select_next(&state.agents);
-                                }
+                            _ => {
+                                state.agent_list_widget.select_prev(&state.agents);
                             }
-                        }
+                        },
+                        KeyCode::Down => match state.active_tab {
+                            super::state::TuiTab::Catalog => {
+                                let items = state.catalog.clone();
+                                state.catalog_widget.select_next(&items);
+                            }
+                            _ => {
+                                state.agent_list_widget.select_next(&state.agents);
+                            }
+                        },
                         _ => {}
                     }
                 }
