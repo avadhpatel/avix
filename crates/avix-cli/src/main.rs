@@ -96,6 +96,9 @@ enum ServiceCmd {
         /// Do not start the service after install
         #[arg(long = "no-start")]
         no_start: bool,
+        /// Runtime root directory
+        #[arg(long, default_value = "~/avix-data")]
+        root: PathBuf,
     },
     /// List all installed services
     List {
@@ -110,21 +113,33 @@ enum ServiceCmd {
         /// Runtime root directory
         #[arg(long, default_value = "~/avix-data")]
         root: PathBuf,
+        /// ATP server URL to connect to
+        #[arg(long)]
+        server_url: Option<String>,
     },
     /// Start a stopped/failed service
     Start {
         /// Service name
         name: String,
+        /// ATP server URL to connect to
+        #[arg(long)]
+        server_url: Option<String>,
     },
     /// Gracefully stop a running service
     Stop {
         /// Service name
         name: String,
+        /// ATP server URL to connect to
+        #[arg(long)]
+        server_url: Option<String>,
     },
     /// Stop then start a service
     Restart {
         /// Service name
         name: String,
+        /// ATP server URL to connect to
+        #[arg(long)]
+        server_url: Option<String>,
     },
     /// Remove a service from disk
     Uninstall {
@@ -574,8 +589,11 @@ fn log_filename(cmd: &Cmd) -> &str {
 }
 
 /// Connect to the ATP server using config.yaml and return a dispatcher.
-async fn connect_config() -> Result<Dispatcher, anyhow::Error> {
-    let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+async fn connect_config(server_url: Option<String>) -> Result<Dispatcher, anyhow::Error> {
+    let mut config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
+    if let Some(url) = server_url {
+        config.server_url = url;
+    }
     let client = AtpClient::connect(config).await?;
     Ok(Dispatcher::new(client))
 }
@@ -776,7 +794,7 @@ async fn main() -> Result<()> {
         // ── Client commands ───────────────────────────────────────────────────
         Cmd::Client { sub } => match sub {
             ClientCmd::Connect => {
-                connect_config().await?;
+                connect_config(None).await?;
                 emit(cli.json, |_: &()| "Connected to server".to_string(), ());
             }
 
@@ -801,7 +819,7 @@ async fn main() -> Result<()> {
                     goal,
                     capabilities,
                 } => {
-                    let dispatcher = connect_config().await?;
+                    let dispatcher = connect_config(None).await?;
                     let pid = spawn_agent(
                         &dispatcher,
                         &name,
@@ -816,7 +834,7 @@ async fn main() -> Result<()> {
                     );
                 }
                 AgentCmd::List => {
-                    let dispatcher = connect_config().await?;
+                    let dispatcher = connect_config(None).await?;
                     let agents = list_agents(&dispatcher).await?;
                     emit(
                         cli.json,
@@ -825,18 +843,18 @@ async fn main() -> Result<()> {
                     );
                 }
                 AgentCmd::Kill { pid } => {
-                    let dispatcher = connect_config().await?;
+                    let dispatcher = connect_config(None).await?;
                     kill_agent(&dispatcher, pid).await?;
                     emit(cli.json, |_: &()| format!("Killed agent {}", pid), ());
                 }
                 AgentCmd::Catalog { username } => {
-                    let dispatcher = connect_config().await?;
+                    let dispatcher = connect_config(None).await?;
                     let user = username.as_deref().unwrap_or("default");
                     let agents = list_installed(&dispatcher, user).await?;
                     emit(cli.json, format_catalog, agents);
                 }
                 AgentCmd::History { agent, username, live } => {
-                    let dispatcher = connect_config().await?;
+                    let dispatcher = connect_config(None).await?;
                     let user = username.as_deref().unwrap_or("default");
                     let records = if live {
                         list_invocations_live(&dispatcher, user, agent.as_deref()).await?
@@ -846,7 +864,7 @@ async fn main() -> Result<()> {
                     emit(cli.json, format_history, records);
                 }
                 AgentCmd::Show { invocation_id } => {
-                    let dispatcher = connect_config().await?;
+                    let dispatcher = connect_config(None).await?;
                     match get_invocation(&dispatcher, &invocation_id).await? {
                         Some(inv) => emit(cli.json, format_invocation, inv),
                         None => {
@@ -856,7 +874,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 AgentCmd::Snapshot { invocation_id } => {
-                    let dispatcher = connect_config().await?;
+                    let dispatcher = connect_config(None).await?;
                     let result = snapshot_invocation(&dispatcher, &invocation_id).await?;
                     emit(
                         cli.json,
@@ -879,7 +897,7 @@ async fn main() -> Result<()> {
                     token,
                     note,
                 } => {
-                    let dispatcher = connect_config().await?;
+                    let dispatcher = connect_config(None).await?;
                     resolve_hil(&dispatcher, pid, &hil_id, &token, true, note.as_deref()).await?;
                     emit(
                         cli.json,
@@ -893,7 +911,7 @@ async fn main() -> Result<()> {
                     token,
                     note,
                 } => {
-                    let dispatcher = connect_config().await?;
+                    let dispatcher = connect_config(None).await?;
                     resolve_hil(&dispatcher, pid, &hil_id, &token, false, note.as_deref()).await?;
                     emit(
                         cli.json,
@@ -916,7 +934,7 @@ async fn main() -> Result<()> {
                 goal,
                 username,
             } => {
-                let dispatcher = connect_config().await?;
+                let dispatcher = connect_config(None).await?;
                 let username = username.as_deref().unwrap_or("default");
                 let reply = dispatcher
                     .call(&AtpCmd_::new(
@@ -948,7 +966,7 @@ async fn main() -> Result<()> {
                 );
             }
             SessionCmd::List { username, status } => {
-                let dispatcher = connect_config().await?;
+                let dispatcher = connect_config(None).await?;
                 let username = username.as_deref().unwrap_or("default");
                 let reply = dispatcher
                     .call(&AtpCmd_::new(
@@ -1001,7 +1019,7 @@ async fn main() -> Result<()> {
                 );
             }
             SessionCmd::Show { session_id } => {
-                let dispatcher = connect_config().await?;
+                let dispatcher = connect_config(None).await?;
                 let reply = dispatcher
                     .call(&AtpCmd_::new(
                         "proc",
@@ -1035,7 +1053,7 @@ async fn main() -> Result<()> {
                 );
             }
             SessionCmd::Resume { session_id, input } => {
-                let dispatcher = connect_config().await?;
+                let dispatcher = connect_config(None).await?;
                 let reply = dispatcher
                     .call(&AtpCmd_::new(
                         "proc",
@@ -1069,8 +1087,10 @@ async fn main() -> Result<()> {
                 source,
                 checksum,
                 no_start,
+                root,
             } => {
-                // Prefix bare filesystem paths with file://
+                let _root = expand_home(root);
+
                 let source = if !source.starts_with("file://")
                     && !source.starts_with("https://")
                     && !source.starts_with("http://")
@@ -1085,7 +1105,7 @@ async fn main() -> Result<()> {
                     source
                 };
 
-                let dispatcher = connect_config().await?;
+                let dispatcher = connect_config(None).await?;
                 let reply = dispatcher
                     .call(&AtpCmd_::new(
                         "sys",
@@ -1163,7 +1183,7 @@ async fn main() -> Result<()> {
                 );
             }
 
-            ServiceCmd::Status { name, root } => {
+            ServiceCmd::Status { name, root, server_url: _ } => {
                 let root = expand_home(root);
                 let status_path = root.join("proc/services").join(&name).join("status.yaml");
 
@@ -1193,8 +1213,8 @@ async fn main() -> Result<()> {
                 );
             }
 
-            ServiceCmd::Start { name } => {
-                let dispatcher = connect_config().await?;
+            ServiceCmd::Start { name, server_url } => {
+                let dispatcher = connect_config(server_url).await?;
                 let reply = dispatcher
                     .call(&AtpCmd_::new(
                         "signal",
@@ -1209,8 +1229,8 @@ async fn main() -> Result<()> {
                 emit(cli.json, |_: &()| format!("Started {name}"), ());
             }
 
-            ServiceCmd::Stop { name } => {
-                let dispatcher = connect_config().await?;
+            ServiceCmd::Stop { name, server_url } => {
+                let dispatcher = connect_config(server_url).await?;
                 let reply = dispatcher
                     .call(&AtpCmd_::new(
                         "signal",
@@ -1225,8 +1245,8 @@ async fn main() -> Result<()> {
                 emit(cli.json, |_: &()| format!("Stopped {name}"), ());
             }
 
-            ServiceCmd::Restart { name } => {
-                let dispatcher = connect_config().await?;
+            ServiceCmd::Restart { name, server_url } => {
+                let dispatcher = connect_config(server_url).await?;
                 for (signal, label) in [("SIGSTOP", "stop"), ("SIGSTART", "start")] {
                     let reply = dispatcher
                         .call(&AtpCmd_::new(
@@ -1255,7 +1275,7 @@ async fn main() -> Result<()> {
 
                 if force {
                     // Best-effort kill — ignore errors (service may not be running)
-                    if let Ok(dispatcher) = connect_config().await {
+                    if let Ok(dispatcher) = connect_config(None).await {
                         let _ = dispatcher
                             .call(&AtpCmd_::new(
                                 "signal",
@@ -1621,6 +1641,7 @@ mod tests {
                         source,
                         checksum,
                         no_start,
+                        ..
                     },
             } => {
                 assert_eq!(source, "./pkg.tar.gz");
@@ -1639,6 +1660,18 @@ mod tests {
             Cmd::Service {
                 sub: ServiceCmd::Install { no_start, .. },
             } => assert!(no_start),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn service_install_parses_root() {
+        let cli = Cli::try_parse_from(["avix", "service", "install", "./pkg.tar.gz", "--root", "/custom/root"])
+            .unwrap();
+        match cli.command {
+            Cmd::Service {
+                sub: ServiceCmd::Install { root, .. },
+            } => assert_eq!(root.to_string_lossy(), "/custom/root"),
             _ => panic!("wrong variant"),
         }
     }
@@ -1670,8 +1703,25 @@ mod tests {
         let cli = Cli::try_parse_from(["avix", "service", "start", "my-svc"]).unwrap();
         match cli.command {
             Cmd::Service {
-                sub: ServiceCmd::Start { name },
-            } => assert_eq!(name, "my-svc"),
+                sub: ServiceCmd::Start { name, server_url },
+            } => {
+                assert_eq!(name, "my-svc");
+                assert_eq!(server_url, None);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn service_start_parses_server_url() {
+        let cli = Cli::try_parse_from(["avix", "service", "start", "my-svc", "--server-url", "http://localhost:9999"]).unwrap();
+        match cli.command {
+            Cmd::Service {
+                sub: ServiceCmd::Start { name, server_url },
+            } => {
+                assert_eq!(name, "my-svc");
+                assert_eq!(server_url, Some("http://localhost:9999".to_string()));
+            }
             _ => panic!("wrong variant"),
         }
     }
@@ -1688,6 +1738,20 @@ mod tests {
     }
 
     #[test]
+    fn service_stop_parses_server_url() {
+        let cli = Cli::try_parse_from(["avix", "service", "stop", "my-svc", "--server-url", "http://localhost:9999"]).unwrap();
+        match cli.command {
+            Cmd::Service {
+                sub: ServiceCmd::Stop { name, server_url },
+            } => {
+                assert_eq!(name, "my-svc");
+                assert_eq!(server_url, Some("http://localhost:9999".to_string()));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
     fn service_restart_parses() {
         let cli = Cli::try_parse_from(["avix", "service", "restart", "my-svc"]).unwrap();
         assert!(matches!(
@@ -1696,6 +1760,20 @@ mod tests {
                 sub: ServiceCmd::Restart { .. }
             }
         ));
+    }
+
+    #[test]
+    fn service_restart_parses_server_url() {
+        let cli = Cli::try_parse_from(["avix", "service", "restart", "my-svc", "--server-url", "http://localhost:9999"]).unwrap();
+        match cli.command {
+            Cmd::Service {
+                sub: ServiceCmd::Restart { name, server_url },
+            } => {
+                assert_eq!(name, "my-svc");
+                assert_eq!(server_url, Some("http://localhost:9999".to_string()));
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]

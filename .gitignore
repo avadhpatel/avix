@@ -1,4 +1,4 @@
-/target
+target
 Cargo.lock
 *.enc
 .env
@@ -8,8 +8,3 @@ coverage/
 .agents/reports
 **.swp
 temp/
-
-.mcp.json
-.mcp_data
-opencode.json
-
