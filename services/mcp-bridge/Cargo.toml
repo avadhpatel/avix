@@ -1,0 +1,24 @@
+[package]
+name    = "mcp-bridge-svc"
+version = "0.1.0"
+edition = "2021"
+authors = ["Avix Contributors"]
+
+[dependencies]
+avix-core = { path = "../../crates/avix-core" }
+
+tokio              = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+serde_yaml         = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow             = { workspace = true }
+thiserror          = { workspace = true }
+uuid               = { workspace = true }
+async-trait        = { workspace = true }
+reqwest            = { workspace = true }
+
+[[bin]]
+name = "mcp-bridge"
+path = "src/main.rs"

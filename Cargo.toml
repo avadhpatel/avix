@@ -9,6 +9,7 @@ members = [
     "crates/avix-docker",
     "crates/avix-tests-integration",
     "services/workspace",
+    "services/mcp-bridge",
 ]
 resolver = "2"
 
