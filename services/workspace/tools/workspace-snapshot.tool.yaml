@@ -1,0 +1,20 @@
+name:        workspace/snapshot
+description: Create a named snapshot of a project
+status:
+  state: available
+  reason: null
+ipc:
+  transport: local-ipc
+  endpoint:  workspace
+  method:    workspace.snapshot
+streaming: false
+job:       false
+capabilities_required: []
+visibility: all
+input:
+  project: { type: string, required: true }
+  name: { type: string, required: false }
+  description: { type: string, required: false }
+output:
+  path: { type: string }
+  files: { type: integer }

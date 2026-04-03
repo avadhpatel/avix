@@ -1,0 +1,22 @@
+name    = "workspace"
+version = "0.1.0"
+
+[unit]
+description = "High-level workspace abstraction with session history integration"
+author      = "avix/workspace"
+after       = ["memfs.svc", "router.svc"]
+
+[service]
+binary         = "/services/workspace/bin/workspace"
+language       = "rust"
+restart        = "always"
+restart_delay  = "5s"
+max_concurrent = 20
+
+[capabilities]
+caller_scoped = true
+host_access   = "filesystem"
+
+[tools]
+namespace = "/tools/workspace/"
+provides  = []

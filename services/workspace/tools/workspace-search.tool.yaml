@@ -1,0 +1,19 @@
+name:        workspace/search
+description: Search files in workspace by name or content
+status:
+  state: available
+  reason: null
+ipc:
+  transport: local-ipc
+  endpoint:  workspace
+  method:    workspace.search
+streaming: false
+job:       false
+capabilities_required: []
+visibility: all
+input:
+  query: { type: string, required: true }
+  project: { type: string, required: false }
+  search_type: { type: string, required: false }
+output:
+  results: { type: array }

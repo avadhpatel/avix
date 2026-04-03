@@ -1,0 +1,24 @@
+[package]
+name    = "workspace-svc"
+version = "0.1.0"
+edition = "2021"
+authors = ["Avix Contributors"]
+
+[dependencies]
+avix-core = { path = "../../crates/avix-core" }
+
+tokio              = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+serde_yaml         = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow             = { workspace = true }
+thiserror          = { workspace = true }
+uuid               = { workspace = true }
+tempfile           = { workspace = true }
+chrono            = { workspace = true }
+
+[[bin]]
+name = "workspace"
+path = "src/main.rs"

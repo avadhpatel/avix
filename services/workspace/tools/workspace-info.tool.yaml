@@ -1,0 +1,18 @@
+name:        workspace/info
+description: Get workspace metadata and configuration
+status:
+  state: available
+  reason: null
+ipc:
+  transport: local-ipc
+  endpoint:  workspace
+  method:    workspace.info
+streaming: false
+job:       false
+capabilities_required: []
+visibility: all
+input: {}
+output:
+  root: { type: string }
+  projects: { type: array }
+  default_project: { type: string, required: false }

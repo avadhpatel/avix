@@ -1,0 +1,18 @@
+name:        workspace/read
+description: Read file content from workspace
+status:
+  state: available
+  reason: null
+ipc:
+  transport: local-ipc
+  endpoint:  workspace
+  method:    workspace.read
+streaming: false
+job:       false
+capabilities_required: []
+visibility: all
+input:
+  path: { type: string, required: true }
+output:
+  content: { type: string }
+  metadata: { type: object }

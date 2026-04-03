@@ -1,0 +1,21 @@
+name:        workspace/create-project
+description: Create a new project with optional template files
+status:
+  state: available
+  reason: null
+ipc:
+  transport: local-ipc
+  endpoint:  workspace
+  method:    workspace.create-project
+streaming: false
+job:       false
+capabilities_required: []
+visibility: all
+input:
+  project_name: { type: string, required: true }
+  description: { type: string, required: false }
+  template: { type: string, required: false }
+  session_id: { type: string, required: false }
+output:
+  path: { type: string }
+  files: { type: array }

@@ -1,0 +1,21 @@
+name:        workspace/write
+description: Write file to workspace with automatic history logging
+status:
+  state: available
+  reason: null
+ipc:
+  transport: local-ipc
+  endpoint:  workspace
+  method:    workspace.write
+streaming: false
+job:       false
+capabilities_required: []
+visibility: all
+input:
+  path: { type: string, required: true }
+  content: { type: string, required: true }
+  mode: { type: string, required: false }
+  session_id: { type: string, required: false }
+output:
+  path: { type: string }
+  bytes_written: { type: integer }
