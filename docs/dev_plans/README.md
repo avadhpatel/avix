@@ -71,6 +71,21 @@ restart/secrets. Implement in order A → H.
 
 ---
 
+### Agent History Persistence v2 (spec: `docs/specs/agent-history-persistence-v2.md`)
+
+Implement v2 of the agent run history system: live/interim persistence and richer conversation data (v2.0), followed by hierarchical sessions (v2.1).
+
+| File | What it builds | Priority | Depends On |
+|------|---------------|----------|------------|
+| `history-v2-gap-A-interim-snapshots.md` | `persist_interim()` in `InvocationStore`, RuntimeExecutor snapshot hook after N tool calls, SIGSAVE triggers | **High** | — |
+| `history-v2-gap-B-structured-conversation.md` | `ConversationEntry` with tool_calls, files_changed, thought fields; backward-compatible JSONL format | **High** | A |
+| `history-v2-gap-C-atp-live-history.md` | ATP handlers: `proc/invocation-snapshot`, `proc/invocation-get --live`, `proc/invocation-list --live` | **High** | A, B |
+| `history-v2-gap-D-hierarchical-sessions.md` | `MessageRecord`, `PartRecord`, `HistoryStore`; migration from existing invocations; ATP `message-*`, `part-*` ops | **Medium** | A, B, C |
+
+**Status:** Draft — implementation not yet started
+
+---
+
 ---
 
 ## Development Workflow

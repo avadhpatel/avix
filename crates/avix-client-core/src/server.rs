@@ -171,9 +171,17 @@ mod tests {
             child: Arc::new(Mutex::new(Some(child))),
             owned: true,
         };
-        // Give the process a moment to exit.
-        std::thread::sleep(Duration::from_millis(50));
-        assert!(!handle.is_alive());
+        // Retry for up to 500ms to avoid flakiness under load.
+        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        loop {
+            if !handle.is_alive() {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("process did not exit within 500ms");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// Stopping a non-owned handle is a no-op and does not error.

@@ -12,7 +12,9 @@ pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
     tracing::debug!(op, id = %id, "handling proc command");
     match op {
         "spawn" | "kill" | "list" | "stat" | "pause" | "resume" | "wait" | "setcap"
-        | "list-installed" | "invocation-list" | "invocation-get" => {
+        | "list-installed" | "invocation-list" | "invocation-get" | "invocation-snapshot"
+        | "message-create" | "message-get" | "message-list"
+        | "part-create" | "part-get" | "part-list" => {
             let ipc_method = format!("kernel/proc/{op}");
             tracing::info!(op, ipc_method = %ipc_method, "forwarding to kernel IPC");
             let span = if op == "spawn" {

@@ -159,10 +159,45 @@ pub async fn get_invocation(
     .await
     {
         Ok(body) => Ok(body),
-        Err(ClientError::Atp { code, .. }) if code.contains("32003") || code.contains("ENOTFOUND") => {
+        Err(ClientError::Atp { code, .. })
+            if code.contains("32003") || code.contains("ENOTFOUND") =>
+        {
             Ok(None)
         }
         Err(e) => Err(e),
+    }
+}
+
+/// Force an immediate snapshot of a running invocation.
+/// Returns the updated record on success.
+pub async fn snapshot_invocation(
+    dispatcher: &Dispatcher,
+    invocation_id: &str,
+) -> Result<Value, ClientError> {
+    let body = dispatch(
+        dispatcher,
+        "proc",
+        "invocation-snapshot",
+        serde_json::json!({ "id": invocation_id }),
+    )
+    .await?;
+    body.ok_or_else(|| ClientError::Other(anyhow::anyhow!("empty snapshot response")))
+}
+
+/// List invocations, including currently-running ones (live=true).
+pub async fn list_invocations_live(
+    dispatcher: &Dispatcher,
+    username: &str,
+    agent_name: Option<&str>,
+) -> Result<Vec<Value>, ClientError> {
+    let mut payload = serde_json::json!({ "username": username, "live": true });
+    if let Some(name) = agent_name {
+        payload["agent_name"] = serde_json::Value::String(name.to_string());
+    }
+    let body = dispatch(dispatcher, "proc", "invocation-list", payload).await?;
+    match body {
+        Some(Value::Array(arr)) => Ok(arr),
+        Some(_) | None => Ok(vec![]),
     }
 }
 
@@ -189,8 +224,7 @@ pub async fn list_services(dispatcher: &Dispatcher) -> Result<ServiceListRespons
     let body = dispatch(dispatcher, "sys", "service-list", serde_json::json!({})).await?;
     match body {
         Some(Value::Object(map)) => {
-            serde_json::from_value(Value::Object(map))
-                .map_err(|e| ClientError::Other(e.into()))
+            serde_json::from_value(Value::Object(map)).map_err(|e| ClientError::Other(e.into()))
         }
         Some(Value::Array(arr)) => Ok(ServiceListResponse {
             total: arr.len(),
@@ -212,8 +246,7 @@ pub async fn list_tools(dispatcher: &Dispatcher) -> Result<ToolListResponse, Cli
     let body = dispatch(dispatcher, "sys", "tool-list", serde_json::json!({})).await?;
     match body {
         Some(Value::Object(map)) => {
-            serde_json::from_value(Value::Object(map))
-                .map_err(|e| ClientError::Other(e.into()))
+            serde_json::from_value(Value::Object(map)).map_err(|e| ClientError::Other(e.into()))
         }
         Some(Value::Array(arr)) => Ok(ToolListResponse {
             total: arr.len(),
@@ -558,10 +591,7 @@ mod tests {
     #[tokio::test]
     async fn list_installed_returns_empty_on_null_body() {
         let fake = FakeDispatcher::new();
-        fake.set_reply(
-            "proc/list-installed",
-            ok_reply(serde_json::json!([])),
-        );
+        fake.set_reply("proc/list-installed", ok_reply(serde_json::json!([])));
 
         let cmd = Cmd::new(
             "proc",
@@ -644,9 +674,16 @@ mod tests {
         let cmd = Cmd::new("sys", "service-list", "tok", serde_json::json!({}));
         let reply = fake.call(cmd).await.unwrap();
 
+        // Array body → legacy format: wrap in ServiceListResponse manually
         let response: ServiceListResponse = match reply.body {
             Some(Value::Object(map)) => serde_json::from_value(Value::Object(map)).unwrap(),
-            _ => panic!("expected object"),
+            Some(Value::Array(arr)) => ServiceListResponse {
+                total: arr.len(),
+                running: 0,
+                starting: 0,
+                services: arr,
+            },
+            _ => panic!("unexpected body"),
         };
         assert_eq!(response.total, 1);
         assert_eq!(response.services.len(), 1);
@@ -713,9 +750,16 @@ mod tests {
         let cmd = Cmd::new("sys", "tool-list", "tok", serde_json::json!({}));
         let reply = fake.call(cmd).await.unwrap();
 
+        // Null body → empty response (matches list_tools production behaviour)
         let response: ToolListResponse = match reply.body {
             Some(Value::Object(map)) => serde_json::from_value(Value::Object(map)).unwrap(),
-            _ => panic!("expected object"),
+            Some(Value::Null) | None => ToolListResponse {
+                total: 0,
+                available: 0,
+                unavailable: 0,
+                tools: vec![],
+            },
+            _ => panic!("unexpected body"),
         };
         assert_eq!(response.total, 0);
         assert!(response.tools.is_empty());
@@ -724,20 +768,30 @@ mod tests {
     #[tokio::test]
     async fn list_services_handles_error_reply() {
         let fake = FakeDispatcher::new();
-        fake.set_reply("sys/service-list", err_reply("EUNAVAIL", "service unavailable"));
+        fake.set_reply(
+            "sys/service-list",
+            err_reply("EUNAVAIL", "service unavailable"),
+        );
 
-        let cmd = Cmd::new("sys", "service-list", "tok", serde_json::json!({}));
-        let result = fake.call(cmd).await;
-        assert!(result.is_err());
+        // FakeDispatcher::call returns Ok(reply) regardless of reply.ok.
+        // Verify the reply signals an error so callers (like list_services) can propagate it.
+        let reply = fake.call(Cmd::new("sys", "service-list", "tok", serde_json::json!({}))).await.unwrap();
+        assert!(!reply.ok, "reply should not be ok for an error response");
+        assert!(reply.error.is_some() || reply.message.is_some());
     }
 
     #[tokio::test]
     async fn list_tools_handles_error_reply() {
         let fake = FakeDispatcher::new();
-        fake.set_reply("sys/tool-list", err_reply("EUNAVAIL", "tool registry unavailable"));
+        fake.set_reply(
+            "sys/tool-list",
+            err_reply("EUNAVAIL", "tool registry unavailable"),
+        );
 
-        let cmd = Cmd::new("sys", "tool-list", "tok", serde_json::json!({}));
-        let result = fake.call(cmd).await;
-        assert!(result.is_err());
+        // FakeDispatcher::call returns Ok(reply) regardless of reply.ok.
+        // Verify the reply signals an error so callers (like list_tools) can propagate it.
+        let reply = fake.call(Cmd::new("sys", "tool-list", "tok", serde_json::json!({}))).await.unwrap();
+        assert!(!reply.ok, "reply should not be ok for an error response");
+        assert!(reply.error.is_some() || reply.message.is_some());
     }
 }

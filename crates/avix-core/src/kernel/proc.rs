@@ -11,13 +11,15 @@ use uuid::Uuid;
 use crate::agent_manifest::{AgentManifestSummary, ManifestScanner};
 use crate::error::AvixError;
 use crate::executor::{AgentExecutorFactory, SpawnParams};
+use crate::history::record::{MessageRecord, PartRecord};
+use crate::history::HistoryStore;
 use crate::invocation::{InvocationRecord, InvocationStatus, InvocationStore};
 use crate::process::entry::{ProcessEntry, ProcessKind, ProcessStatus};
 use crate::process::table::ProcessTable;
 use crate::service::lifecycle::ServiceManager;
 use crate::service::ServiceSummary;
-use crate::session::SessionRecord;
 use crate::session::PersistentSessionStore;
+use crate::session::SessionRecord;
 use crate::tool_registry::{ToolRegistry, ToolSummary};
 use crate::trace::Tracer;
 use crate::types::token::{CapabilityToken, IssuedTo};
@@ -93,6 +95,8 @@ pub struct ProcHandler {
     tool_registry: Arc<Mutex<Option<Arc<ToolRegistry>>>>,
     /// Tracer — when set, agent spawn events are written to the agent trace file.
     tracer: Arc<Tracer>,
+    /// History store for MessageRecord / PartRecord (optional).
+    history_store: Option<Arc<HistoryStore>>,
 }
 
 impl ProcHandler {
@@ -118,6 +122,7 @@ impl ProcHandler {
             service_manager: Arc::new(Mutex::new(None)),
             tool_registry: Arc::new(Mutex::new(None)),
             tracer: Tracer::noop(),
+            history_store: None,
         }
     }
 
@@ -144,6 +149,7 @@ impl ProcHandler {
             service_manager: Arc::new(Mutex::new(None)),
             tool_registry: Arc::new(Mutex::new(None)),
             tracer: Tracer::noop(),
+            history_store: None,
         }
     }
 
@@ -168,6 +174,12 @@ impl ProcHandler {
     /// Attach a persistent session store.
     pub fn with_session_store(mut self, store: Arc<PersistentSessionStore>) -> Self {
         self.session_store = Some(store);
+        self
+    }
+
+    /// Attach a history store for MessageRecord / PartRecord.
+    pub fn with_history_store(mut self, store: Arc<HistoryStore>) -> Self {
+        self.history_store = Some(store);
         self
     }
 
@@ -275,7 +287,14 @@ impl ProcHandler {
             None => (0, 0),
         };
         let _ = store
-            .finalize(&inv_id, status, chrono::Utc::now(), tokens, tool_calls, exit_reason)
+            .finalize(
+                &inv_id,
+                status,
+                chrono::Utc::now(),
+                tokens,
+                tool_calls,
+                exit_reason,
+            )
             .await;
     }
 
@@ -473,22 +492,39 @@ impl ProcHandler {
     }
 
     /// List historical invocations for `username`, optionally filtered by agent name.
+    ///
+    /// When `live=true`, all records (including Running/Idle) are returned.
+    /// When `live=false`, only finalized records (Completed/Failed/Killed) are returned.
     pub async fn list_invocations(
         &self,
         username: &str,
         agent_name: Option<&str>,
+        live: bool,
     ) -> Result<Vec<InvocationRecord>, AvixError> {
         let store = match &self.invocation_store {
             Some(s) => s,
             None => return Ok(vec![]),
         };
-        match agent_name {
-            Some(name) => store.list_for_agent(username, name).await,
-            None => store.list_for_user(username).await,
+        let records = match agent_name {
+            Some(name) => store.list_for_agent(username, name).await?,
+            None => store.list_for_user(username).await?,
+        };
+        if live {
+            Ok(records)
+        } else {
+            Ok(records
+                .into_iter()
+                .filter(|r| {
+                    !matches!(r.status, InvocationStatus::Running | InvocationStatus::Idle)
+                })
+                .collect())
         }
     }
 
     /// Get a specific invocation record by UUID.
+    ///
+    /// The `live` parameter is reserved for v2.1 (runtime state merge).
+    /// In v2.0, it is ignored and the persisted record is always returned.
     pub async fn get_invocation(
         &self,
         invocation_id: &str,
@@ -496,6 +532,90 @@ impl ProcHandler {
         match &self.invocation_store {
             Some(s) => s.get(invocation_id).await,
             None => Ok(None),
+        }
+    }
+
+    /// Force an immediate snapshot of a running invocation.
+    ///
+    /// Calls `persist_interim` with current stats from the invocation record.
+    /// Returns the updated record.
+    ///
+    /// Returns `AvixError::NotFound` if `id` is unknown.
+    /// Returns `AvixError::InvalidInput` if the invocation is already finalized.
+    pub async fn snapshot_invocation(&self, id: &str) -> Result<InvocationRecord, AvixError> {
+        let store = self
+            .invocation_store
+            .as_ref()
+            .ok_or_else(|| AvixError::NotFound("invocation store not configured".into()))?;
+
+        let record = store
+            .get(id)
+            .await?
+            .ok_or_else(|| AvixError::NotFound(format!("invocation {id} not found")))?;
+
+        if !matches!(record.status, InvocationStatus::Running | InvocationStatus::Idle) {
+            return Err(AvixError::InvalidInput(
+                "cannot snapshot a finalized invocation".into(),
+            ));
+        }
+
+        store
+            .persist_interim(id, &[], record.tokens_consumed, record.tool_calls_total)
+            .await?;
+
+        store
+            .get(id)
+            .await?
+            .ok_or_else(|| AvixError::NotFound(format!("invocation {id} not found")))
+    }
+
+    // ── History (MessageRecord / PartRecord) ──────────────────────────────────
+
+    /// Create a message in the history store.
+    pub async fn create_message(&self, msg: &MessageRecord) -> Result<(), AvixError> {
+        match &self.history_store {
+            Some(s) => s.create_message(msg).await,
+            None => Err(AvixError::NotFound("history store not configured".into())),
+        }
+    }
+
+    /// Get a message by UUID.
+    pub async fn get_message(&self, id: &Uuid) -> Result<Option<MessageRecord>, AvixError> {
+        match &self.history_store {
+            Some(s) => s.get_message(id).await,
+            None => Ok(None),
+        }
+    }
+
+    /// List messages for a session, ordered by sequence.
+    pub async fn list_messages(&self, session_id: &Uuid) -> Result<Vec<MessageRecord>, AvixError> {
+        match &self.history_store {
+            Some(s) => s.list_messages(session_id).await,
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Create a part in the history store.
+    pub async fn create_part(&self, part: &PartRecord) -> Result<(), AvixError> {
+        match &self.history_store {
+            Some(s) => s.create_part(part).await,
+            None => Err(AvixError::NotFound("history store not configured".into())),
+        }
+    }
+
+    /// Get a part by UUID.
+    pub async fn get_part(&self, id: &Uuid) -> Result<Option<PartRecord>, AvixError> {
+        match &self.history_store {
+            Some(s) => s.get_part(id).await,
+            None => Ok(None),
+        }
+    }
+
+    /// List parts for a message, ordered by part_index.
+    pub async fn list_parts(&self, message_id: &Uuid) -> Result<Vec<PartRecord>, AvixError> {
+        match &self.history_store {
+            Some(s) => s.list_parts(message_id).await,
+            None => Ok(vec![]),
         }
     }
 
@@ -551,32 +671,36 @@ impl ProcHandler {
             Some(s) => s,
             None => return Err(AvixError::NotFound("session store not configured".into())),
         };
-        
-        let session = store.get(session_id).await?
+
+        let session = store
+            .get(session_id)
+            .await?
             .ok_or_else(|| AvixError::NotFound(format!("session {} not found", session_id)))?;
-        
+
         // Only allow resuming Idle or Running sessions
         use crate::session::SessionStatus;
         if !matches!(session.status, SessionStatus::Idle | SessionStatus::Running) {
             return Err(AvixError::InvalidInput(format!(
-                "session {} is not Idle or Running (status: {:?})", 
+                "session {} is not Idle or Running (status: {:?})",
                 session_id, session.status
             )));
         }
-        
+
         // Build the goal from input or use session's goal
         let goal = input.unwrap_or(&session.goal).to_string();
-        
+
         // Spawn the agent in this session - this will:
         // 1. Attach to existing session
         // 2. Update primary_agent to the new agent
-        let pid = self.spawn(
-            &session.primary_agent,
-            &goal,
-            &session_id.to_string(),
-            &session.username,
-        ).await?;
-        
+        let pid = self
+            .spawn(
+                &session.primary_agent,
+                &goal,
+                &session_id.to_string(),
+                &session.username,
+            )
+            .await?;
+
         info!(session_id = %session_id, pid, "resumed session");
         Ok(pid)
     }

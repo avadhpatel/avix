@@ -11,7 +11,8 @@ use avix_client_core::atp::types::Cmd as AtpCmd_;
 use avix_client_core::atp::{AtpClient, Dispatcher};
 use avix_client_core::commands::spawn_agent::spawn_agent;
 use avix_client_core::commands::{
-    get_invocation, kill_agent, list_agents, list_installed, list_invocations, resolve_hil,
+    get_invocation, kill_agent, list_agents, list_installed, list_invocations,
+    list_invocations_live, resolve_hil, snapshot_invocation,
 };
 use avix_client_core::config::ClientConfig;
 use avix_client_core::persistence;
@@ -371,10 +372,18 @@ enum AgentCmd {
         /// Username to query (defaults to current user)
         #[arg(long)]
         username: Option<String>,
+        /// Include currently-running invocations
+        #[arg(long)]
+        live: bool,
     },
     /// Show a specific invocation (summary + conversation)
     Show {
         /// Invocation ID
+        invocation_id: String,
+    },
+    /// Force an immediate snapshot of a running invocation
+    Snapshot {
+        /// Invocation ID to snapshot
         invocation_id: String,
     },
 }
@@ -462,7 +471,10 @@ fn format_catalog(agents: &Vec<serde_json::Value>) -> String {
     if agents.is_empty() {
         return "No agents installed.".to_string();
     }
-    let mut out = format!("{:<24} {:<10} {:<8} {}\n", "NAME", "VERSION", "SCOPE", "DESCRIPTION");
+    let mut out = format!(
+        "{:<24} {:<10} {:<8} {}\n",
+        "NAME", "VERSION", "SCOPE", "DESCRIPTION"
+    );
     out.push_str(&"-".repeat(72));
     out.push('\n');
     for a in agents {
@@ -470,7 +482,10 @@ fn format_catalog(agents: &Vec<serde_json::Value>) -> String {
         let version = a["version"].as_str().unwrap_or("?");
         let scope = a["scope"].as_str().unwrap_or("?");
         let desc = a["description"].as_str().unwrap_or("");
-        out.push_str(&format!("{:<24} {:<10} {:<8} {}\n", name, version, scope, desc));
+        out.push_str(&format!(
+            "{:<24} {:<10} {:<8} {}\n",
+            name, version, scope, desc
+        ));
     }
     out
 }
@@ -502,10 +517,7 @@ fn format_history(records: &Vec<serde_json::Value>) -> String {
 
 fn format_invocation(inv: &serde_json::Value) -> String {
     let mut out = String::new();
-    out.push_str(&format!(
-        "ID:      {}\n",
-        inv["id"].as_str().unwrap_or("?")
-    ));
+    out.push_str(&format!("ID:      {}\n", inv["id"].as_str().unwrap_or("?")));
     out.push_str(&format!(
         "Agent:   {}\n",
         inv["agentName"].as_str().unwrap_or("?")
@@ -819,19 +831,18 @@ async fn main() -> Result<()> {
                 }
                 AgentCmd::Catalog { username } => {
                     let dispatcher = connect_config().await?;
-                    let user = username
-                        .as_deref()
-                        .unwrap_or("default");
+                    let user = username.as_deref().unwrap_or("default");
                     let agents = list_installed(&dispatcher, user).await?;
                     emit(cli.json, format_catalog, agents);
                 }
-                AgentCmd::History { agent, username } => {
+                AgentCmd::History { agent, username, live } => {
                     let dispatcher = connect_config().await?;
-                    let user = username
-                        .as_deref()
-                        .unwrap_or("default");
-                    let records =
-                        list_invocations(&dispatcher, user, agent.as_deref()).await?;
+                    let user = username.as_deref().unwrap_or("default");
+                    let records = if live {
+                        list_invocations_live(&dispatcher, user, agent.as_deref()).await?
+                    } else {
+                        list_invocations(&dispatcher, user, agent.as_deref()).await?
+                    };
                     emit(cli.json, format_history, records);
                 }
                 AgentCmd::Show { invocation_id } => {
@@ -843,6 +854,21 @@ async fn main() -> Result<()> {
                             std::process::exit(1);
                         }
                     }
+                }
+                AgentCmd::Snapshot { invocation_id } => {
+                    let dispatcher = connect_config().await?;
+                    let result = snapshot_invocation(&dispatcher, &invocation_id).await?;
+                    emit(
+                        cli.json,
+                        |r: &serde_json::Value| {
+                            format!(
+                                "Snapshot saved for invocation '{}' (tokens: {})",
+                                invocation_id,
+                                r["record"]["tokensConsumed"].as_u64().unwrap_or(0),
+                            )
+                        },
+                        result,
+                    );
                 }
             },
 
@@ -885,7 +911,11 @@ async fn main() -> Result<()> {
 
         // ── Session commands ─────────────────────────────────────────────────────
         Cmd::Session { sub } => match sub {
-            SessionCmd::Create { title, goal, username } => {
+            SessionCmd::Create {
+                title,
+                goal,
+                username,
+            } => {
                 let dispatcher = connect_config().await?;
                 let username = username.as_deref().unwrap_or("default");
                 let reply = dispatcher
@@ -901,12 +931,21 @@ async fn main() -> Result<()> {
                     ))
                     .await?;
                 if !reply.ok {
-                    anyhow::bail!(reply.message.unwrap_or_else(|| "create session failed".into()));
+                    anyhow::bail!(reply
+                        .message
+                        .unwrap_or_else(|| "create session failed".into()));
                 }
                 let body = reply.body.unwrap_or(serde_json::json!({}));
-                emit(cli.json, |b: &&serde_json::Value| {
-                    format!("Created session: {}", b["session_id"].as_str().unwrap_or("unknown"))
-                }, &body);
+                emit(
+                    cli.json,
+                    |b: &&serde_json::Value| {
+                        format!(
+                            "Created session: {}",
+                            b["session_id"].as_str().unwrap_or("unknown")
+                        )
+                    },
+                    &body,
+                );
             }
             SessionCmd::List { username, status } => {
                 let dispatcher = connect_config().await?;
@@ -920,40 +959,46 @@ async fn main() -> Result<()> {
                     ))
                     .await?;
                 if !reply.ok {
-                    anyhow::bail!(reply.message.unwrap_or_else(|| "list sessions failed".into()));
+                    anyhow::bail!(reply
+                        .message
+                        .unwrap_or_else(|| "list sessions failed".into()));
                 }
                 let body = reply.body.unwrap_or(serde_json::json!([]));
-                emit(cli.json, |b: &&serde_json::Value| {
-                    let sessions = b.as_array().map(|a| a.to_vec()).unwrap_or_default();
-                    if sessions.is_empty() {
-                        "No sessions found".to_string()
-                    } else {
-                        let filtered: Vec<_> = if let Some(ref s) = status {
-                            sessions
-                                .iter()
-                                .filter(|sess| sess["status"].as_str() == Some(s.as_str()))
-                                .collect()
+                emit(
+                    cli.json,
+                    |b: &&serde_json::Value| {
+                        let sessions = b.as_array().map(|a| a.to_vec()).unwrap_or_default();
+                        if sessions.is_empty() {
+                            "No sessions found".to_string()
                         } else {
-                            sessions.iter().collect()
-                        };
-                        if filtered.is_empty() {
-                            format!("No {} sessions found", status.as_ref().unwrap())
-                        } else {
-                            let lines: Vec<String> = filtered
-                                .iter()
-                                .map(|s| {
-                                    format!(
-                                        "  {} [{}] - {}",
-                                        s["id"].as_str().unwrap_or("?"),
-                                        s["status"].as_str().unwrap_or("?"),
-                                        s["title"].as_str().unwrap_or("")
-                                    )
-                                })
-                                .collect();
-                            format!("Sessions:\n{}", lines.join("\n"))
+                            let filtered: Vec<_> = if let Some(ref s) = status {
+                                sessions
+                                    .iter()
+                                    .filter(|sess| sess["status"].as_str() == Some(s.as_str()))
+                                    .collect()
+                            } else {
+                                sessions.iter().collect()
+                            };
+                            if filtered.is_empty() {
+                                format!("No {} sessions found", status.as_ref().unwrap())
+                            } else {
+                                let lines: Vec<String> = filtered
+                                    .iter()
+                                    .map(|s| {
+                                        format!(
+                                            "  {} [{}] - {}",
+                                            s["id"].as_str().unwrap_or("?"),
+                                            s["status"].as_str().unwrap_or("?"),
+                                            s["title"].as_str().unwrap_or("")
+                                        )
+                                    })
+                                    .collect();
+                                format!("Sessions:\n{}", lines.join("\n"))
+                            }
                         }
-                    }
-                }, &body);
+                    },
+                    &body,
+                );
             }
             SessionCmd::Show { session_id } => {
                 let dispatcher = connect_config().await?;
@@ -969,8 +1014,10 @@ async fn main() -> Result<()> {
                     anyhow::bail!(reply.message.unwrap_or_else(|| "get session failed".into()));
                 }
                 let body = reply.body.unwrap_or(serde_json::json!({}));
-                emit(cli.json, |b: &&serde_json::Value| {
-                    format!(
+                emit(
+                    cli.json,
+                    |b: &&serde_json::Value| {
+                        format!(
                         "Session: {}\n  Title: {}\n  Goal: {}\n  Status: {}\n  Origin: {}\n  Primary: {}\n  Participants: {}",
                         b["id"].as_str().unwrap_or("?"),
                         b["title"].as_str().unwrap_or(""),
@@ -983,7 +1030,9 @@ async fn main() -> Result<()> {
                             .map(|a| a.len())
                             .unwrap_or(0)
                     )
-                }, &body);
+                    },
+                    &body,
+                );
             }
             SessionCmd::Resume { session_id, input } => {
                 let dispatcher = connect_config().await?;
@@ -999,12 +1048,18 @@ async fn main() -> Result<()> {
                     ))
                     .await?;
                 if !reply.ok {
-                    anyhow::bail!(reply.message.unwrap_or_else(|| "resume session failed".into()));
+                    anyhow::bail!(reply
+                        .message
+                        .unwrap_or_else(|| "resume session failed".into()));
                 }
                 let body = reply.body.unwrap_or(serde_json::json!({}));
-                emit(cli.json, |b: &&serde_json::Value| {
-                    format!("Resumed session, PID: {}", b["pid"].as_u64().unwrap_or(0))
-                }, &body);
+                emit(
+                    cli.json,
+                    |b: &&serde_json::Value| {
+                        format!("Resumed session, PID: {}", b["pid"].as_u64().unwrap_or(0))
+                    },
+                    &body,
+                );
             }
         },
 

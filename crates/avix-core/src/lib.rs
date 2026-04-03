@@ -1,5 +1,4 @@
 pub mod agent_manifest;
-pub mod invocation;
 pub mod auth;
 pub mod bootstrap;
 pub mod cli;
@@ -9,6 +8,8 @@ pub mod error;
 pub mod exec_svc;
 pub mod executor;
 pub mod gateway;
+pub mod history;
+pub mod invocation;
 pub mod ipc;
 pub mod jobs;
 pub mod kernel;

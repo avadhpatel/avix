@@ -163,7 +163,10 @@ async fn dispatch_request(
         "kernel/proc/invocation-list" => {
             let username = params["username"].as_str().unwrap_or("");
             let agent_name = params["agent_name"].as_str();
-            match proc_handler.list_invocations(username, agent_name).await {
+            // `live` defaults to true to preserve backward compatibility:
+            // callers that omit `live` get all records (including running).
+            let live = params["live"].as_bool().unwrap_or(true);
+            match proc_handler.list_invocations(username, agent_name, live).await {
                 Ok(records) => JsonRpcResponse::ok(id, json!(records)),
                 Err(e) => {
                     warn!(error = %e, "kernel/proc/invocation-list failed");
@@ -189,14 +192,147 @@ async fn dispatch_request(
             }
         }
 
+        "kernel/proc/invocation-snapshot" => {
+            let inv_id = params["id"].as_str().unwrap_or("");
+            match proc_handler.snapshot_invocation(inv_id).await {
+                Ok(record) => JsonRpcResponse::ok(
+                    id,
+                    json!({ "success": true, "record": record }),
+                ),
+                Err(e @ AvixError::NotFound(_)) => {
+                    warn!(error = %e, "kernel/proc/invocation-snapshot: not found");
+                    JsonRpcResponse::err(id, -32003, &e.to_string(), None)
+                }
+                Err(e @ AvixError::InvalidInput(_)) => {
+                    warn!(error = %e, "kernel/proc/invocation-snapshot: invalid state");
+                    JsonRpcResponse::err(id, -32001, &e.to_string(), None)
+                }
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/invocation-snapshot failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+
+        // ── History: message operations ──────────────────────────────────────
+
+        "kernel/proc/message-create" => {
+            let msg_val = params.get("message").cloned().unwrap_or(serde_json::Value::Null);
+            match serde_json::from_value::<crate::history::record::MessageRecord>(msg_val) {
+                Ok(msg) => match proc_handler.create_message(&msg).await {
+                    Ok(()) => JsonRpcResponse::ok(id, json!({ "ok": true })),
+                    Err(e) => {
+                        warn!(error = %e, "kernel/proc/message-create failed");
+                        JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                    }
+                },
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/message-create: invalid message body");
+                    JsonRpcResponse::err(id, -32002, &format!("invalid message: {e}"), None)
+                }
+            }
+        }
+
+        "kernel/proc/message-get" => {
+            let raw_id = params["id"].as_str().unwrap_or("");
+            match uuid::Uuid::parse_str(raw_id) {
+                Ok(uuid) => match proc_handler.get_message(&uuid).await {
+                    Ok(Some(msg)) => JsonRpcResponse::ok(id, json!(msg)),
+                    Ok(None) => JsonRpcResponse::err(
+                        id,
+                        -32003,
+                        &format!("message {raw_id} not found"),
+                        None,
+                    ),
+                    Err(e) => {
+                        warn!(error = %e, "kernel/proc/message-get failed");
+                        JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                    }
+                },
+                Err(_) => JsonRpcResponse::err(id, -32002, "invalid message UUID", None),
+            }
+        }
+
+        "kernel/proc/message-list" => {
+            let raw_id = params["session_id"].as_str().unwrap_or("");
+            match uuid::Uuid::parse_str(raw_id) {
+                Ok(uuid) => match proc_handler.list_messages(&uuid).await {
+                    Ok(messages) => JsonRpcResponse::ok(id, json!(messages)),
+                    Err(e) => {
+                        warn!(error = %e, "kernel/proc/message-list failed");
+                        JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                    }
+                },
+                Err(_) => JsonRpcResponse::err(id, -32002, "invalid session UUID", None),
+            }
+        }
+
+        // ── History: part operations ─────────────────────────────────────────
+
+        "kernel/proc/part-create" => {
+            let part_val = params.get("part").cloned().unwrap_or(serde_json::Value::Null);
+            match serde_json::from_value::<crate::history::record::PartRecord>(part_val) {
+                Ok(part) => match proc_handler.create_part(&part).await {
+                    Ok(()) => JsonRpcResponse::ok(id, json!({ "ok": true })),
+                    Err(e) => {
+                        warn!(error = %e, "kernel/proc/part-create failed");
+                        JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                    }
+                },
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/part-create: invalid part body");
+                    JsonRpcResponse::err(id, -32002, &format!("invalid part: {e}"), None)
+                }
+            }
+        }
+
+        "kernel/proc/part-get" => {
+            let raw_id = params["id"].as_str().unwrap_or("");
+            match uuid::Uuid::parse_str(raw_id) {
+                Ok(uuid) => match proc_handler.get_part(&uuid).await {
+                    Ok(Some(part)) => JsonRpcResponse::ok(id, json!(part)),
+                    Ok(None) => JsonRpcResponse::err(
+                        id,
+                        -32003,
+                        &format!("part {raw_id} not found"),
+                        None,
+                    ),
+                    Err(e) => {
+                        warn!(error = %e, "kernel/proc/part-get failed");
+                        JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                    }
+                },
+                Err(_) => JsonRpcResponse::err(id, -32002, "invalid part UUID", None),
+            }
+        }
+
+        "kernel/proc/part-list" => {
+            let raw_id = params["message_id"].as_str().unwrap_or("");
+            match uuid::Uuid::parse_str(raw_id) {
+                Ok(uuid) => match proc_handler.list_parts(&uuid).await {
+                    Ok(parts) => JsonRpcResponse::ok(id, json!(parts)),
+                    Err(e) => {
+                        warn!(error = %e, "kernel/proc/part-list failed");
+                        JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                    }
+                },
+                Err(_) => JsonRpcResponse::err(id, -32002, "invalid message UUID", None),
+            }
+        }
+
         // Session operations
         "kernel/proc/session/create" => {
             let username = params["username"].as_str().unwrap_or("");
             let origin_agent = params["origin_agent"].as_str().unwrap_or("agent");
             let title = params["title"].as_str().unwrap_or("New Session");
             let goal = params["goal"].as_str().unwrap_or("");
-            match proc_handler.create_session(username, origin_agent, title, goal).await {
-                Ok(record) => JsonRpcResponse::ok(id, json!({ "session_id": record.id.to_string() })),
+            match proc_handler
+                .create_session(username, origin_agent, title, goal)
+                .await
+            {
+                Ok(record) => {
+                    JsonRpcResponse::ok(id, json!({ "session_id": record.id.to_string() }))
+                }
                 Err(e) => {
                     warn!(error = %e, "kernel/proc/session/create failed");
                     JsonRpcResponse::err(id, -32000, &e.to_string(), None)
@@ -223,7 +359,12 @@ async fn dispatch_request(
             };
             match proc_handler.get_session(&uuid).await {
                 Ok(Some(session)) => JsonRpcResponse::ok(id, json!(session)),
-                Ok(None) => JsonRpcResponse::err(id, -32003, &format!("session {session_id} not found"), None),
+                Ok(None) => JsonRpcResponse::err(
+                    id,
+                    -32003,
+                    &format!("session {session_id} not found"),
+                    None,
+                ),
                 Err(e) => {
                     warn!(error = %e, "kernel/proc/session/get failed");
                     JsonRpcResponse::err(id, -32000, &e.to_string(), None)
@@ -250,14 +391,22 @@ async fn dispatch_request(
         "kernel/sys/service-list" => {
             debug!("handling kernel/sys/service-list");
             let response = proc_handler.list_services().await;
-            debug!(total = response.total, running = response.running, "service-list response");
+            debug!(
+                total = response.total,
+                running = response.running,
+                "service-list response"
+            );
             JsonRpcResponse::ok(id, serde_json::json!(response))
         }
 
         "kernel/sys/tool-list" => {
             debug!("handling kernel/sys/tool-list");
             let response = proc_handler.list_tools().await;
-            debug!(total = response.total, available = response.available, "tool-list response");
+            debug!(
+                total = response.total,
+                available = response.available,
+                "tool-list response"
+            );
             JsonRpcResponse::ok(id, serde_json::json!(response))
         }
 
