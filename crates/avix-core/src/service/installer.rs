@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::AvixError;
 use crate::service::install_receipt::InstallReceipt;
-use crate::service::unit::ServiceUnit;
+use crate::service::yaml::ServiceUnit;
 
 pub struct InstallRequest {
     /// `file:///absolute/path` or `https://…`
@@ -43,7 +43,7 @@ impl ServiceInstaller {
         let tmp_dir = tempfile::tempdir().map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         self.extract_tarball(&bytes, tmp_dir.path())?;
 
-        let unit = ServiceUnit::load(&tmp_dir.path().join("service.unit"))?;
+        let unit = ServiceUnit::load(&tmp_dir.path().join("service.yaml"))?;
 
         self.check_conflicts(&unit)?;
 
@@ -56,7 +56,7 @@ impl ServiceInstaller {
             source_url: Some(req.source.clone()),
             checksum: req.checksum.clone(),
             installed_at: chrono::Utc::now(),
-            service_unit_path: install_dir.join("service.unit").display().to_string(),
+            service_unit_path: install_dir.join("service.yaml").display().to_string(),
             binary_path: unit.service.binary.clone(),
         };
         let receipt_path = install_dir.join(".install.json");
@@ -157,7 +157,7 @@ impl ServiceInstaller {
                         .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
                 }
 
-                if stripped == Path::new("service.unit") {
+                if stripped == Path::new("service.yaml") {
                     found_unit = true;
                 }
             }
@@ -165,7 +165,7 @@ impl ServiceInstaller {
 
         if !found_unit {
             return Err(AvixError::ConfigParse(
-                "tarball missing required service.unit file".into(),
+                "tarball missing required service.yaml file".into(),
             ));
         }
         Ok(())
@@ -215,9 +215,9 @@ mod tests {
             let mut ar = tar::Builder::new(enc);
 
             let unit_content = format!(
-                "name = \"{name}\"\nversion = \"{version}\"\n\
-                 [unit]\n[service]\nbinary = \"/services/{name}/bin/{name}\"\n\
-                 [tools]\nnamespace = \"/tools/{name}/\"\n"
+                "name: {name}\nversion: {version}\n\
+                 unit:\n  description: test\nservice:\n  binary: /services/{name}/bin/{name}\n\
+                 tools:\n  namespace: /tools/{name}/\n"
             );
             let mut header = tar::Header::new_gnu();
             header.set_size(unit_content.len() as u64);
@@ -225,7 +225,7 @@ mod tests {
             header.set_cksum();
             ar.append_data(
                 &mut header,
-                format!("{name}-{version}/service.unit"),
+                format!("{name}-{version}/service.yaml"),
                 unit_content.as_bytes(),
             )
             .unwrap();
@@ -237,11 +237,11 @@ mod tests {
     }
 
     fn make_test_unit(name: &str) -> ServiceUnit {
-        use crate::service::unit::{ServiceSection, ToolsSection, UnitSection};
+        use crate::service::yaml::{ServiceSection, ToolsSection, UnitSection};
         ServiceUnit {
             name: name.into(),
             version: "1.0.0".into(),
-            source: crate::service::unit::ServiceSource::User,
+            source: crate::service::yaml::ServiceSource::User,
             signature: None,
             unit: UnitSection::default(),
             service: ServiceSection {
@@ -297,7 +297,7 @@ mod tests {
         let bytes = make_tarball("echo-svc", "1.0.0");
         let dest = TempDir::new().unwrap();
         installer.extract_tarball(&bytes, dest.path()).unwrap();
-        assert!(dest.path().join("service.unit").exists());
+        assert!(dest.path().join("service.yaml").exists());
     }
 
     #[test]
@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn extract_tarball_fails_on_missing_service_unit() {
         let installer = ServiceInstaller::new(PathBuf::from("/tmp"));
-        // Build a tarball with no service.unit
+        // Build a tarball with no service.yaml
         let mut buf = Vec::new();
         {
             let enc = flate2::write::GzEncoder::new(&mut buf, flate2::Compression::default());
@@ -368,7 +368,7 @@ mod tests {
 
         assert_eq!(result.name, "test-svc");
         assert_eq!(result.version, "1.0.0");
-        assert!(root.path().join("services/test-svc/service.unit").exists());
+        assert!(root.path().join("services/test-svc/service.yaml").exists());
         assert!(root.path().join("services/test-svc/.install.json").exists());
     }
 

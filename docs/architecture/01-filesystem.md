@@ -59,7 +59,7 @@ AVIX_ROOT/                 (e.g. ~/avix-data or /var/avix-data)
 ├── bin/                   → VFS /bin/
 ├── services/              → VFS /services/
 │   └── <svcname>/
-│       ├── service.unit
+│       ├── service.yaml
 │       ├── bin/
 │       ├── tools/
 │       ├── workspace/

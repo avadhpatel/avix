@@ -82,41 +82,45 @@ inference goes through `llm.svc` via IPC.
 
 ---
 
-## service.unit Format (TOML)
+## service.yaml Format (YAML)
 
-Every installed service ships a `service.unit` file at the root of its package. The
-parser lives at `crates/avix-core/src/service/unit.rs`.
+Every installed service ships a `service.yaml` file at the root of its package. The
+parser lives at `crates/avix-core/src/service/yaml.rs`.
 
-```toml
-name    = "github-svc"
-version = "1.2.0"
+```yaml
+name: github-svc
+version: 1.2.0
 
-[unit]
-description = "GitHub integration service"
-author      = "example.com/github-svc"
-after       = ["auth.svc", "memfs.svc"]
-requires    = ["auth.svc"]
+unit:
+  description: GitHub integration service
+  author: example.com/github-svc
+  after:
+    - auth.svc
+    - memfs.svc
+  requires:
+    - auth.svc
 
-[service]
-binary         = "/services/github-svc/bin/github-svc"
-language       = "rust"
-restart        = "on-failure"   # always | on-failure | never
-restart_delay  = "5s"           # parsed by parse_duration()
-max_concurrent = 20             # dispatcher concurrency limit
-queue_max      = 100
-queue_timeout  = "5s"
-run_as         = "service"      # service | user | root
+service:
+  binary: /services/github-svc/bin/github-svc
+  language: rust
+  restart: on-failure   # always | on-failure | never
+  restart_delay: 5s    # parsed by parse_duration()
+  max_concurrent: 20  # dispatcher concurrency limit
+  queue_max: 100
+  queue_timeout: 5s
+  run_as: service     # service | user | root
 
-[capabilities]
-caller_scoped = true            # inject _caller into every tool call
-host_access   = "network"       # none | network | filesystem | all
+capabilities:
+  caller_scoped: true            # inject _caller into every tool call
+  host_access:                   # none | network | filesystem | all
+    - network
 
-[tools]
-namespace = "/tools/github/"
-provides  = []                  # explicit tool list (empty = scan tools/ dir)
+tools:
+  namespace: /tools/github/
+  provides: []                  # explicit tool list (empty = scan tools/ dir)
 
-[jobs]
-enabled = false
+jobs:
+  enabled: false
 ```
 
 ### RestartPolicy values
@@ -242,7 +246,7 @@ every tool call's params. Implementation: `crates/avix-core/src/router/caller.rs
 
 ### How it works
 
-1. `service.unit` declares `caller_scoped = true` under `[capabilities]`
+1. `service.yaml` declares `caller_scoped: true` under `capabilities`
 2. At spawn, `ServiceManager` records `caller_scoped: true` on the `ServiceRecord`
 3. When the router dispatches a call, it checks
    `ServiceRegistry::is_caller_scoped(svc_name)` — set via `register_with_meta()`
@@ -299,7 +303,7 @@ Implementation: `crates/avix-core/src/service/installer.rs`.
 1. **Fetch** — `file://` path copy or `https://` URL download via `reqwest`
 2. **Verify checksum** — SHA-256, format `"sha256:<hex>"`; error on mismatch
 3. **Extract tarball** — strips top-level directory; sets `0o755` on `bin/` entries (Unix)
-4. **Validate manifest** — errors if no `service.unit` found in the tarball
+4. **Validate manifest** — errors if no `service.yaml` found in the tarball
 5. **Conflict check** — errors if `AVIX_ROOT/services/<name>/` already exists
 6. **Copy to install dir** — walks extracted tree with `walkdir`, copies all files
 7. **Write receipt** — writes `.install.json` (`InstallReceipt`) with name, version,

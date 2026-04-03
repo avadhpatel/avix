@@ -95,7 +95,7 @@ graph TB
 | cgroups           | Capability token scopes                                                      |
 | /proc             | `/proc/<pid>/status.yaml`, `/proc/<pid>/resolved.yaml`                       |
 | dmesg             | Panic ring buffer → `kernel/sys/boot-log`                                    |
-| systemd units     | `service.unit` and `agent.unit` files                                        |
+| systemd units     | `service.yaml` and `agent.yaml` files                                        |
 | /etc/passwd       | `/etc/avix/users.yaml`                                                       |
 | /etc/group        | `/etc/avix/crews.yaml`                                                       |
 | sudoers           | `/etc/avix/auth.conf` + `kernel/cap/policy`                                  |
@@ -184,7 +184,7 @@ These are hard rules. Violating any of them is a bug.
 | 04-atp.md | Avix Terminal Protocol, gateway bridge, event delivery chain |
 | 05-capabilities.md | CapabilityToken, HIL, role hierarchy, session model |
 | 06-agents.md | RuntimeExecutor, spawn, turn loop, ATP event emission |
-| 07-services.md | Service lifecycle, `service.unit` TOML, installation pipeline, `_caller` injection, restart watchdog, secrets |
+| 07-services.md | Service lifecycle, `service.yaml` YAML, installation pipeline, `_caller` injection, restart watchdog, secrets |
 | 08-llm-service.md | llm.svc multi-modality, provider routing, streaming (`llm/stream_complete`) |
 | 09-runtime-executor-tools.md | Tool categories, 7-step turn loop, HIL scenarios |
 | 13-streaming.md | End-to-end LLM streaming: SSE parsing, IPC notification protocol, `StreamChunk`, `agent.output.chunk` ATP events, TUI integration |

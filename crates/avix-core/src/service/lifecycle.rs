@@ -7,7 +7,7 @@ use uuid::Uuid;
 use serde::Deserialize;
 
 use super::token::ServiceToken;
-use super::unit::ServiceUnit;
+use super::yaml::ServiceUnit;
 use crate::error::AvixError;
 use crate::gateway::event_bus::AtpEventBus;
 use crate::tool_registry::descriptor::ToolVisibilitySpec;
@@ -31,7 +31,7 @@ pub struct ServiceSpawnRequest {
     pub binary: String,
     /// Whether the service requires `_caller` injection on every tool call.
     pub caller_scoped: bool,
-    /// Max concurrent in-flight calls (from `service.unit`).
+    /// Max concurrent in-flight calls (from `service.yaml`).
     pub max_concurrent: u32,
 }
 
@@ -49,7 +49,7 @@ impl ServiceSpawnRequest {
 
 impl ServiceSpawnRequest {
     /// Convenience constructor: fill from a parsed `ServiceUnit`.
-    pub fn from_unit(unit: &super::unit::ServiceUnit) -> Self {
+    pub fn from_unit(unit: &super::yaml::ServiceUnit) -> Self {
         Self {
             name: unit.name.clone(),
             binary: unit.service.binary.clone(),
@@ -165,7 +165,10 @@ impl ServiceManager {
             caller_scoped: req.caller_scoped,
         };
         self.services.write().await.insert(req.name.clone(), record);
-        self.token_to_svc.write().await.insert(token_str, req.name.clone());
+        self.token_to_svc
+            .write()
+            .await
+            .insert(token_str, req.name.clone());
         let _ = self.events.send(ServiceEvent {
             service: req.name,
             status: "starting".to_string(),
@@ -266,7 +269,7 @@ impl ServiceManager {
         Ok(env)
     }
 
-    /// Scan `root/services/` for installed `service.unit` files.
+    /// Scan `root/services/` for installed `service.yaml` files.
     pub fn discover_installed(root: &Path) -> Result<Vec<ServiceUnit>, AvixError> {
         let services_dir = root.join("services");
         if !services_dir.exists() {
@@ -277,7 +280,7 @@ impl ServiceManager {
             std::fs::read_dir(&services_dir).map_err(|e| AvixError::ConfigParse(e.to_string()))?
         {
             let entry = entry.map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-            let unit_path = entry.path().join("service.unit");
+            let unit_path = entry.path().join("service.yaml");
             if unit_path.exists() {
                 units.push(ServiceUnit::load(&unit_path)?);
             }
@@ -324,10 +327,15 @@ impl ServiceManager {
                 .tools
                 .into_iter()
                 .filter_map(|spec| {
-                    let caps = spec.descriptor
+                    let caps = spec
+                        .descriptor
                         .get("capabilities_required")
                         .and_then(|v| v.as_array())
-                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
                         .unwrap_or_default();
                     ToolName::parse(&spec.name).ok().map(|name| {
                         ToolEntry::new(
@@ -336,7 +344,8 @@ impl ServiceManager {
                             ToolState::Available,
                             visibility_from_spec(spec.visibility),
                             spec.descriptor,
-                        ).with_capabilities(caps)
+                        )
+                        .with_capabilities(caps)
                     })
                 })
                 .collect();
@@ -403,13 +412,16 @@ mod tests {
     fn minimal_unit_toml(name: &str) -> String {
         format!(
             r#"
-name    = "{name}"
-version = "1.0.0"
-[unit]
-[service]
-binary = "/bin/{name}"
-[tools]
-namespace = "/tools/{name}/"
+name: {name}
+version: 1.0.0
+
+unit:
+
+service:
+  binary: /bin/{name}
+
+tools:
+  namespace: /tools/{name}/
 "#
         )
     }
@@ -419,7 +431,7 @@ namespace = "/tools/{name}/"
         let dir = TempDir::new().unwrap();
         let svc_dir = dir.path().join("services").join("my-svc");
         std::fs::create_dir_all(&svc_dir).unwrap();
-        std::fs::write(svc_dir.join("service.unit"), minimal_unit_toml("my-svc")).unwrap();
+        std::fs::write(svc_dir.join("service.yaml"), minimal_unit_toml("my-svc")).unwrap();
         let units = ServiceManager::discover_installed(dir.path()).unwrap();
         assert_eq!(units.len(), 1);
         assert_eq!(units[0].name, "my-svc");
@@ -446,7 +458,7 @@ namespace = "/tools/{name}/"
         for name in ["svc-a", "svc-b", "svc-c"] {
             let svc_dir = dir.path().join("services").join(name);
             std::fs::create_dir_all(&svc_dir).unwrap();
-            std::fs::write(svc_dir.join("service.unit"), minimal_unit_toml(name)).unwrap();
+            std::fs::write(svc_dir.join("service.yaml"), minimal_unit_toml(name)).unwrap();
         }
         let mut units = ServiceManager::discover_installed(dir.path()).unwrap();
         units.sort_by(|a, b| a.name.cmp(&b.name));
@@ -669,6 +681,9 @@ namespace = "/tools/{name}/"
             .expect("event should be received")
             .expect("event should be ok");
 
-        assert_eq!(ev.event.event, crate::gateway::atp::types::AtpEventKind::SysService);
+        assert_eq!(
+            ev.event.event,
+            crate::gateway::atp::types::AtpEventKind::SysService
+        );
     }
 }

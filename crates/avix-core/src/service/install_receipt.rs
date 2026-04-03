@@ -25,7 +25,7 @@ mod tests {
             installed_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
                 .unwrap()
                 .into(),
-            service_unit_path: "/services/github-svc/service.unit".to_string(),
+            service_unit_path: "/services/github-svc/service.yaml".to_string(),
             binary_path: "/services/github-svc/bin/github-svc".to_string(),
         };
         let json = serde_json::to_string(&receipt).unwrap();
@@ -44,7 +44,7 @@ mod tests {
             source_url: None,
             checksum: None,
             installed_at: chrono::Utc::now(),
-            service_unit_path: "/services/min-svc/service.unit".to_string(),
+            service_unit_path: "/services/min-svc/service.yaml".to_string(),
             binary_path: "/services/min-svc/bin/min-svc".to_string(),
         };
         let json = serde_json::to_string(&receipt).unwrap();

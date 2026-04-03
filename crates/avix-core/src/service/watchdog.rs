@@ -8,7 +8,7 @@ use tracing::{info, warn};
 
 use crate::service::lifecycle::ServiceManager;
 use crate::service::process::ServiceProcess;
-use crate::service::unit::{RestartPolicy, ServiceUnit};
+use crate::service::yaml::{parse_duration, RestartPolicy, ServiceUnit};
 
 pub struct WatchdogEntry {
     pub unit: ServiceUnit,
@@ -109,8 +109,7 @@ async fn check_and_restart(
             continue;
         }
 
-        let delay =
-            crate::service::unit::parse_duration(&delay_str).unwrap_or(Duration::from_secs(5));
+        let delay = parse_duration(&delay_str).unwrap_or(Duration::from_secs(5));
         warn!(service = %name, delay = ?delay, "service exited — restarting");
         tokio::time::sleep(delay).await;
 

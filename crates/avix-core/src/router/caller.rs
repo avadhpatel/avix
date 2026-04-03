@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Injected into tool call params when `caller_scoped: true` in service.unit.
+/// Injected into tool call params when `caller_scoped: true` in service.yaml.
 /// Available to the service as `params._caller`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CallerInfo {

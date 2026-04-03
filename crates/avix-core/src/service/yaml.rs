@@ -4,10 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AvixError;
 
-/// Top-level `service.unit` file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ServiceUnit {
-    // ── Identity ──────────────────────────────────────────────────────────
     pub name: String,
     pub version: String,
     #[serde(default = "default_source")]
@@ -29,17 +27,15 @@ fn default_source() -> ServiceSource {
 }
 
 impl ServiceUnit {
-    /// Load and parse a `service.unit` file from `path`.
     pub fn load(path: &Path) -> Result<Self, AvixError> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| AvixError::ConfigParse(format!("cannot read {}: {e}", path.display())))?;
-        toml::from_str(&content)
-            .map_err(|e| AvixError::ConfigParse(format!("service.unit parse error: {e}")))
+        serde_yaml::from_str(&content)
+            .map_err(|e| AvixError::ConfigParse(format!("service.yaml parse error: {e}")))
     }
 
-    /// Load from `AVIX_ROOT/services/<name>/service.unit`.
     pub fn load_for_service(root: &Path, name: &str) -> Result<Self, AvixError> {
-        Self::load(&root.join("services").join(name).join("service.unit"))
+        Self::load(&root.join("services").join(name).join("service.yaml"))
     }
 }
 
@@ -51,19 +47,17 @@ pub enum ServiceSource {
     User,
 }
 
-// ── [unit] ────────────────────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct UnitSection {
     #[serde(default)]
     pub description: String,
     #[serde(default)]
+    pub author: String,
+    #[serde(default)]
     pub requires: Vec<String>,
     #[serde(default)]
     pub after: Vec<String>,
 }
-
-// ── [service] ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ServiceSection {
@@ -73,13 +67,13 @@ pub struct ServiceSection {
     #[serde(default)]
     pub restart: RestartPolicy,
     #[serde(default = "default_restart_delay")]
-    pub restart_delay: String, // e.g. "5s" — parsed to Duration by callers
+    pub restart_delay: String,
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: u32,
     #[serde(default = "default_queue_max")]
     pub queue_max: u32,
     #[serde(default = "default_queue_timeout")]
-    pub queue_timeout: String, // e.g. "5s"
+    pub queue_timeout: String,
     #[serde(default)]
     pub run_as: RunAs,
 }
@@ -114,12 +108,9 @@ pub enum RestartPolicy {
 pub enum RunAs {
     #[default]
     Service,
-    // "user:<username>" — parsed as a special case
     #[serde(other)]
     User,
 }
-
-// ── [capabilities] ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct CapabilitiesSection {
@@ -133,11 +124,6 @@ pub struct CapabilitiesSection {
     pub caller_scoped: bool,
 }
 
-/// Host access grant. Serialises/deserialises as a plain string:
-/// - `"network"`
-/// - `"filesystem:<path>"`
-/// - `"socket:<path>"`
-/// - `"env:<VAR>"`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostAccess {
     Network,
@@ -179,16 +165,12 @@ impl<'de> Deserialize<'de> for HostAccess {
     }
 }
 
-// ── [tools] ───────────────────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolsSection {
     pub namespace: String,
     #[serde(default)]
     pub provides: Vec<String>,
 }
-
-// ── [jobs] ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct JobsSection {
@@ -207,9 +189,6 @@ fn default_job_timeout() -> String {
     "3600s".into()
 }
 
-// ── Duration helper ───────────────────────────────────────────────────────────
-
-/// Parse a duration string like `"5s"`, `"60s"`, `"1m"` into [`std::time::Duration`].
 pub fn parse_duration(s: &str) -> Result<std::time::Duration, AvixError> {
     if let Some(n) = s.strip_suffix('s') {
         let secs: u64 = n
@@ -228,15 +207,13 @@ pub fn parse_duration(s: &str) -> Result<std::time::Duration, AvixError> {
     )))
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
 
     fn write_unit(dir: &TempDir, content: &str) -> std::path::PathBuf {
-        let path = dir.path().join("service.unit");
+        let path = dir.path().join("service.yaml");
         std::fs::write(&path, content).unwrap();
         path
     }
@@ -247,18 +224,20 @@ mod tests {
         let path = write_unit(
             &dir,
             r#"
-name    = "github-svc"
-version = "1.0.0"
+name: github-svc
+version: 1.0.0
 
-[unit]
-description = "GitHub integration"
+unit:
+  description: GitHub integration
 
-[service]
-binary = "/services/github-svc/bin/github-svc"
+service:
+  binary: /services/github-svc/bin/github-svc
 
-[tools]
-namespace = "/tools/github/"
-provides  = ["list-prs", "create-issue"]
+tools:
+  namespace: /tools/github/
+  provides:
+    - list-prs
+    - create-issue
 "#,
         );
         let unit = ServiceUnit::load(&path).unwrap();
@@ -275,13 +254,14 @@ provides  = ["list-prs", "create-issue"]
         let path = write_unit(
             &dir,
             r#"
-name    = "min-svc"
-version = "0.1.0"
-[unit]
-[service]
-binary = "/bin/min-svc"
-[tools]
-namespace = "/tools/min/"
+name: min-svc
+version: 0.1.0
+
+service:
+  binary: /bin/min-svc
+
+tools:
+  namespace: /tools/min/
 "#,
         );
         let unit = ServiceUnit::load(&path).unwrap();
@@ -298,17 +278,21 @@ namespace = "/tools/min/"
         let path = write_unit(
             &dir,
             r#"
-name    = "multi-svc"
-version = "1.0.0"
-[unit]
-[service]
-binary = "/bin/multi-svc"
-[capabilities]
-caller_scoped = true
-required = ["fs:read"]
-host_access = ["network"]
-[tools]
-namespace = "/tools/multi/"
+name: multi-svc
+version: 1.0.0
+
+service:
+  binary: /bin/multi-svc
+
+capabilities:
+  caller_scoped: true
+  required:
+    - fs:read
+  host_access:
+    - network
+
+tools:
+  namespace: /tools/multi/
 "#,
         );
         let unit = ServiceUnit::load(&path).unwrap();
@@ -331,7 +315,7 @@ namespace = "/tools/multi/"
             ("always", RestartPolicy::Always),
             ("never", RestartPolicy::Never),
         ] {
-            let w: W = toml::from_str(&format!("restart = \"{s}\"")).unwrap();
+            let w: W = serde_yaml::from_str(&format!("restart: {s}")).unwrap();
             assert_eq!(w.restart, expected);
         }
     }
@@ -339,16 +323,14 @@ namespace = "/tools/multi/"
     #[test]
     fn missing_binary_errors() {
         let dir = TempDir::new().unwrap();
-        // Intentionally malformed TOML — binary field is missing
         let path = write_unit(
             &dir,
             r#"
-name = "bad"
-version = "1.0.0"
-[unit]
-[service]
-[tools]
-namespace = "/tools/bad/"
+name: bad
+version: 1.0.0
+
+tools:
+  namespace: /tools/bad/
 "#,
         );
         assert!(ServiceUnit::load(&path).is_err());
@@ -360,15 +342,16 @@ namespace = "/tools/bad/"
         let svc_dir = dir.path().join("services").join("my-svc");
         std::fs::create_dir_all(&svc_dir).unwrap();
         let content = r#"
-name = "my-svc"
-version = "1.0.0"
-[unit]
-[service]
-binary = "/bin/my-svc"
-[tools]
-namespace = "/tools/my/"
+name: my-svc
+version: 1.0.0
+
+service:
+  binary: /bin/my-svc
+
+tools:
+  namespace: /tools/my/
 "#;
-        std::fs::write(svc_dir.join("service.unit"), content).unwrap();
+        std::fs::write(svc_dir.join("service.yaml"), content).unwrap();
         let unit = ServiceUnit::load_for_service(dir.path(), "my-svc").unwrap();
         assert_eq!(unit.name, "my-svc");
     }

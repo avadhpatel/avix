@@ -29,7 +29,7 @@ deterministic software. The capability token system is the trust boundary.
 **Authoritative references** (read these before implementing any subsystem):
 
 - `docs/architecture/` — all architecture docs (00–09)
-- `docs/architecture/07-services.md` — service lifecycle, `service.unit` TOML, installation, `_caller` injection, watchdog, secrets
+- `docs/architecture/07-services.md` — service lifecycle, `service.yaml` YAML, installation, `_caller` injection, watchdog, secrets
 - `docs/architecture/08-llm-service.md` — llm.svc multi-modality spec
 - `docs/architecture/09-runtime-executor-tools.md` — RuntimeExecutor tool exposure model
 
@@ -288,7 +288,7 @@ a running system is `avix config init` → `avix start`.
 | Holding `AVIX_MASTER_KEY` after Phase 2 | Zero the env var immediately after reading |
 | Registering Category 2 tools in a service | Register them in `RuntimeExecutor` at spawn |
 | Calling LLM from kernel code | Kernel calls are deterministic; LLM is stateless |
-| Writing `service.unit` as YAML | `service.unit` uses **TOML** format — see `docs/architecture/07-services.md` |
+| Writing `service.yaml` | `service.yaml` uses **YAML** format — see `docs/architecture/07-services.md` |
 | Constructing `ServiceSpawnRequest { name, binary }` literals | Use `ServiceSpawnRequest::simple(name, binary)` or `ServiceSpawnRequest::from_unit(&unit)` |
 | Injecting `_caller` unconditionally | Only inject when `ServiceRegistry::is_caller_scoped(svc)` returns true |
 | Writing invocation records via VFS | Use `LocalProvider` directly (kernel is trusted) — VFS ACL layer would block it |

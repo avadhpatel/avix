@@ -336,7 +336,7 @@ The router injects `_caller` into every tool call forwarded to a service:
 }
 ```
 
-Services that serve multiple users declare `caller_scoped: true` in `service.unit` and use
+Services that serve multiple users declare `caller_scoped: true` in `service.yaml` and use
 `_caller.user` to scope per-user behavior (e.g., resolve the correct credential from
 `/secrets/alice/`). The kernel enforces tool ACLs before the call reaches the service —
 unauthorized calls never arrive.
@@ -369,13 +369,13 @@ All other IPC — router calls, service-to-service — uses the canonical `/` fo
 
 ## Concurrency and Backpressure
 
-Services declare capacity in `service.unit`:
+Services declare capacity in `service.yaml`:
 
 ```yaml
-[service]
-max_concurrent: 20    # router queues calls beyond this
-queue_max:      100   # calls beyond this get EBUSY immediately
-queue_timeout:  5s    # queued call timeout before ETIMEOUT
+service:
+  max_concurrent: 20    # router queues calls beyond this
+  queue_max:      100   # calls beyond this get EBUSY immediately
+  queue_timeout:  5s    # queued call timeout before ETIMEOUT
 ```
 
 ---

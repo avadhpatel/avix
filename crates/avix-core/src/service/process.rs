@@ -4,7 +4,7 @@ use tokio::process::{Child, Command};
 
 use crate::error::AvixError;
 use crate::service::token::ServiceToken;
-use crate::service::unit::ServiceUnit;
+use crate::service::yaml::ServiceUnit;
 use crate::types::Pid;
 
 pub struct ServiceProcess {
@@ -87,11 +87,11 @@ mod tests {
     use super::*;
 
     fn make_test_unit(name: &str) -> ServiceUnit {
-        use crate::service::unit::{ServiceSection, ToolsSection, UnitSection};
+        use crate::service::yaml::{ServiceSection, ToolsSection, UnitSection};
         ServiceUnit {
             name: name.into(),
             version: "1.0.0".into(),
-            source: crate::service::unit::ServiceSource::User,
+            source: crate::service::yaml::ServiceSource::User,
             signature: None,
             unit: UnitSection::default(),
             service: ServiceSection {

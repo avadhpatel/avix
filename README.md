@@ -232,7 +232,7 @@ avix service install ./github-svc-1.2.0.tar.gz --checksum sha256:abc123
 avix service install https://pkg.avix.dev/github-svc-1.2.0.tar.gz
 
 # Manage running services
-avix service list                         # offline — reads service.unit files
+avix service list                         # offline — reads service.yaml files
 avix service status github-svc            # reads /proc/services/<name>/status.yaml
 avix service start   github-svc
 avix service stop    github-svc

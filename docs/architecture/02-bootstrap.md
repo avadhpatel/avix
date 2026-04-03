@@ -211,7 +211,7 @@ Ring-2 (built-in, checksum-verified):
   9. shell.svc         (if shell=true)
 
 Ring-3 (installed services — signature-verified):
-  10. Read /services/*/service.unit
+  10. Read /services/*/service.yaml
       Sort by [after:] dependency order
       Spawn each as host OS process
       kernel/ipc/register each
