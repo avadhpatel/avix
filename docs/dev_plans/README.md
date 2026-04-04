@@ -21,6 +21,7 @@ Implement in order A → D.
 | `pkg-gap-B-cli-commands.md` | `avix agent install` + `avix service install` CLI commands, live progress streaming, git clone fallback, `--dry-run` | **High** | A |
 | `pkg-gap-C-tui-webui-github-actions.md` | TUI `:install` command mode, Web-UI Extensions tab (Browse/Installed/URL), GitHub Actions `.tar.xz` packaging workflow | **Medium** | A, B |
 | `pkg-gap-D-gpg-rollback-polish.md` | GPG signature verification for official packages, atomic install with rollback, per-user install quota, `uninstall` commands | **Low** | A, B, C |
+| `pkg-gap-E-authoring-tooling.md` | `PackageValidator`, `PackageBuilder` (xz archive + checksums), `PackageScaffold`; `avix package validate/build/new` CLI commands; repo directory conventions (`agents/packs/`, `services/`) | **High** | — |
 
 **Status:** Draft — implementation not yet started
 
