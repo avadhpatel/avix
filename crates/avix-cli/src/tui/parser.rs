@@ -45,6 +45,26 @@ pub fn parse(input: &str) -> Result<ParsedCommand, String> {
                     })
                 }
             }
+            "install" => {
+                let target = &parts[1];
+                let source = &parts[2];
+                if source.is_empty() {
+                    Err("install requires a source".to_string())
+                } else {
+                    match target.as_str() {
+                        "agent" => Ok(ParsedCommand::InstallAgent {
+                            source: source.clone(),
+                        }),
+                        "service" => Ok(ParsedCommand::InstallService {
+                            source: source.clone(),
+                        }),
+                        _ => Err(format!(
+                            "Unknown install target: {}. Use 'agent' or 'service'",
+                            target
+                        )),
+                    }
+                }
+            }
             _ => Err(format!("Unknown command: {}", trimmed)),
         },
         _ => Err(format!("Unknown command: {}", trimmed)),
@@ -146,6 +166,37 @@ mod tests {
     #[test]
     fn parse_kill() {
         assert_eq!(parse("/kill 123"), Ok(ParsedCommand::Kill { pid: 123 }));
+    }
+
+    #[test]
+    fn parse_install_agent() {
+        assert_eq!(
+            parse("/install agent universal-tool-explorer"),
+            Ok(ParsedCommand::InstallAgent {
+                source: "universal-tool-explorer".to_string(),
+            })
+        );
+        assert_eq!(
+            parse("/install agent https://example.com/agent.tar.xz"),
+            Ok(ParsedCommand::InstallAgent {
+                source: "https://example.com/agent.tar.xz".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_install_service() {
+        assert_eq!(
+            parse("/install service workspace"),
+            Ok(ParsedCommand::InstallService {
+                source: "workspace".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_install_invalid_target() {
+        assert!(parse("/install foo bar").is_err());
     }
 
     #[test]

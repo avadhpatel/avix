@@ -1,6 +1,6 @@
 # pkg-gap-C — TUI, Web-UI & GitHub Actions Workflow
 
-> **Status:** Pending
+> **Status:** Completed
 > **Priority:** Medium
 > **Depends on:** pkg-gap-A (syscalls), pkg-gap-B (CLI ATP wiring)
 > **Blocks:** pkg-gap-D (polish)

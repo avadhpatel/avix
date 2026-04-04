@@ -1,0 +1,91 @@
+name: Package & Release Avix Extensions
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  package-agents:
+    name: Package agent ${{ matrix.agent }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        agent:
+          - universal-tool-explorer
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate manifest
+        run: |
+          if [ ! -f "agents/packs/${{ matrix.agent }}/manifest.yaml" ]; then
+            echo "ERROR: missing manifest.yaml for ${{ matrix.agent }}"
+            exit 1
+          fi
+
+      - name: Build archive
+        run: |
+          cd agents/packs/${{ matrix.agent }}
+          VERSION=${{ github.ref_name }}
+          ARCHIVE="${{ matrix.agent }}-${VERSION}.tar.xz"
+          tar -cJf "../../${ARCHIVE}" .
+          cd ../..
+          sha256sum "${ARCHIVE}" >> checksums.sha256
+          echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.ARCHIVE }}
+            checksums.sha256
+
+  package-services:
+    name: Package service ${{ matrix.service.name }} (${{ matrix.service.target }})
+    runs-on: ${{ matrix.service.runner }}
+    strategy:
+      matrix:
+        service:
+          - { name: workspace, target: x86_64-unknown-linux-gnu, runner: ubuntu-latest }
+          - { name: workspace, target: aarch64-unknown-linux-gnu, runner: ubuntu-latest }
+          - { name: workspace, target: x86_64-apple-darwin, runner: macos-latest }
+          - { name: workspace, target: aarch64-apple-darwin, runner: macos-latest }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.service.target }}
+
+      - name: Install cross-compilation tools (Linux)
+        if: matrix.service.runner == 'ubuntu-latest' && matrix.service.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build service binary
+        run: |
+          cargo build --release --target ${{ matrix.service.target }} \
+            --manifest-path services/${{ matrix.service.name }}/Cargo.toml
+          mkdir -p build/package/bin
+          cp target/${{ matrix.service.target }}/release/${{ matrix.service.name }} \
+             build/package/bin/
+
+      - name: Assemble package
+        run: |
+          cp -r services/${{ matrix.service.name }}/. build/package/ 2>/dev/null || true
+          rm -rf build/package/target build/package/Cargo.toml build/package/src
+          cd build/package
+          VERSION=${{ github.ref_name }}
+          OS=$(echo "${{ matrix.service.target }}" | cut -d- -f3)
+          ARCH=$(echo "${{ matrix.service.target }}" | cut -d- -f1)
+          ARCHIVE="${{ matrix.service.name }}-${VERSION}-${OS}-${ARCH}.tar.xz"
+          tar -cJf "../../${ARCHIVE}" .
+          cd ../..
+          sha256sum "${ARCHIVE}" >> checksums.sha256
+          echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.ARCHIVE }}
+            checksums.sha256

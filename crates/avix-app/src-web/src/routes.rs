@@ -294,6 +294,102 @@ pub async fn invoke_handler(
             ))
         }
 
+        "install_agent" => {
+            let source = req.args["source"]
+                .as_str()
+                .ok_or_else(|| bad_request("missing source"))?
+                .to_string();
+            let scope = req.args["scope"]
+                .as_str()
+                .unwrap_or("user")
+                .to_string();
+            let version = req.args["version"].as_str().map(str::to_string);
+            let checksum = req.args["checksum"].as_str().map(str::to_string);
+            let no_verify = req.args["no_verify"].as_bool().unwrap_or(false);
+            let session_id = req.args["session_id"].as_str().map(str::to_string);
+            let dispatcher = s
+                .dispatcher
+                .as_ref()
+                .ok_or_else(|| bad_request("not connected"))?
+                .clone();
+            let body = serde_json::json!({
+                "source": source,
+                "scope": scope,
+                "version": version.unwrap_or_else(|| "latest".to_string()),
+                "checksum": checksum,
+                "no_verify": no_verify,
+                "session_id": session_id,
+            });
+            drop(s);
+            let mut cmd = avix_client_core::atp::types::Cmd::new(
+                "proc",
+                "package/install-agent",
+                "",
+                body,
+            );
+            cmd.token = dispatcher.token.clone();
+            dispatcher
+                .call(&cmd)
+                .await
+                .map_err(|e| internal(format!("{e:?}")))?;
+            Ok(Json(Value::Null))
+        }
+
+        "install_service" => {
+            let source = req.args["source"]
+                .as_str()
+                .ok_or_else(|| bad_request("missing source"))?
+                .to_string();
+            let scope = req.args["scope"]
+                .as_str()
+                .unwrap_or("system")
+                .to_string();
+            let version = req.args["version"].as_str().map(str::to_string);
+            let checksum = req.args["checksum"].as_str().map(str::to_string);
+            let no_verify = req.args["no_verify"].as_bool().unwrap_or(false);
+            let session_id = req.args["session_id"].as_str().map(str::to_string);
+            let dispatcher = s
+                .dispatcher
+                .as_ref()
+                .ok_or_else(|| bad_request("not connected"))?
+                .clone();
+            let body = serde_json::json!({
+                "source": source,
+                "scope": scope,
+                "version": version.unwrap_or_else(|| "latest".to_string()),
+                "checksum": checksum,
+                "no_verify": no_verify,
+                "session_id": session_id,
+            });
+            drop(s);
+            let mut cmd = avix_client_core::atp::types::Cmd::new(
+                "proc",
+                "package/install-service",
+                "",
+                body,
+            );
+            cmd.token = dispatcher.token.clone();
+            dispatcher
+                .call(&cmd)
+                .await
+                .map_err(|e| internal(format!("{e:?}")))?;
+            Ok(Json(Value::Null))
+        }
+
+        "list_installed_agents" => {
+            let dispatcher = s
+                .dispatcher
+                .as_ref()
+                .ok_or_else(|| bad_request("not connected"))?
+                .clone();
+            drop(s);
+            let agents = core_list_installed(&dispatcher, "default")
+                .await
+                .map_err(|e| internal(format!("{e:?}")))?;
+            let json_str = serde_json::to_string(&agents).map_err(|e| internal(e.to_string()))?;
+            Ok(Json(Value::String(json_str)))
+        }
+
         other => {
             warn!("Unknown invoke command: {other}");
             Err((StatusCode::NOT_FOUND, format!("unknown command: {other}")))

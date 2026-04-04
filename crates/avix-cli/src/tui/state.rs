@@ -60,6 +60,23 @@ impl EventLog {
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
+pub enum InstallState {
+    #[default]
+    Idle,
+    InProgress {
+        name: String,
+        progress: Vec<String>,
+    },
+    Done {
+        name: String,
+    },
+    Failed {
+        name: String,
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum TuiTab {
     #[default]
     Running,
@@ -85,6 +102,12 @@ pub enum ParsedCommand {
     #[allow(dead_code)]
     Invalid(String),
     Catalog,
+    InstallAgent {
+        source: String,
+    },
+    InstallService {
+        source: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +140,7 @@ pub struct TuiState {
     pub active_tab: TuiTab,
     pub catalog: Vec<AgentManifestSummary>,
     pub catalog_widget: CatalogWidget,
+    pub install: InstallState,
 }
 
 impl Default for TuiState {
@@ -148,6 +172,7 @@ impl Default for TuiState {
             active_tab: TuiTab::Running,
             catalog: Vec::new(),
             catalog_widget: CatalogWidget::default(),
+            install: InstallState::default(),
         }
     }
 }
@@ -194,6 +219,13 @@ pub enum Action {
     CloseHelpModal,
     UpdateCatalog(Vec<AgentManifestSummary>),
     SwitchTab(TuiTab),
+    InstallStart {
+        name: String,
+    },
+    InstallProgress(String),
+    InstallComplete(String),
+    InstallError(String),
+    DismissInstall,
 }
 
 impl TuiState {
@@ -317,6 +349,33 @@ impl TuiState {
             Action::SwitchTab(tab) => {
                 self.active_tab = tab;
             }
+            Action::InstallStart { name } => {
+                self.install = InstallState::InProgress {
+                    name,
+                    progress: vec![],
+                };
+            }
+            Action::InstallProgress(msg) => {
+                if let InstallState::InProgress {
+                    ref mut progress, ..
+                } = self.install
+                {
+                    progress.push(msg);
+                }
+            }
+            Action::InstallComplete(name) => {
+                self.install = InstallState::Done { name };
+            }
+            Action::InstallError(error) => {
+                let name = match &self.install {
+                    InstallState::InProgress { name, .. } => name.clone(),
+                    _ => "unknown".to_string(),
+                };
+                self.install = InstallState::Failed { name, error };
+            }
+            Action::DismissInstall => {
+                self.install = InstallState::Idle;
+            }
         }
     }
 }
@@ -406,6 +465,7 @@ mod tests {
             active_tab: TuiTab::Running,
             catalog: Vec::new(),
             catalog_widget: CatalogWidget::default(),
+            install: InstallState::default(),
         };
         state.reducer(Action::Disconnect);
         assert!(!state.connected);
@@ -668,5 +728,80 @@ mod tests {
         // ParsedCommand::Catalog variant exists and matches
         let cmd = ParsedCommand::Catalog;
         assert_eq!(cmd, ParsedCommand::Catalog);
+    }
+
+    #[test]
+    fn install_start_sets_in_progress_state() {
+        let mut state = TuiState::default();
+        state.reducer(Action::InstallStart {
+            name: "test-agent".to_string(),
+        });
+        match &state.install {
+            InstallState::InProgress { name, progress } => {
+                assert_eq!(name, "test-agent");
+                assert!(progress.is_empty());
+            }
+            _ => panic!("Expected InProgress state"),
+        }
+    }
+
+    #[test]
+    fn install_progress_appends_log() {
+        let mut state = TuiState::default();
+        state.reducer(Action::InstallStart {
+            name: "test-agent".to_string(),
+        });
+        state.reducer(Action::InstallProgress("Downloading...".to_string()));
+        state.reducer(Action::InstallProgress("Extracting...".to_string()));
+        match &state.install {
+            InstallState::InProgress { name, progress } => {
+                assert_eq!(name, "test-agent");
+                assert_eq!(progress.len(), 2);
+                assert_eq!(progress[0], "Downloading...");
+                assert_eq!(progress[1], "Extracting...");
+            }
+            _ => panic!("Expected InProgress state"),
+        }
+    }
+
+    #[test]
+    fn install_complete_transitions_to_done() {
+        let mut state = TuiState::default();
+        state.reducer(Action::InstallStart {
+            name: "test-agent".to_string(),
+        });
+        state.reducer(Action::InstallComplete("test-agent".to_string()));
+        match &state.install {
+            InstallState::Done { name } => {
+                assert_eq!(name, "test-agent");
+            }
+            _ => panic!("Expected Done state"),
+        }
+    }
+
+    #[test]
+    fn install_error_transitions_to_failed() {
+        let mut state = TuiState::default();
+        state.reducer(Action::InstallStart {
+            name: "test-agent".to_string(),
+        });
+        state.reducer(Action::InstallError("Download failed".to_string()));
+        match &state.install {
+            InstallState::Failed { name, error } => {
+                assert_eq!(name, "test-agent");
+                assert_eq!(error, "Download failed");
+            }
+            _ => panic!("Expected Failed state"),
+        }
+    }
+
+    #[test]
+    fn dismiss_install_clears_state() {
+        let mut state = TuiState::default();
+        state.reducer(Action::InstallStart {
+            name: "test-agent".to_string(),
+        });
+        state.reducer(Action::DismissInstall);
+        assert!(matches!(state.install, InstallState::Idle));
     }
 }

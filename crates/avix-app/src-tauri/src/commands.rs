@@ -17,6 +17,16 @@ pub struct SpawnAgentRequest {
     pub description: String,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct InstallRequest {
+    pub source: String,
+    pub scope: String,
+    pub version: Option<String>,
+    pub checksum: Option<String>,
+    pub no_verify: bool,
+    pub session_id: Option<String>,
+}
+
 #[tauri::command]
 pub async fn spawn_agent(
     state: State<'_, SharedState>,
@@ -257,4 +267,93 @@ pub async fn save_layout(state: State<'_, SharedState>, layout_json: String) -> 
         &layout_json,
     )
     .map_err(|e| format!("Failed to save layout: {:?}", e))
+}
+
+#[tauri::command]
+pub async fn install_agent(
+    state: State<'_, SharedState>,
+    request: InstallRequest,
+) -> Result<String, String> {
+    let s = state.read().await;
+    if let Some(dispatcher) = &s.dispatcher {
+        if let Some(_session) = s.connection_status.session_id() {
+            let body = serde_json::json!({
+                "source": request.source,
+                "scope": request.scope,
+                "version": request.version.unwrap_or_else(|| "latest".to_string()),
+                "checksum": request.checksum,
+                "no_verify": request.no_verify,
+                "session_id": request.session_id,
+            });
+            let mut cmd = avix_client_core::atp::types::Cmd::new(
+                "proc",
+                "package/install-agent",
+                "",
+                body,
+            );
+            cmd.token = dispatcher.token.clone();
+            dispatcher
+                .call(&cmd)
+                .await
+                .map_err(|e| format!("Failed to install agent: {:?}", e))?;
+            Ok("OK".to_string())
+        } else {
+            Err("Not connected".to_string())
+        }
+    } else {
+        Err("No dispatcher".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn install_service(
+    state: State<'_, SharedState>,
+    request: InstallRequest,
+) -> Result<String, String> {
+    let s = state.read().await;
+    if let Some(dispatcher) = &s.dispatcher {
+        if let Some(_session) = s.connection_status.session_id() {
+            let body = serde_json::json!({
+                "source": request.source,
+                "scope": request.scope,
+                "version": request.version.unwrap_or_else(|| "latest".to_string()),
+                "checksum": request.checksum,
+                "no_verify": request.no_verify,
+                "session_id": request.session_id,
+            });
+            let mut cmd = avix_client_core::atp::types::Cmd::new(
+                "proc",
+                "package/install-service",
+                "",
+                body,
+            );
+            cmd.token = dispatcher.token.clone();
+            dispatcher
+                .call(&cmd)
+                .await
+                .map_err(|e| format!("Failed to install service: {:?}", e))?;
+            Ok("OK".to_string())
+        } else {
+            Err("Not connected".to_string())
+        }
+    } else {
+        Err("No dispatcher".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn list_installed_agents(state: State<'_, SharedState>) -> Result<String, String> {
+    let s = state.read().await;
+    if let Some(dispatcher) = &s.dispatcher {
+        if let Some(_session) = s.connection_status.session_id() {
+            core_list_installed(dispatcher, "default")
+                .await
+                .map_err(|e| format!("Failed to list installed agents: {:?}", e))
+                .and_then(|agents| serde_json::to_string(&agents).map_err(|e| e.to_string()))
+        } else {
+            Err("Not connected".to_string())
+        }
+    } else {
+        Err("No dispatcher".to_string())
+    }
 }

@@ -60,7 +60,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::list_invocations,
             commands::get_invocation,
             commands::get_services,
-            commands::get_tools
+            commands::get_tools,
+            commands::install_agent,
+            commands::install_service,
+            commands::list_installed_agents
         ])
         .setup(|app| {
             // Set the emit callback

@@ -353,6 +353,80 @@ async fn dispatch_parsed_command(
                 });
             }
         }
+        ParsedCommand::InstallAgent { source } => {
+            let cmd_str = format!("install agent {}", source);
+            let log_event = TuiEvent::SentCommand {
+                cmd: cmd_str,
+                timestamp: std::time::Instant::now(),
+            };
+            let _ = action_tx.send(Action::LogEvent(log_event)).await;
+            action_tx.send(Action::InstallStart { name: source.clone() }).await?;
+            if let Some(dispatcher) = shared_state.read().await.dispatcher.clone() {
+                let action_tx_c = action_tx.clone();
+                let source_c = source.clone();
+                tokio::spawn(async move {
+                    let body = serde_json::json!({
+                        "source": source_c,
+                        "scope": "user",
+                        "version": "latest",
+                    });
+                    let mut cmd = avix_client_core::atp::types::Cmd::new(
+                        "proc",
+                        "package/install-agent",
+                        "",
+                        body,
+                    );
+                    cmd.token = dispatcher.token.clone();
+                    match dispatcher.call(&cmd).await {
+                        Ok(_) => {
+                            let _ = action_tx_c.send(Action::InstallComplete(source_c)).await;
+                        }
+                        Err(e) => {
+                            let _ = action_tx_c.send(Action::InstallError(e.to_string())).await;
+                        }
+                    }
+                });
+            } else {
+                action_tx.send(Action::InstallError("No connection to server".to_string())).await?;
+            }
+        }
+        ParsedCommand::InstallService { source } => {
+            let cmd_str = format!("install service {}", source);
+            let log_event = TuiEvent::SentCommand {
+                cmd: cmd_str,
+                timestamp: std::time::Instant::now(),
+            };
+            let _ = action_tx.send(Action::LogEvent(log_event)).await;
+            action_tx.send(Action::InstallStart { name: source.clone() }).await?;
+            if let Some(dispatcher) = shared_state.read().await.dispatcher.clone() {
+                let action_tx_c = action_tx.clone();
+                let source_c = source.clone();
+                tokio::spawn(async move {
+                    let body = serde_json::json!({
+                        "source": source_c,
+                        "scope": "system",
+                        "version": "latest",
+                    });
+                    let mut cmd = avix_client_core::atp::types::Cmd::new(
+                        "proc",
+                        "package/install-service",
+                        "",
+                        body,
+                    );
+                    cmd.token = dispatcher.token.clone();
+                    match dispatcher.call(&cmd).await {
+                        Ok(_) => {
+                            let _ = action_tx_c.send(Action::InstallComplete(source_c)).await;
+                        }
+                        Err(e) => {
+                            let _ = action_tx_c.send(Action::InstallError(e.to_string())).await;
+                        }
+                    }
+                });
+            } else {
+                action_tx.send(Action::InstallError("No connection to server".to_string())).await?;
+            }
+        }
     }
     Ok(())
 }
@@ -953,6 +1027,48 @@ fn ui(f: &mut ratatui::Frame, state: &TuiState) {
         let list = state.help_modal_widget.render(modal_area);
         f.render_widget(list, modal_area);
         return;
+    }
+
+    // If install in progress, render progress panel
+    if !matches!(state.install, super::state::InstallState::Idle) {
+        let size = f.size();
+        let install_area = Rect {
+            x: size.width / 4,
+            y: size.height - 10,
+            width: size.width / 2,
+            height: 8,
+        };
+        let install_block = match &state.install {
+            super::state::InstallState::InProgress { name, progress } => {
+                let progress_text: String = progress.join("\n");
+                ratatui::widgets::Paragraph::new(progress_text)
+                    .block(
+                        ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL)
+                            .title(format!("Installing {}...", name)),
+                    )
+            }
+            super::state::InstallState::Done { name } => {
+                ratatui::widgets::Paragraph::new(format!("✓ Installed {}", name))
+                    .block(
+                        ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL)
+                            .title("Install Complete"),
+                    )
+            }
+            super::state::InstallState::Failed { name, error } => {
+                ratatui::widgets::Paragraph::new(format!("✗ Failed to install {}: {}", name, error))
+                    .block(
+                        ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL)
+                            .title("Install Failed"),
+                    )
+            }
+            super::state::InstallState::Idle => {
+                return;
+            }
+        };
+        f.render_widget(install_block, install_area);
     }
 
     let size = f.size();
