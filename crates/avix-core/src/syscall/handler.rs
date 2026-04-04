@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::syscall::{
-    domain::{cap_, fs_, proc_, sched_, snap_, sys_},
+    domain::{cap_, fs_, pkg_, proc_, sched_, snap_, sys_},
     SyscallContext, SyscallError, SyscallResult,
 };
 
@@ -40,6 +40,12 @@ impl SyscallHandler {
             "kernel/snap/restore" => snap_::restore(ctx, params),
             "kernel/snap/list" => snap_::list(ctx, params),
             "kernel/snap/delete" => snap_::delete(ctx, params),
+            "proc/package/install-agent" => {
+                pkg_::install_agent(ctx, params, std::path::Path::new("/tmp"))
+            }
+            "proc/package/install-service" => {
+                pkg_::install_service(ctx, params, std::path::Path::new("/tmp"))
+            }
             _ => Err(SyscallError::Einval(format!("unknown syscall: {method}"))),
         }
     }

@@ -93,6 +93,10 @@ impl ServiceInstaller {
     }
 
     pub fn verify_checksum(&self, bytes: &[u8], expected: &str) -> Result<(), AvixError> {
+        Self::static_verify_checksum(bytes, expected)
+    }
+
+    pub fn static_verify_checksum(bytes: &[u8], expected: &str) -> Result<(), AvixError> {
         let (algo, expected_hex) = expected.split_once(':').ok_or_else(|| {
             AvixError::ConfigParse(format!("invalid checksum format: {expected}"))
         })?;
@@ -113,8 +117,12 @@ impl ServiceInstaller {
     }
 
     pub fn extract_tarball(&self, bytes: &[u8], dest: &Path) -> Result<(), AvixError> {
-        let gz = flate2::read::GzDecoder::new(bytes);
-        let mut archive = tar::Archive::new(gz);
+        let reader: Box<dyn std::io::Read> = if Self::is_xz(bytes) {
+            Box::new(xz2::read::XzDecoder::new(bytes))
+        } else {
+            Box::new(flate2::read::GzDecoder::new(bytes))
+        };
+        let mut archive = tar::Archive::new(reader);
 
         let mut found_unit = false;
         for entry in archive
@@ -128,7 +136,6 @@ impl ServiceInstaller {
                 .map_err(|e| AvixError::ConfigParse(e.to_string()))?
                 .to_path_buf();
 
-            // Strip the top-level <name>-<version>/ component
             let stripped = raw_path.components().skip(1).collect::<PathBuf>();
 
             if stripped.as_os_str().is_empty() {
@@ -157,7 +164,7 @@ impl ServiceInstaller {
                         .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
                 }
 
-                if stripped == Path::new("service.yaml") {
+                if stripped == Path::new("service.yaml") || stripped == Path::new("manifest.yaml") {
                     found_unit = true;
                 }
             }
@@ -165,10 +172,14 @@ impl ServiceInstaller {
 
         if !found_unit {
             return Err(AvixError::ConfigParse(
-                "tarball missing required service.yaml file".into(),
+                "tarball missing required service.yaml or manifest.yaml file".into(),
             ));
         }
         Ok(())
+    }
+
+    fn is_xz(bytes: &[u8]) -> bool {
+        bytes.len() >= 6 && &bytes[..6] == b"\xfd7zXZ\x00"
     }
 
     pub fn check_conflicts(&self, unit: &ServiceUnit) -> Result<(), AvixError> {
@@ -451,5 +462,97 @@ mod tests {
         let receipt: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(receipt["name"], "receipt-svc");
         assert_eq!(receipt["version"], "3.0.0");
+    }
+
+    fn make_xz_tarball(name: &str, version: &str) -> Vec<u8> {
+        use xz2::write::XzEncoder;
+        let mut buf = Vec::new();
+        {
+            let enc = XzEncoder::new(&mut buf, 6);
+            let mut ar = tar::Builder::new(enc);
+
+            let unit_content = format!(
+                "name: {name}\nversion: {version}\n\
+                 unit:\n  description: test\nservice:\n  binary: /services/{name}/bin/{name}\n\
+                 tools:\n  namespace: /tools/{name}/\n"
+            );
+            let mut header = tar::Header::new_gnu();
+            header.set_size(unit_content.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            ar.append_data(
+                &mut header,
+                format!("{name}-{version}/service.yaml"),
+                unit_content.as_bytes(),
+            )
+            .unwrap();
+
+            ar.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn is_xz_magic() {
+        let xz_bytes = b"\xfd7zXZ\x00test";
+        assert!(ServiceInstaller::is_xz(xz_bytes));
+    }
+
+    #[test]
+    fn is_not_xz_gz() {
+        let gz_bytes = [0x1f, 0x8b, 0x08, 0x00, 0x00];
+        assert!(!ServiceInstaller::is_xz(&gz_bytes));
+    }
+
+    #[tokio::test]
+    async fn extract_xz_tarball() {
+        let installer = ServiceInstaller::new(PathBuf::from("/tmp"));
+        let bytes = make_xz_tarball("xz-svc", "1.0.0");
+        let dest = TempDir::new().unwrap();
+        installer.extract_tarball(&bytes, dest.path()).unwrap();
+        assert!(dest.path().join("service.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn extract_gz_tarball_backward_compat() {
+        let installer = ServiceInstaller::new(PathBuf::from("/tmp"));
+        let bytes = make_tarball("gz-svc", "1.0.0");
+        let dest = TempDir::new().unwrap();
+        installer.extract_tarball(&bytes, dest.path()).unwrap();
+        assert!(dest.path().join("service.yaml").exists());
+    }
+
+    fn make_xz_tarball_with_manifest(name: &str, version: &str) -> Vec<u8> {
+        use xz2::write::XzEncoder;
+        let mut buf = Vec::new();
+        {
+            let enc = XzEncoder::new(&mut buf, 6);
+            let mut ar = tar::Builder::new(enc);
+
+            let manifest_content =
+                format!("name: {name}\nversion: {version}\ndescription: test agent\n");
+            let mut header = tar::Header::new_gnu();
+            header.set_size(manifest_content.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            ar.append_data(
+                &mut header,
+                format!("{name}-{version}/manifest.yaml"),
+                manifest_content.as_bytes(),
+            )
+            .unwrap();
+
+            ar.finish().unwrap();
+        }
+        buf
+    }
+
+    #[tokio::test]
+    async fn extract_xz_tarball_with_manifest_yaml() {
+        let installer = ServiceInstaller::new(PathBuf::from("/tmp"));
+        let bytes = make_xz_tarball_with_manifest("test-agent", "1.0.0");
+        let dest = TempDir::new().unwrap();
+        installer.extract_tarball(&bytes, dest.path()).unwrap();
+        assert!(dest.path().join("manifest.yaml").exists());
     }
 }

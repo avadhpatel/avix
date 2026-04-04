@@ -217,6 +217,22 @@ impl SyscallRegistry {
                 vec!["snap:delete"],
                 "fn snap_::delete(ctx: &SyscallContext, params: Value) -> SyscallResult"
             ),
+            SyscallDescriptor::new(
+                "proc/package/install-agent",
+                "package",
+                "Install agent from package",
+                "Installs an agent pack from a remote URL or local file.\n\nPermissions: caller must have `proc/package/install-agent` capability. For non-official sources, also requires `install:from-untrusted-source`.",
+                vec!["proc/package/install-agent"],
+                "fn pkg_::install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult"
+            ),
+            SyscallDescriptor::new(
+                "proc/package/install-service",
+                "package",
+                "Install service from package",
+                "Installs a service pack from a remote URL or local file.\n\nPermissions: caller must have `proc/package/install-service` capability. For non-official sources, also requires `install:from-untrusted-source`.",
+                vec!["proc/package/install-service"],
+                "fn pkg_::install_service(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult"
+            ),
         ];
 
         let mut by_name = HashMap::new();

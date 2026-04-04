@@ -25,6 +25,8 @@ pub enum SyscallError {
     Einval(String),
     #[error("EEXIST: {0} already exists")]
     Eexist(String),
+    #[error("EIO: {0}")]
+    Eio(String),
 }
 
 pub type SyscallResult = Result<serde_json::Value, SyscallError>;

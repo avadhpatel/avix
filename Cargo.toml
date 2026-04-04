@@ -52,3 +52,4 @@ tracing-appender   = { version = "0.2" }
 flate2             = { version = "1" }
 tar                = { version = "0.4" }
 walkdir            = { version = "2" }
+xz2                = { version = "0.1" }
