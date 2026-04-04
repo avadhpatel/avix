@@ -1,6 +1,6 @@
 # pkg-gap-D — GPG Signing, Rollback & Polish
 
-> **Status:** Pending
+> **Status:** Completed
 > **Priority:** Low (polish phase)
 > **Depends on:** pkg-gap-A, pkg-gap-B, pkg-gap-C
 > **Blocks:** nothing

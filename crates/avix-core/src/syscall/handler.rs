@@ -46,6 +46,12 @@ impl SyscallHandler {
             "proc/package/install-service" => {
                 pkg_::install_service(ctx, params, std::path::Path::new("/tmp"))
             }
+            "proc/package/uninstall-agent" => {
+                pkg_::uninstall_agent(ctx, params, std::path::Path::new("/tmp"))
+            }
+            "proc/package/uninstall-service" => {
+                pkg_::uninstall_service(ctx, params, std::path::Path::new("/tmp"))
+            }
             _ => Err(SyscallError::Einval(format!("unknown syscall: {method}"))),
         }
     }

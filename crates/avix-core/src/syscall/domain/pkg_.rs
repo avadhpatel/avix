@@ -1,11 +1,54 @@
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::agent_manifest::installer::{AgentInstallRequest, AgentInstaller, InstallScope};
 use crate::error::AvixError;
 use crate::service::installer::{InstallRequest, ServiceInstaller};
 use crate::service::package_source::PackageSource;
 use crate::syscall::{SyscallContext, SyscallError, SyscallResult};
+
+pub struct InstallQuota {
+    window: Duration,
+    limit: u32,
+    counters: Arc<Mutex<HashMap<String, (u32, Instant)>>>,
+}
+
+impl InstallQuota {
+    pub fn new(limit: u32, window: Duration) -> Self {
+        Self {
+            window,
+            limit,
+            counters: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn check(&self, username: &str) -> Result<(), SyscallError> {
+        let mut map = self.counters.lock().unwrap();
+        let now = Instant::now();
+        let entry = map.entry(username.to_owned()).or_insert((0, now));
+        if now.duration_since(entry.1) > self.window {
+            *entry = (0, now);
+        }
+        if entry.0 >= self.limit {
+            return Err(SyscallError::Eperm(
+                0,
+                format!(
+                    "install quota exceeded: max {} installs per {:?}",
+                    self.limit, self.window
+                ),
+            ));
+        }
+        entry.0 += 1;
+        Ok(())
+    }
+}
+
+lazy_static::lazy_static! {
+    static ref INSTALL_QUOTA: InstallQuota = InstallQuota::new(10, Duration::from_secs(3600));
+}
 
 fn check_capability(ctx: &SyscallContext, cap: &str) -> Result<(), SyscallError> {
     if !ctx.token.has_tool(cap) {
@@ -39,6 +82,8 @@ fn parse_scope(params: &Value, username: &str) -> Result<InstallScope, SyscallEr
 
 pub fn install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
     check_capability(ctx, "proc/package/install-agent")?;
+    let username = "default";
+    INSTALL_QUOTA.check(username)?;
 
     let source = params
         .get("source")
@@ -93,6 +138,8 @@ pub fn install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> S
 
 pub fn install_service(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
     check_capability(ctx, "proc/package/install-service")?;
+    let username = "default";
+    INSTALL_QUOTA.check(username)?;
 
     let source = params
         .get("source")
@@ -151,6 +198,51 @@ pub fn install_service(ctx: &SyscallContext, params: Value, avix_root: &Path) ->
         })),
         Err(e) => Err(SyscallError::Eio(e.to_string())),
     }
+}
+
+pub fn uninstall_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
+    check_capability(ctx, "proc/package/install-agent")?;
+
+    let name = params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| SyscallError::Einval("missing name".into()))?;
+
+    let username = "default";
+    let scope = parse_scope(&params, username)?;
+    let install_dir = match scope {
+        InstallScope::System => avix_root.join("bin").join(name),
+        InstallScope::User(u) => avix_root.join("users").join(u).join("bin").join(name),
+    };
+
+    if !install_dir.exists() {
+        return Err(SyscallError::Einval(format!("agent not installed: {name}")));
+    }
+
+    std::fs::remove_dir_all(&install_dir)
+        .map_err(|e| SyscallError::Eio(format!("failed to remove {}: {}", name, e)))?;
+
+    Ok(json!({ "uninstalled": name }))
+}
+
+pub fn uninstall_service(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
+    check_capability(ctx, "proc/package/install-service")?;
+
+    let name = params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| SyscallError::Einval("missing name".into()))?;
+
+    let install_dir = avix_root.join("services").join(name);
+
+    if !install_dir.exists() {
+        return Err(SyscallError::Einval(format!("service not installed: {name}")));
+    }
+
+    std::fs::remove_dir_all(&install_dir)
+        .map_err(|e| SyscallError::Eio(format!("failed to remove {}: {}", name, e)))?;
+
+    Ok(json!({ "uninstalled": name }))
 }
 
 async fn fetch_source_bytes(source: &PackageSource) -> Result<Vec<u8>, AvixError> {

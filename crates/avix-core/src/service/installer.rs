@@ -28,6 +28,32 @@ pub struct ServiceInstaller {
     root: PathBuf,
 }
 
+struct ServiceInstallGuard {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl ServiceInstallGuard {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            committed: false,
+        }
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for ServiceInstallGuard {
+    fn drop(&mut self) {
+        if !self.committed && self.path.exists() {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 impl ServiceInstaller {
     pub fn new(root: PathBuf) -> Self {
         Self { root }
@@ -48,7 +74,19 @@ impl ServiceInstaller {
         self.check_conflicts(&unit)?;
 
         let install_dir = self.root.join("services").join(&unit.name);
-        self.copy_to_install_dir(tmp_dir.path(), &install_dir)?;
+
+        let mut guard = ServiceInstallGuard::new(install_dir.clone());
+        std::fs::create_dir_all(&install_dir)
+            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+
+        if let Err(e) = std::fs::rename(tmp_dir.path(), &install_dir) {
+            drop(tmp_dir);
+            let _ = std::fs::remove_dir_all(&install_dir);
+            return Err(AvixError::ConfigParse(format!(
+                "install failed and rolled back: {}",
+                e
+            )));
+        }
 
         let receipt = InstallReceipt {
             name: unit.name.clone(),
@@ -64,6 +102,7 @@ impl ServiceInstaller {
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         std::fs::write(&receipt_path, json).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
+        guard.commit();
         Ok(InstallResult {
             name: unit.name.clone(),
             version: unit.version.clone(),
@@ -189,26 +228,6 @@ impl ServiceInstaller {
                 "service already installed: {}",
                 unit.name
             )));
-        }
-        Ok(())
-    }
-
-    fn copy_to_install_dir(&self, src: &Path, dest: &Path) -> Result<(), AvixError> {
-        std::fs::create_dir_all(dest).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        for entry in walkdir::WalkDir::new(src) {
-            let entry = entry.map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-            let rel = entry
-                .path()
-                .strip_prefix(src)
-                .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-            let target = dest.join(rel);
-            if entry.file_type().is_dir() {
-                std::fs::create_dir_all(&target)
-                    .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-            } else {
-                std::fs::copy(entry.path(), &target)
-                    .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-            }
         }
         Ok(())
     }

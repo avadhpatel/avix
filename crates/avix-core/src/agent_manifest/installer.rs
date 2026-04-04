@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::agent_manifest::git_fetch::git_clone_to;
 use crate::agent_manifest::manifest_file::AgentManifestFile;
@@ -23,6 +23,32 @@ pub enum InstallScope {
 
 pub struct AgentInstaller {
     root: PathBuf,
+}
+
+struct InstallGuard {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl InstallGuard {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            committed: false,
+        }
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for InstallGuard {
+    fn drop(&mut self) {
+        if !self.committed && self.path.exists() {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 }
 
 impl AgentInstaller {
@@ -80,12 +106,22 @@ impl AgentInstaller {
                 manifest.name
             )));
         }
+
+        let mut guard = InstallGuard::new(install_dir.clone());
         std::fs::create_dir_all(&install_dir).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
         if let Some(tmp) = tmp {
-            Self::copy_dir_all(tmp.path(), &install_dir)?;
+            if let Err(e) = std::fs::rename(tmp.path(), &install_dir) {
+                drop(tmp);
+                let _ = std::fs::remove_dir_all(&install_dir);
+                return Err(AvixError::ConfigParse(format!(
+                    "install failed and rolled back: {}",
+                    e
+                )));
+            }
         }
 
+        guard.commit();
         Ok(AgentInstallResult {
             name: manifest.name,
             version: manifest.version,
@@ -140,26 +176,6 @@ impl AgentInstaller {
             .ok_or_else(|| AvixError::ConfigParse("invalid checksum file".into()))?;
 
         ServiceInstaller::static_verify_checksum(bytes, &format!("sha256:{}", hex))
-    }
-
-    fn copy_dir_all(src: &Path, dest: &Path) -> Result<(), AvixError> {
-        std::fs::create_dir_all(dest).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        for entry in walkdir::WalkDir::new(src) {
-            let entry = entry.map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-            let rel = entry
-                .path()
-                .strip_prefix(src)
-                .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-            let target = dest.join(rel);
-            if entry.file_type().is_dir() {
-                std::fs::create_dir_all(&target)
-                    .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-            } else {
-                std::fs::copy(entry.path(), &target)
-                    .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-            }
-        }
-        Ok(())
     }
 }
 

@@ -447,6 +447,14 @@ enum AgentCmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Uninstall an installed agent
+    Uninstall {
+        /// Agent name to uninstall
+        name: String,
+        /// Install scope: `user` (default) or `system`
+        #[arg(long, default_value = "user")]
+        scope: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -980,6 +988,24 @@ async fn main() -> Result<()> {
                         reply.body.as_ref().and_then(|b| b.get("name")).and_then(|n| n.as_str()).unwrap_or("?"),
                         reply.body.as_ref().and_then(|b| b.get("version")).and_then(|n| n.as_str()).unwrap_or("?")
                     );
+                }
+                AgentCmd::Uninstall { name, scope } => {
+                    let dispatcher = connect_config(None, None).await?;
+
+                    let body = serde_json::json!({
+                        "name": name,
+                        "scope": scope,
+                    });
+
+                    let cmd = AtpCmd_::new("proc", "package/uninstall-agent", "", body);
+                    let reply = dispatcher.call(&cmd).await.context("uninstall-agent failed")?;
+
+                    if !reply.ok {
+                        let msg = reply.message.unwrap_or_else(|| "uninstall-agent failed".into());
+                        anyhow::bail!("{}", msg);
+                    }
+
+                    println!("Uninstalled agent '{}'", name);
                 }
             },
 

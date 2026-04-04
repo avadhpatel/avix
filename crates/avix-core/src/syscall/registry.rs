@@ -233,6 +233,22 @@ impl SyscallRegistry {
                 vec!["proc/package/install-service"],
                 "fn pkg_::install_service(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult"
             ),
+            SyscallDescriptor::new(
+                "proc/package/uninstall-agent",
+                "package",
+                "Uninstall agent",
+                "Uninstalls an installed agent pack.\n\nPermissions: caller must have `proc/package/install-agent` capability.",
+                vec!["proc/package/install-agent"],
+                "fn pkg_::uninstall_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult"
+            ),
+            SyscallDescriptor::new(
+                "proc/package/uninstall-service",
+                "package",
+                "Uninstall service",
+                "Uninstalls an installed service pack.\n\nPermissions: caller must have `proc/package/install-service` capability.",
+                vec!["proc/package/install-service"],
+                "fn pkg_::uninstall_service(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult"
+            ),
         ];
 
         let mut by_name = HashMap::new();
