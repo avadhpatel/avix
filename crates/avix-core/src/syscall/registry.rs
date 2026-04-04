@@ -249,6 +249,30 @@ impl SyscallRegistry {
                 vec!["proc/package/install-service"],
                 "fn pkg_::uninstall_service(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult"
             ),
+            SyscallDescriptor::new(
+                "proc/package/trust-add",
+                "package",
+                "Add trusted signing key",
+                "Adds a trusted third-party signing key to the keyring.\n\nPermissions: caller must have `auth:admin` capability.",
+                vec!["auth:admin"],
+                "fn pkg_::trust_add(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult"
+            ),
+            SyscallDescriptor::new(
+                "proc/package/trust-list",
+                "package",
+                "List trusted keys",
+                "Lists all trusted third-party signing keys in the keyring.",
+                vec!["auth:admin"],
+                "fn pkg_::trust_list(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult"
+            ),
+            SyscallDescriptor::new(
+                "proc/package/trust-remove",
+                "package",
+                "Remove trusted key",
+                "Removes a trusted third-party signing key from the keyring.\n\nPermissions: caller must have `auth:admin` capability.",
+                vec!["auth:admin"],
+                "fn pkg_::trust_remove(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult"
+            ),
         ];
 
         let mut by_name = HashMap::new();

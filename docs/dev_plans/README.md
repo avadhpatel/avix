@@ -22,9 +22,9 @@ Implemented in order A → E. All gaps completed.
 | `pkg-gap-C-tui-webui-github-actions.md` | ✅ Done | TUI `:install`, Web-UI Extensions tab, GitHub Actions workflow |
 | `pkg-gap-D-gpg-rollback-polish.md` | ✅ Done | Atomic install + rollback, install quota, `uninstall` commands |
 | `pkg-gap-E-authoring-tooling.md` | ✅ Done | `PackageValidator`, `PackageBuilder`, `PackageScaffold`, `avix package` CLI |
-| `pkg-gap-F-third-party-trust-keyring.md` | Pending | TrustStore, GPG verification, `avix package trust` CLI |
+| `pkg-gap-F-third-party-trust-keyring.md` | ✅ Done | TrustStore, TrustedKey, GPG verification, `avix package trust` CLI |
 
-**Status:** Complete — pkg-gaps A–E done
+**Status:** Complete — pkg-gaps A–F done
 
 ---
 

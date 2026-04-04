@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::agent_manifest::installer::{AgentInstallRequest, AgentInstaller, InstallScope};
 use crate::error::AvixError;
+use crate::packaging::trust::TrustStore;
 use crate::service::installer::{InstallRequest, ServiceInstaller};
 use crate::service::package_source::PackageSource;
 use crate::syscall::{SyscallContext, SyscallError, SyscallResult};
@@ -243,6 +244,67 @@ pub fn uninstall_service(ctx: &SyscallContext, params: Value, avix_root: &Path) 
         .map_err(|e| SyscallError::Eio(format!("failed to remove {}: {}", name, e)))?;
 
     Ok(json!({ "uninstalled": name }))
+}
+
+pub fn trust_add(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
+    check_capability(ctx, "auth:admin")?;
+
+    let key_asc = params["key_asc"]
+        .as_str()
+        .ok_or_else(|| SyscallError::Einval("missing key_asc".into()))?;
+    let label = params["label"]
+        .as_str()
+        .ok_or_else(|| SyscallError::Einval("missing label".into()))?;
+    let allowed_sources = params["allowed_sources"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_owned()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let trust_store = TrustStore::new(avix_root);
+    let key = trust_store
+        .add(key_asc, label, allowed_sources)
+        .map_err(|e| SyscallError::Einval(e.to_string()))?;
+
+    Ok(json!({
+        "fingerprint": key.fingerprint,
+        "label": key.label,
+        "added_at": key.added_at.to_rfc3339(),
+    }))
+}
+
+pub fn trust_list(_ctx: &SyscallContext, _params: Value, avix_root: &Path) -> SyscallResult {
+    let trust_store = TrustStore::new(avix_root);
+    let keys = trust_store
+        .list()
+        .map_err(|e| SyscallError::Eio(e.to_string()))?;
+    let entries: Vec<_> = keys
+        .iter()
+        .map(|k| {
+            json!({
+                "fingerprint": k.fingerprint,
+                "label": k.label,
+                "added_at": k.added_at.to_rfc3339(),
+                "allowed_sources": k.allowed_sources,
+            })
+        })
+        .collect();
+    Ok(json!({ "keys": entries }))
+}
+
+pub fn trust_remove(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
+    check_capability(ctx, "auth:admin")?;
+    let fingerprint = params["fingerprint"]
+        .as_str()
+        .ok_or_else(|| SyscallError::Einval("missing fingerprint".into()))?;
+    let trust_store = TrustStore::new(avix_root);
+    trust_store
+        .remove(fingerprint)
+        .map_err(|e| SyscallError::Einval(e.to_string()))?;
+    Ok(json!({ "removed": fingerprint }))
 }
 
 async fn fetch_source_bytes(source: &PackageSource) -> Result<Vec<u8>, AvixError> {

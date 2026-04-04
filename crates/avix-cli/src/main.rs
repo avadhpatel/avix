@@ -565,6 +565,33 @@ enum PackageCmd {
         #[arg(long, short = 'o', default_value = ".")]
         output: PathBuf,
     },
+    /// Manage trusted third-party signing keys
+    Trust {
+        #[command(subcommand)]
+        sub: TrustCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum TrustCmd {
+    /// Add a trusted signing key
+    Add {
+        /// Path to a local .asc key file, or https:// URL to fetch it from
+        key: String,
+        /// Human-readable label for this key (e.g. "AcmeCorp")
+        #[arg(long)]
+        name: String,
+        /// Restrict this key to specific source patterns (e.g. "github:acmecorp/*")
+        /// May be specified multiple times. Omit to trust for all sources.
+        #[arg(long = "allow-source")]
+        allow_sources: Vec<String>,
+    },
+    /// List all trusted keys
+    List,
+    /// Remove a trusted key by fingerprint
+    Remove {
+        fingerprint: String,
+    },
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1570,6 +1597,57 @@ async fn main() -> Result<()> {
                         let dir = PackageScaffold::create(ScaffoldRequest { name: name.clone(), pkg_type, version, output_dir: output })
                             .context("scaffold failed")?;
                         println!("Created: {}", dir.display());
+                    }
+                    PackageCmd::Trust { sub } => {
+                        let root = expand_home(std::path::PathBuf::from(
+                            std::env::var("AVIX_ROOT").unwrap_or_else(|_| ".".to_string())
+                        ));
+                        
+                        use avix_core::packaging::TrustStore;
+
+                        match sub {
+                            TrustCmd::Add { key, name, allow_sources } => {
+                                let key_asc = if key.starts_with("https://") || key.starts_with("http://") {
+                                    let resp = reqwest::get(&key)
+                                        .await
+                                        .context("fetch key from URL")?;
+                                    resp.text().await.context("read key response")?
+                                } else {
+                                    std::fs::read_to_string(&key).context("read key file")?
+                                };
+                                let store = TrustStore::new(&root);
+                                let trusted = store.add(&key_asc, &name, allow_sources)
+                                    .context("add trusted key")?;
+                                println!("Trusted key added: {} ({})", trusted.label, trusted.fingerprint);
+                            }
+                            TrustCmd::List => {
+                                let store = TrustStore::new(&root);
+                                let keys = store.list().context("list trusted keys")?;
+                                if keys.is_empty() {
+                                    println!("No third-party keys trusted (official Avix key always active).");
+                                    return Ok(());
+                                }
+                                for k in &keys {
+                                    println!("{} — {} (added {})",
+                                        k.fingerprint,
+                                        k.label,
+                                        k.added_at.format("%Y-%m-%d"),
+                                    );
+                                    if k.allowed_sources.is_empty() {
+                                        println!("  allowed sources: all");
+                                    } else {
+                                        for s in &k.allowed_sources {
+                                            println!("  allowed source: {}", s);
+                                        }
+                                    }
+                                }
+                            }
+                            TrustCmd::Remove { fingerprint } => {
+                                let store = TrustStore::new(&root);
+                                store.remove(&fingerprint).context("remove trusted key")?;
+                                println!("Removed key: {}", fingerprint);
+                            }
+                        }
                     }
                 }
             }

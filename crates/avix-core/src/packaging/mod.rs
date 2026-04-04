@@ -1,9 +1,13 @@
 pub mod builder;
+pub mod gpg;
 pub mod scaffold;
+pub mod trust;
 pub mod validator;
 
 pub use builder::{BuildRequest, BuildResult, PackageBuilder};
+pub use gpg::{verify_signature, VerifiedBy};
 pub use scaffold::{PackageScaffold, ScaffoldRequest};
+pub use trust::{TrustStore, TrustedKey};
 pub use validator::{PackageValidator, ValidationError};
 
 use std::path::Path;

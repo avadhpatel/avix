@@ -52,6 +52,13 @@ impl SyscallHandler {
             "proc/package/uninstall-service" => {
                 pkg_::uninstall_service(ctx, params, std::path::Path::new("/tmp"))
             }
+            "proc/package/trust-add" => pkg_::trust_add(ctx, params, std::path::Path::new("/tmp")),
+            "proc/package/trust-list" => {
+                pkg_::trust_list(ctx, params, std::path::Path::new("/tmp"))
+            }
+            "proc/package/trust-remove" => {
+                pkg_::trust_remove(ctx, params, std::path::Path::new("/tmp"))
+            }
             _ => Err(SyscallError::Einval(format!("unknown syscall: {method}"))),
         }
     }
