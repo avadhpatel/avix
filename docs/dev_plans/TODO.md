@@ -183,6 +183,62 @@ Option 2 is preferred — the HTTP layer already exists for `/auth/login`.
 
 ---
 
+### Polyglot Services (Python, JavaScript, etc.)
+
+**Context**: The current service model assumes Rust binaries. `service.yaml` has a `language`
+field that accepts `"rust"` or `"any"`, and `ServiceInstaller` / `ServiceProcess` both assume
+a compiled native binary in `bin/`. There is no mechanism to spawn or package services written
+in Python, JavaScript/TypeScript, or other interpreted languages.
+
+**Goal**: Define how non-Rust services are packaged, installed, and spawned so that community
+developers can write Avix services in their language of choice.
+
+**Questions to resolve**:
+
+1. **Runtime discovery** — how does the kernel find the right interpreter (`python3`, `node`,
+   `deno`, etc.)? Options: require it on `PATH`, embed a runtime version spec in `service.yaml`,
+   or bundle the runtime inside the package.
+
+2. **Packaging** — for a Python service the `bin/` dir would contain `.py` files (or a wheel),
+   not a compiled binary. The `PackageBuilder` and `PackageValidator` need to know what
+   constitutes a valid `bin/` for each language.
+
+3. **`service.yaml` changes** — `language` field needs well-defined values beyond `"rust"` /
+   `"any"`. Proposed additions: `"python"`, `"javascript"`, `"typescript"`, `"deno"`.
+   May also need `runtime_version` (e.g. `">=3.11"`) and `entrypoint` (e.g. `"main.py"`).
+
+4. **`ServiceProcess` spawning** — currently calls the binary path directly. For interpreted
+   languages it needs to prepend the interpreter: `python3 bin/main.py` or `node bin/index.js`.
+
+5. **Dependency management** — Python services may have a `requirements.txt`; JS services a
+   `package.json`. Should the installer run `pip install` / `npm install` at install time?
+   Or should packages be self-contained (vendored dependencies)?
+
+6. **Sandboxing** — interpreted runtimes have different sandboxing considerations than native
+   binaries. Needs evaluation.
+
+**Proposed `service.yaml` sketch**:
+```yaml
+name: my-python-svc
+version: "0.1.0"
+
+[service]
+language       = "python"
+runtime_version = ">=3.11"
+entrypoint     = "bin/main.py"
+binary         = ""              # empty for interpreted services
+```
+
+**Affected areas** (when designed and implemented):
+- `service.yaml` schema + parser (`crates/avix-core/src/service/`)
+- `ServiceProcess::spawn` — interpreter prefix logic
+- `PackageValidator` — language-specific `bin/` validation rules
+- `PackageBuilder` — skip executable permission setting for non-native bins
+- `ServiceInstaller` — optional dependency installation step
+- `avix package new --type service --language python` scaffold
+
+---
+
 ## Notes
 
 - Permission model defaults to `all: r--` (everyone can read but not execute)
