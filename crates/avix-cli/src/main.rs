@@ -17,6 +17,7 @@ use avix_client_core::commands::{
 use avix_client_core::config::ClientConfig;
 use avix_client_core::persistence;
 
+use avix_core::service::package_source::PackageSource;
 use avix_core::secrets::SecretStore;
 use avix_core::service::{ServiceManager, ServiceStatus};
 
@@ -71,16 +72,28 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum ServiceCmd {
-    /// Install a service from a local path (file://) or URL (https://)
+    /// Install a service from a local path (file://), URL (https://), or GitHub source
     Install {
-        /// Package source — local path or https:// URL
+        /// Package source — local path, https:// URL, or github:owner/repo/name
         source: String,
+        /// Install scope: `system` (default) or `user`
+        #[arg(long, default_value = "system")]
+        scope: String,
+        /// Specific version or tag (default: latest)
+        #[arg(long)]
+        version: Option<String>,
         /// Expected checksum in "sha256:<hex>" format
         #[arg(long)]
         checksum: Option<String>,
-        /// Do not start the service after install
-        #[arg(long = "no-start")]
-        no_start: bool,
+        /// Skip checksum verification (trusted local dev only)
+        #[arg(long)]
+        no_verify: bool,
+        /// Log this install under a specific session ID
+        #[arg(long)]
+        session: Option<String>,
+        /// Print what would happen without actually installing
+        #[arg(long)]
+        dry_run: bool,
         /// Runtime root directory
         #[arg(long, default_value = "~/avix-data")]
         root: PathBuf,
@@ -410,6 +423,29 @@ enum AgentCmd {
     Snapshot {
         /// Invocation ID to snapshot
         invocation_id: String,
+    },
+    /// Install an agent from a local path, URL, or GitHub source
+    Install {
+        /// Package source — local path, https:// URL, or github:owner/repo/name
+        source: String,
+        /// Install scope: `user` (default) or `system`
+        #[arg(long, default_value = "user")]
+        scope: String,
+        /// Specific version or tag (default: latest)
+        #[arg(long)]
+        version: Option<String>,
+        /// Expected checksum in "sha256:<hex>" format
+        #[arg(long)]
+        checksum: Option<String>,
+        /// Skip checksum verification (trusted local dev only)
+        #[arg(long)]
+        no_verify: bool,
+        /// Log this install under a specific session ID
+        #[arg(long)]
+        session: Option<String>,
+        /// Print what would happen without actually installing
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -905,6 +941,46 @@ async fn main() -> Result<()> {
                         result,
                     );
                 }
+                AgentCmd::Install {
+                    source,
+                    scope,
+                    version,
+                    checksum,
+                    no_verify,
+                    session,
+                    dry_run,
+                } => {
+                    let dispatcher = connect_config(None, None).await?;
+
+                    if dry_run {
+                        let resolved = PackageSource::resolve(&source, version.as_deref()).await?;
+                        println!("Resolved source: {:?}", resolved);
+                        return Ok(());
+                    }
+
+                    let body = serde_json::json!({
+                        "source":     source,
+                        "scope":      scope,
+                        "version":    version.as_deref().unwrap_or("latest"),
+                        "checksum":   checksum,
+                        "no_verify":  no_verify,
+                        "session_id": session,
+                    });
+
+                    let cmd = AtpCmd_::new("proc", "package/install-agent", "", body);
+                    let reply = dispatcher.call(&cmd).await.context("install-agent failed")?;
+
+                    if !reply.ok {
+                        let msg = reply.message.unwrap_or_else(|| "install-agent failed".into());
+                        anyhow::bail!("{}", msg);
+                    }
+
+                    println!(
+                        "Installed agent '{}' v{}",
+                        reply.body.as_ref().and_then(|b| b.get("name")).and_then(|n| n.as_str()).unwrap_or("?"),
+                        reply.body.as_ref().and_then(|b| b.get("version")).and_then(|n| n.as_str()).unwrap_or("?")
+                    );
+                }
             },
 
             ClientCmd::Hil { sub } => match sub {
@@ -1102,60 +1178,43 @@ async fn main() -> Result<()> {
             ClientCmd::Service { sub } => match sub {
                 ServiceCmd::Install {
                     source,
+                    scope,
+                    version,
                     checksum,
-                    no_start,
+                    no_verify,
+                    session,
+                    dry_run,
                     root: _,
                 } => {
-                    let source = if !source.starts_with("file://")
-                        && !source.starts_with("https://")
-                        && !source.starts_with("http://")
-                    {
-                        format!(
-                            "file://{}",
-                            std::fs::canonicalize(&source)
-                                .with_context(|| format!("cannot resolve path: {source}"))?
-                                .display()
-                        )
-                    } else {
-                        source
-                    };
-
                     let dispatcher = connect_config(None, None).await?;
-                    let reply = dispatcher
-                        .call(&AtpCmd_::new(
-                            "sys",
-                            "install",
-                            "",
-                            serde_json::json!({
-                                "source":    source,
-                                "checksum":  checksum,
-                                "autostart": !no_start,
-                            }),
-                        ))
-                        .await?;
+
+                    if dry_run {
+                        let resolved = PackageSource::resolve(&source, version.as_deref()).await?;
+                        println!("Resolved source: {:?}", resolved);
+                        return Ok(());
+                    }
+
+                    let body = serde_json::json!({
+                        "source":     source,
+                        "scope":      scope,
+                        "version":    version.as_deref().unwrap_or("latest"),
+                        "checksum":   checksum,
+                        "no_verify":  no_verify,
+                        "session_id": session,
+                    });
+
+                    let cmd = AtpCmd_::new("proc", "package/install-service", "", body);
+                    let reply = dispatcher.call(&cmd).await.context("install-service failed")?;
 
                     if !reply.ok {
-                        let msg = reply.message.unwrap_or_else(|| "install failed".into());
-                        anyhow::bail!("{msg}");
+                        let msg = reply.message.unwrap_or_else(|| "install-service failed".into());
+                        anyhow::bail!("{}", msg);
                     }
-                    let body = reply.body.unwrap_or_default();
-                    emit(
-                        cli.json,
-                        |b: &serde_json::Value| {
-                            let name = b["name"].as_str().unwrap_or("?");
-                            let ver = b["version"].as_str().unwrap_or("?");
-                            let tools = b["tools"]
-                                .as_array()
-                                .map(|a| {
-                                    a.iter()
-                                        .filter_map(|v| v.as_str())
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
-                                })
-                                .unwrap_or_default();
-                            format!("Installed {name} v{ver} — tools: {tools}")
-                        },
-                        body,
+
+                    println!(
+                        "Installed service '{}' v{}",
+                        reply.body.as_ref().and_then(|b| b.get("name")).and_then(|n| n.as_str()).unwrap_or("?"),
+                        reply.body.as_ref().and_then(|b| b.get("version")).and_then(|n| n.as_str()).unwrap_or("?")
                     );
                 }
 
@@ -1693,37 +1752,37 @@ mod tests {
                             ServiceCmd::Install {
                                 source,
                                 checksum,
-                                no_start,
+                                no_verify,
                                 ..
                             },
                     },
             } => {
                 assert_eq!(source, "./pkg.tar.gz");
                 assert_eq!(checksum.as_deref(), Some("sha256:abc123"));
-                assert!(!no_start);
+                assert!(!no_verify);
             }
             _ => panic!("wrong variant"),
         }
     }
 
     #[test]
-    fn service_install_no_start_flag() {
+    fn service_install_no_verify_flag() {
         let cli = Cli::try_parse_from([
             "avix",
             "client",
             "service",
             "install",
             "./pkg.tar.gz",
-            "--no-start",
+            "--no-verify",
         ])
         .unwrap();
         match cli.command {
             Cmd::Client {
                 sub:
                     ClientCmd::Service {
-                        sub: ServiceCmd::Install { no_start, .. },
+                        sub: ServiceCmd::Install { no_verify, .. },
                     },
-            } => assert!(no_start),
+            } => assert!(no_verify),
             _ => panic!("wrong variant"),
         }
     }
@@ -1747,6 +1806,74 @@ mod tests {
                         sub: ServiceCmd::Install { root, .. },
                     },
             } => assert_eq!(root.to_string_lossy(), "/custom/root"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn agent_install_parses_all_flags() {
+        let cli = Cli::try_parse_from([
+            "avix",
+            "client",
+            "agent",
+            "install",
+            "github:owner/repo/agent",
+            "--scope",
+            "system",
+            "--version",
+            "v1.0.0",
+            "--checksum",
+            "sha256:abc123",
+            "--no-verify",
+            "--session",
+            "abc-123",
+        ])
+        .unwrap();
+        match cli.command {
+            Cmd::Client {
+                sub:
+                    ClientCmd::Agent {
+                        sub:
+                            AgentCmd::Install {
+                                source,
+                                scope,
+                                version,
+                                checksum,
+                                no_verify,
+                                session,
+                                ..
+                            },
+                    },
+            } => {
+                assert_eq!(source, "github:owner/repo/agent");
+                assert_eq!(scope, "system");
+                assert_eq!(version.as_deref(), Some("v1.0.0"));
+                assert_eq!(checksum.as_deref(), Some("sha256:abc123"));
+                assert!(no_verify);
+                assert_eq!(session.as_deref(), Some("abc-123"));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn agent_install_dry_run_flag() {
+        let cli = Cli::try_parse_from([
+            "avix",
+            "client",
+            "agent",
+            "install",
+            "./agent.tar.xz",
+            "--dry-run",
+        ])
+        .unwrap();
+        match cli.command {
+            Cmd::Client {
+                sub:
+                    ClientCmd::Agent {
+                        sub: AgentCmd::Install { dry_run, .. },
+                    },
+            } => assert!(dry_run),
             _ => panic!("wrong variant"),
         }
     }

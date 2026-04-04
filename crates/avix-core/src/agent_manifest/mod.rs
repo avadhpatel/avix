@@ -1,3 +1,4 @@
+pub mod git_fetch;
 pub mod installer;
 pub mod loader;
 pub mod manifest_file;

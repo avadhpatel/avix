@@ -1,6 +1,6 @@
 # pkg-gap-B — CLI Commands & GitHub Integration
 
-> **Status:** Pending
+> **Status:** Completed
 > **Priority:** High
 > **Depends on:** pkg-gap-A (install syscalls)
 > **Blocks:** pkg-gap-C (TUI/Web-UI need CLI plumbing done first)

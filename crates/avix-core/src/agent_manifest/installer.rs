@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::agent_manifest::git_fetch::git_clone_to;
 use crate::agent_manifest::manifest_file::AgentManifestFile;
 use crate::error::AvixError;
 use crate::service::installer::ServiceInstaller;
@@ -31,25 +32,39 @@ impl AgentInstaller {
 
     pub async fn install(&self, req: AgentInstallRequest) -> Result<AgentInstallResult, AvixError> {
         let pkg_source = PackageSource::resolve(&req.source, req.version.as_deref()).await?;
-        let bytes = self.fetch_source(&pkg_source).await?;
 
-        if !req.no_verify {
-            if let Some(expected) = &req.checksum {
-                ServiceInstaller::static_verify_checksum(&bytes, expected)?;
-            } else if let PackageSource::GitHubRelease {
-                checksum_url: Some(url),
-                ..
-            } = &pkg_source
-            {
-                self.fetch_and_verify_checksum_file(&bytes, url).await?;
+        let (tmp, manifest) = match &pkg_source {
+            PackageSource::GitClone(url) => {
+                let tmp = tempfile::tempdir().map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+                git_clone_to(url, tmp.path()).await?;
+                let manifest_path = tmp.path().join("manifest.yaml");
+                let manifest = AgentManifestFile::load(&manifest_path)?;
+                (Some(tmp), manifest)
             }
-        }
+            _ => {
+                let bytes = self.fetch_source(&pkg_source).await?;
 
-        let tmp = tempfile::tempdir().map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        let extractor = ServiceInstaller::new(self.root.clone());
-        extractor.extract_tarball(&bytes, tmp.path())?;
+                if !req.no_verify {
+                    if let Some(expected) = &req.checksum {
+                        ServiceInstaller::static_verify_checksum(&bytes, expected)?;
+                    } else if let PackageSource::GitHubRelease {
+                        checksum_url: Some(url),
+                        ..
+                    } = &pkg_source
+                    {
+                        self.fetch_and_verify_checksum_file(&bytes, url).await?;
+                    }
+                }
 
-        let manifest = AgentManifestFile::load(&tmp.path().join("manifest.yaml"))?;
+                let tmp = tempfile::tempdir().map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+                let extractor = ServiceInstaller::new(self.root.clone());
+                extractor.extract_tarball(&bytes, tmp.path())?;
+
+                let manifest = AgentManifestFile::load(&tmp.path().join("manifest.yaml"))?;
+                (Some(tmp), manifest)
+            }
+        };
+
         let install_dir = match &req.scope {
             InstallScope::System => self.root.join("bin").join(&manifest.name),
             InstallScope::User(u) => self
@@ -66,7 +81,10 @@ impl AgentInstaller {
             )));
         }
         std::fs::create_dir_all(&install_dir).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        Self::copy_dir_all(tmp.path(), &install_dir)?;
+
+        if let Some(tmp) = tmp {
+            Self::copy_dir_all(tmp.path(), &install_dir)?;
+        }
 
         Ok(AgentInstallResult {
             name: manifest.name,
@@ -98,7 +116,7 @@ impl AgentInstaller {
                 Ok(bytes.to_vec())
             }
             PackageSource::GitClone(_) => {
-                Err(AvixError::ConfigParse("git clone not implemented".into()))
+                unreachable!("GitClone is handled in install() method")
             }
         }
     }
