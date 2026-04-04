@@ -17,14 +17,14 @@ jobs:
 
       - name: Validate manifest
         run: |
-          if [ ! -f "agents/packs/${{ matrix.agent }}/manifest.yaml" ]; then
+          if [ ! -f "agents/${{ matrix.agent }}/manifest.yaml" ]; then
             echo "ERROR: missing manifest.yaml for ${{ matrix.agent }}"
             exit 1
           fi
 
       - name: Build archive
         run: |
-          cd agents/packs/${{ matrix.agent }}
+          cd agents/${{ matrix.agent }}
           VERSION=${{ github.ref_name }}
           ARCHIVE="${{ matrix.agent }}-${VERSION}.tar.xz"
           tar -cJf "../../${ARCHIVE}" .
