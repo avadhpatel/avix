@@ -599,7 +599,10 @@ fn log_filename(cmd: &Cmd) -> &str {
 }
 
 /// Connect to the ATP server using config.yaml and return a dispatcher.
-async fn connect_config(config: Option<PathBuf>, server_url: Option<String>) -> Result<Dispatcher, anyhow::Error> {
+async fn connect_config(
+    config: Option<PathBuf>,
+    server_url: Option<String>,
+) -> Result<Dispatcher, anyhow::Error> {
     let mut config = ClientConfig::load_from(config).unwrap_or_else(|_| ClientConfig::default());
     if let Some(url) = server_url {
         config.server_url = url;
@@ -863,7 +866,11 @@ async fn main() -> Result<()> {
                     let agents = list_installed(&dispatcher, user).await?;
                     emit(cli.json, format_catalog, agents);
                 }
-                AgentCmd::History { agent, username, live } => {
+                AgentCmd::History {
+                    agent,
+                    username,
+                    live,
+                } => {
                     let dispatcher = connect_config(None, None).await?;
                     let user = username.as_deref().unwrap_or("default");
                     let records = if live {
@@ -1191,7 +1198,11 @@ async fn main() -> Result<()> {
                     );
                 }
 
-                ServiceCmd::Status { name, root, server_url: _ } => {
+                ServiceCmd::Status {
+                    name,
+                    root,
+                    server_url: _,
+                } => {
                     let root = expand_home(root);
                     let status_path = root.join("proc/services").join(&name).join("status.yaml");
 
@@ -1200,8 +1211,8 @@ async fn main() -> Result<()> {
                     }
                     let yaml = std::fs::read_to_string(&status_path)
                         .with_context(|| format!("cannot read {}", status_path.display()))?;
-                    let status: ServiceStatus =
-                        serde_yaml::from_str(&yaml).with_context(|| "failed to parse status.yaml")?;
+                    let status: ServiceStatus = serde_yaml::from_str(&yaml)
+                        .with_context(|| "failed to parse status.yaml")?;
 
                     emit(
                         cli.json,
@@ -1293,7 +1304,8 @@ async fn main() -> Result<()> {
                                 .await;
                         }
                     } else {
-                        let status_path = root.join("proc/services").join(&name).join("status.yaml");
+                        let status_path =
+                            root.join("proc/services").join(&name).join("status.yaml");
                         if status_path.exists() {
                             anyhow::bail!(
                                 "service '{name}' may be running — use --force to kill it first"
@@ -1318,7 +1330,8 @@ async fn main() -> Result<()> {
             // ── Secret commands ───────────────────────────────────────────────────
             ClientCmd::Secret { sub } => {
                 let master_key: [u8; 32] = {
-                    let raw = std::env::var("AVIX_MASTER_KEY").context("AVIX_MASTER_KEY is not set")?;
+                    let raw =
+                        std::env::var("AVIX_MASTER_KEY").context("AVIX_MASTER_KEY is not set")?;
                     let bytes = raw.as_bytes();
                     let mut key = [0u8; 32];
                     let len = bytes.len().min(32);
@@ -1642,7 +1655,14 @@ mod tests {
 
     #[test]
     fn client_connect_with_config_parses() {
-        let cli = Cli::try_parse_from(["avix", "client", "connect", "--config", "/custom/config.yaml"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "avix",
+            "client",
+            "connect",
+            "--config",
+            "/custom/config.yaml",
+        ])
+        .unwrap();
         match cli.command {
             Cmd::Client {
                 sub: ClientCmd::Connect { config },
@@ -1667,14 +1687,16 @@ mod tests {
         .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Service {
-                    sub: ServiceCmd::Install {
-                        source,
-                        checksum,
-                        no_start,
-                        ..
+                sub:
+                    ClientCmd::Service {
+                        sub:
+                            ServiceCmd::Install {
+                                source,
+                                checksum,
+                                no_start,
+                                ..
+                            },
                     },
-                },
             } => {
                 assert_eq!(source, "./pkg.tar.gz");
                 assert_eq!(checksum.as_deref(), Some("sha256:abc123"));
@@ -1686,13 +1708,21 @@ mod tests {
 
     #[test]
     fn service_install_no_start_flag() {
-        let cli = Cli::try_parse_from(["avix", "client", "service", "install", "./pkg.tar.gz", "--no-start"])
-            .unwrap();
+        let cli = Cli::try_parse_from([
+            "avix",
+            "client",
+            "service",
+            "install",
+            "./pkg.tar.gz",
+            "--no-start",
+        ])
+        .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Service {
-                    sub: ServiceCmd::Install { no_start, .. },
-                },
+                sub:
+                    ClientCmd::Service {
+                        sub: ServiceCmd::Install { no_start, .. },
+                    },
             } => assert!(no_start),
             _ => panic!("wrong variant"),
         }
@@ -1700,13 +1730,22 @@ mod tests {
 
     #[test]
     fn service_install_parses_root() {
-        let cli = Cli::try_parse_from(["avix", "client", "service", "install", "./pkg.tar.gz", "--root", "/custom/root"])
-            .unwrap();
+        let cli = Cli::try_parse_from([
+            "avix",
+            "client",
+            "service",
+            "install",
+            "./pkg.tar.gz",
+            "--root",
+            "/custom/root",
+        ])
+        .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Service {
-                    sub: ServiceCmd::Install { root, .. },
-                },
+                sub:
+                    ClientCmd::Service {
+                        sub: ServiceCmd::Install { root, .. },
+                    },
             } => assert_eq!(root.to_string_lossy(), "/custom/root"),
             _ => panic!("wrong variant"),
         }
@@ -1727,12 +1766,14 @@ mod tests {
 
     #[test]
     fn service_status_parses_name() {
-        let cli = Cli::try_parse_from(["avix", "client", "service", "status", "github-svc"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["avix", "client", "service", "status", "github-svc"]).unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Service {
-                    sub: ServiceCmd::Status { name, .. },
-                },
+                sub:
+                    ClientCmd::Service {
+                        sub: ServiceCmd::Status { name, .. },
+                    },
             } => assert_eq!(name, "github-svc"),
             _ => panic!("wrong variant"),
         }
@@ -1743,9 +1784,10 @@ mod tests {
         let cli = Cli::try_parse_from(["avix", "client", "service", "start", "my-svc"]).unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Service {
-                    sub: ServiceCmd::Start { name, server_url },
-                },
+                sub:
+                    ClientCmd::Service {
+                        sub: ServiceCmd::Start { name, server_url },
+                    },
             } => {
                 assert_eq!(name, "my-svc");
                 assert_eq!(server_url, None);
@@ -1756,12 +1798,22 @@ mod tests {
 
     #[test]
     fn service_start_parses_server_url() {
-        let cli = Cli::try_parse_from(["avix", "client", "service", "start", "my-svc", "--server-url", "http://localhost:9999"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "avix",
+            "client",
+            "service",
+            "start",
+            "my-svc",
+            "--server-url",
+            "http://localhost:9999",
+        ])
+        .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Service {
-                    sub: ServiceCmd::Start { name, server_url },
-                },
+                sub:
+                    ClientCmd::Service {
+                        sub: ServiceCmd::Start { name, server_url },
+                    },
             } => {
                 assert_eq!(name, "my-svc");
                 assert_eq!(server_url, Some("http://localhost:9999".to_string()));
@@ -1785,12 +1837,22 @@ mod tests {
 
     #[test]
     fn service_stop_parses_server_url() {
-        let cli = Cli::try_parse_from(["avix", "client", "service", "stop", "my-svc", "--server-url", "http://localhost:9999"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "avix",
+            "client",
+            "service",
+            "stop",
+            "my-svc",
+            "--server-url",
+            "http://localhost:9999",
+        ])
+        .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Service {
-                    sub: ServiceCmd::Stop { name, server_url },
-                },
+                sub:
+                    ClientCmd::Service {
+                        sub: ServiceCmd::Stop { name, server_url },
+                    },
             } => {
                 assert_eq!(name, "my-svc");
                 assert_eq!(server_url, Some("http://localhost:9999".to_string()));
@@ -1814,12 +1876,22 @@ mod tests {
 
     #[test]
     fn service_restart_parses_server_url() {
-        let cli = Cli::try_parse_from(["avix", "client", "service", "restart", "my-svc", "--server-url", "http://localhost:9999"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "avix",
+            "client",
+            "service",
+            "restart",
+            "my-svc",
+            "--server-url",
+            "http://localhost:9999",
+        ])
+        .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Service {
-                    sub: ServiceCmd::Restart { name, server_url },
-                },
+                sub:
+                    ClientCmd::Service {
+                        sub: ServiceCmd::Restart { name, server_url },
+                    },
             } => {
                 assert_eq!(name, "my-svc");
                 assert_eq!(server_url, Some("http://localhost:9999".to_string()));
@@ -1830,13 +1902,21 @@ mod tests {
 
     #[test]
     fn service_uninstall_force_flag() {
-        let cli =
-            Cli::try_parse_from(["avix", "client", "service", "uninstall", "github-svc", "--force"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "avix",
+            "client",
+            "service",
+            "uninstall",
+            "github-svc",
+            "--force",
+        ])
+        .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Service {
-                    sub: ServiceCmd::Uninstall { name, force, .. },
-                },
+                sub:
+                    ClientCmd::Service {
+                        sub: ServiceCmd::Uninstall { name, force, .. },
+                    },
             } => {
                 assert_eq!(name, "github-svc");
                 assert!(force);
@@ -1847,13 +1927,21 @@ mod tests {
 
     #[test]
     fn service_logs_follow_parses() {
-        let cli =
-            Cli::try_parse_from(["avix", "client", "service", "logs", "github-svc", "--follow"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "avix",
+            "client",
+            "service",
+            "logs",
+            "github-svc",
+            "--follow",
+        ])
+        .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Service {
-                    sub: ServiceCmd::Logs { name, follow },
-                },
+                sub:
+                    ClientCmd::Service {
+                        sub: ServiceCmd::Logs { name, follow },
+                    },
             } => {
                 assert_eq!(name, "github-svc");
                 assert!(follow);
@@ -1864,8 +1952,15 @@ mod tests {
 
     #[test]
     fn service_status_json_flag() {
-        let cli =
-            Cli::try_parse_from(["avix", "--json", "client", "service", "status", "github-svc"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "avix",
+            "--json",
+            "client",
+            "service",
+            "status",
+            "github-svc",
+        ])
+        .unwrap();
         assert!(cli.json);
         assert!(matches!(
             cli.command,
@@ -1879,14 +1974,20 @@ mod tests {
 
     #[test]
     fn service_install_no_checksum_defaults_none() {
-        let cli =
-            Cli::try_parse_from(["avix", "client", "service", "install", "https://example.com/x.tar.gz"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "avix",
+            "client",
+            "service",
+            "install",
+            "https://example.com/x.tar.gz",
+        ])
+        .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Service {
-                    sub: ServiceCmd::Install { checksum, .. },
-                },
+                sub:
+                    ClientCmd::Service {
+                        sub: ServiceCmd::Install { checksum, .. },
+                    },
             } => assert!(checksum.is_none()),
             _ => panic!("wrong variant"),
         }
@@ -1909,15 +2010,17 @@ mod tests {
         .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Secret {
-                    sub: SecretCmd::Set {
-                        name,
-                        value,
-                        for_service,
-                        for_user,
-                        ..
+                sub:
+                    ClientCmd::Secret {
+                        sub:
+                            SecretCmd::Set {
+                                name,
+                                value,
+                                for_service,
+                                for_user,
+                                ..
+                            },
                     },
-                },
             } => {
                 assert_eq!(name, "github-app-key");
                 assert_eq!(value, "ghp_abc");
@@ -1943,15 +2046,17 @@ mod tests {
         .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Secret {
-                    sub: SecretCmd::Set {
-                        name,
-                        value,
-                        for_service,
-                        for_user,
-                        ..
+                sub:
+                    ClientCmd::Secret {
+                        sub:
+                            SecretCmd::Set {
+                                name,
+                                value,
+                                for_service,
+                                for_user,
+                                ..
+                            },
                     },
-                },
             } => {
                 assert_eq!(name, "my-token");
                 assert_eq!(value, "tok-xyz");
@@ -1964,13 +2069,21 @@ mod tests {
 
     #[test]
     fn secret_list_for_service_parses() {
-        let cli =
-            Cli::try_parse_from(["avix", "client", "secret", "list", "--for-service", "github-svc"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "avix",
+            "client",
+            "secret",
+            "list",
+            "--for-service",
+            "github-svc",
+        ])
+        .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Secret {
-                    sub: SecretCmd::List { for_service, .. },
-                },
+                sub:
+                    ClientCmd::Secret {
+                        sub: SecretCmd::List { for_service, .. },
+                    },
             } => assert_eq!(for_service.as_deref(), Some("github-svc")),
             _ => panic!("wrong variant"),
         }
@@ -1978,12 +2091,14 @@ mod tests {
 
     #[test]
     fn secret_list_for_user_parses() {
-        let cli = Cli::try_parse_from(["avix", "client", "secret", "list", "--for-user", "alice"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "client", "secret", "list", "--for-user", "alice"])
+            .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Secret {
-                    sub: SecretCmd::List { for_user, .. },
-                },
+                sub:
+                    ClientCmd::Secret {
+                        sub: SecretCmd::List { for_user, .. },
+                    },
             } => assert_eq!(for_user.as_deref(), Some("alice")),
             _ => panic!("wrong variant"),
         }
@@ -2003,11 +2118,13 @@ mod tests {
         .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Secret {
-                    sub: SecretCmd::Delete {
-                        name, for_service, ..
+                sub:
+                    ClientCmd::Secret {
+                        sub:
+                            SecretCmd::Delete {
+                                name, for_service, ..
+                            },
                     },
-                },
             } => {
                 assert_eq!(name, "my-key");
                 assert_eq!(for_service.as_deref(), Some("my-svc"));
@@ -2025,15 +2142,18 @@ mod tests {
             "client",
             "session",
             "create",
-            "--title", "My Session",
-            "--goal", "Do something",
+            "--title",
+            "My Session",
+            "--goal",
+            "Do something",
         ])
         .unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Session {
-                    sub: SessionCmd::Create { title, goal, .. },
-                },
+                sub:
+                    ClientCmd::Session {
+                        sub: SessionCmd::Create { title, goal, .. },
+                    },
             } => {
                 assert_eq!(title, "My Session");
                 assert_eq!(goal, "Do something");
@@ -2060,9 +2180,10 @@ mod tests {
         let cli = Cli::try_parse_from(["avix", "client", "session", "show", "sess-123"]).unwrap();
         match cli.command {
             Cmd::Client {
-                sub: ClientCmd::Session {
-                    sub: SessionCmd::Show { session_id },
-                },
+                sub:
+                    ClientCmd::Session {
+                        sub: SessionCmd::Show { session_id },
+                    },
             } => assert_eq!(session_id, "sess-123"),
             _ => panic!("wrong variant"),
         }
