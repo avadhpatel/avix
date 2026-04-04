@@ -1139,7 +1139,7 @@ async fn main() -> Result<()> {
                         "session_id": session,
                     });
 
-                    let cmd = AtpCmd_::new("proc", "package/install-agent", "", body);
+                    let cmd = AtpCmd_::new("proc", "package/install-agent", &dispatcher.token, body);
                     let reply = dispatcher.call(&cmd).await.context("install-agent failed")?;
 
                     if !reply.ok {
@@ -1161,7 +1161,7 @@ async fn main() -> Result<()> {
                         "scope": scope,
                     });
 
-                    let cmd = AtpCmd_::new("proc", "package/uninstall-agent", "", body);
+                    let cmd = AtpCmd_::new("proc", "package/uninstall-agent", &dispatcher.token, body);
                     let reply = dispatcher.call(&cmd).await.context("uninstall-agent failed")?;
 
                     if !reply.ok {
@@ -1393,7 +1393,7 @@ async fn main() -> Result<()> {
                         "session_id": session,
                     });
 
-                    let cmd = AtpCmd_::new("proc", "package/install-service", "", body);
+                    let cmd = AtpCmd_::new("proc", "package/install-service", &dispatcher.token, body);
                     let reply = dispatcher.call(&cmd).await.context("install-service failed")?;
 
                     if !reply.ok {
