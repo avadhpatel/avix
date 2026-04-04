@@ -1,24 +1,23 @@
-apiVersion: avix/v1
-kind: AgentManifest
-metadata:
-  name: universal-tool-explorer
-  version: "0.1.0"
-  description: "Discovers and exercises every available tool in the Avix OS. Creates a workspace project, generates a full system report with automatic history diffs, and summarizes findings using the LLM."
-  author: "Avix Core Team"
-  license: MIT
-  tags:
-    - demo
-    - tools
-    - explorer
-    - workspace
-    - testing
+name: universal-tool-explorer
+version: "0.1.0"
+description: "Discovers and exercises every available tool in the Avix OS. Creates a workspace project, generates a full system report with automatic history diffs, and summarizes findings using the LLM."
+author: "Avix Core Team"
+license: MIT
+tags:
+  - demo
+  - tools
+  - explorer
+  - workspace
+  - testing
+system_prompt_path: system-prompt.md
+
+# Additional spec fields (RuntimeExecutor settings)
 spec:
-  # Runtime settings used by RuntimeExecutor
   contextWindowTokens: 128000
   maxToolChainLength: 50
-  hilRequiredTools: []                    # No human-in-the-loop required for this demo
+  hilRequiredTools: []
 
-  # Capabilities this agent requests (kernel will intersect with user's granted capabilities)
+  # Capabilities this agent requests
   requestedCapabilities:
     - kernel:*
     - fs:*
@@ -28,11 +27,6 @@ spec:
     - session:read
     - session:write
     - cap:*
-
-  # System prompt configuration
-  systemPrompt:
-    source: file
-    path: system-prompt.md
 
   # Default goal shown in catalog / UI
   defaultGoalTemplate: "Explore the entire Avix tool registry, create a new project in the workspace using workspace/create-project, generate a complete system status report, write it to the workspace (triggering FileDiff parts in history), read it back, summarize the exploration with llm/complete, and finally mark the session Idle."
