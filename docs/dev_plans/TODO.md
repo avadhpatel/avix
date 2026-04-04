@@ -149,6 +149,40 @@ cargo test --package avix-core --lib
 
 ---
 
+---
+
+## Packaging & Installation — Future Work
+
+### Remote Binary Upload for Local Installs over ATP
+
+**Context**: `proc/package/install-agent` and `proc/package/install-service` accept a source
+string (URL, `github:` spec, or server-side file path). All download/extract work happens
+server-side. This means `file:///path` installs only work when the client and server share a
+filesystem (local dev). A remote client (e.g. Web-UI on a laptop, server on a remote box)
+cannot install from a local `.tar.xz` file it holds.
+
+**Goal**: Allow a client to push a local `.tar.xz` binary directly to the kernel over ATP,
+so remote installs from local files work.
+
+**Options to evaluate**:
+1. **Chunked ATP upload** — new `proc/package/upload-chunk` ATP command that accepts
+   base64-encoded byte chunks + a final `proc/package/install-from-upload` that assembles
+   and installs. Simple but slow for large service binaries.
+2. **Separate HTTP upload endpoint** — `POST /api/v1/package/upload` (multipart) on the
+   ATP gateway's HTTP layer. Returns a temp token; `proc/package/install-agent` accepts
+   `upload:<token>` as a source. Faster, standard pattern, fits well with the existing
+   HTTP login endpoint.
+
+Option 2 is preferred — the HTTP layer already exists for `/auth/login`.
+
+**Affected files** (when implemented):
+- `crates/avix-core/src/gateway/` — add multipart upload handler
+- `crates/avix-core/src/syscall/domain/pkg_.rs` — handle `upload:<token>` source
+- CLI — add `--file <path>` flag to `avix agent install` / `avix service install`
+- Web-UI — file picker in Extensions tab "Install URL" form
+
+---
+
 ## Notes
 
 - Permission model defaults to `all: r--` (everyone can read but not execute)
