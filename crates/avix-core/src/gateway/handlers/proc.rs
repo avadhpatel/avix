@@ -46,6 +46,18 @@ pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
             tracing::info!(op, ipc_method = %ipc_method, "forwarding session op to kernel IPC");
             ipc_forward(&id, &ipc_method, cmd.cmd.body, ctx.ipc.as_ref()).await
         }
+        "package/install-agent"
+        | "package/uninstall-agent"
+        | "package/install-service"
+        | "package/uninstall-service"
+        | "package/trust-add"
+        | "package/trust-list"
+        | "package/trust-remove" => {
+            // Transform kebab-case to path: package/install-agent -> kernel/proc/package/install-agent
+            let ipc_method = format!("kernel/proc/{}", op.replace('-', "/"));
+            tracing::info!(op, ipc_method = %ipc_method, "forwarding package op to kernel IPC");
+            ipc_forward(&id, &ipc_method, cmd.cmd.body, ctx.ipc.as_ref()).await
+        }
         op => {
             tracing::warn!(op, "unknown proc op");
             unknown_op(id, op)
