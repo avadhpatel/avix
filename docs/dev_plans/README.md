@@ -22,6 +22,7 @@ Implement in order A → D.
 | `pkg-gap-C-tui-webui-github-actions.md` | TUI `:install` command mode, Web-UI Extensions tab (Browse/Installed/URL), GitHub Actions `.tar.xz` packaging workflow | **Medium** | A, B |
 | `pkg-gap-D-gpg-rollback-polish.md` | GPG signature verification for official packages, atomic install with rollback, per-user install quota, `uninstall` commands | **Low** | A, B, C |
 | `pkg-gap-E-authoring-tooling.md` | `PackageValidator`, `PackageBuilder` (xz archive + checksums), `PackageScaffold`; `avix package validate/build/new` CLI commands; repo directory conventions (`agents/packs/`, `services/`) | **High** | — |
+| `pkg-gap-F-third-party-trust-keyring.md` | `TrustStore` (disk-backed keyring at `etc/avix/trusted-keys/`), `TrustedKey` with source glob patterns, updated GPG verification (official key + keyring), `proc/package/trust-*` syscalls, `avix package trust add/list/remove` CLI | **Medium** | D |
 
 **Status:** Draft — implementation not yet started
 
