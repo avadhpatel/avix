@@ -195,6 +195,6 @@ These are hard rules. Violating any of them is a bug.
 **Specification references:**
 | Doc | Topic |
 |-----|-------|
-| `spec/packaging-and-installation.md` | Package authoring, installation syscalls, CLI/TUI/Web-UI, quotas (pkg-gaps A–E) |
+| `spec/packaging-and-installation.md` | Package authoring, installation syscalls, CLI/TUI/Web-UI, quotas, trust keyring (pkg-gaps A–F) |
 | `spec/service-authoring.md` | Service lifecycle, `service.yaml`, tool descriptors, restart watchdog |
 | `spec/agent-manifest.md` | Agent manifest format, manifest scanner, agent catalog |

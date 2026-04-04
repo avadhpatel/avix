@@ -1,6 +1,6 @@
 # Packaging and Installation System
 
-> **Spec status:** Implemented — reflects pkg-gaps A–E
+> **Spec status:** Implemented — reflects pkg-gaps A–F
 > **Last updated:** April 2026
 
 ---
@@ -13,7 +13,7 @@ system provides:
 1. **Package authoring** — `PackageScaffold`, `PackageBuilder`, `PackageValidator`
 2. **Package installation** — kernel syscalls for agent/service install, uninstall
 3. **CLI/TUI/Web-UI** — user-facing commands for managing packages
-4. **Quotas & security** — per-user install limits, GPG verification (future)
+4. **Trust & verification** — embedded official key + `TrustStore` for third-party keys
 
 ---
 
@@ -65,6 +65,26 @@ All package tooling works without a running Avix server.
 | `avix client package validate <path>` | Validate package structure |
 | `avix client package build <path> --version v0.1.0 [-o <dir>]` | Build `.tar.xz` + checksums |
 | `avix client package new <name> --type agent\|service [-o <dir>]` | Scaffold new package |
+| `avix client package trust add <key-url> --name <label> [--allow-source <pattern>]` | Add trusted key |
+| `avix client package trust list` | List trusted keys |
+| `avix client package trust remove <fingerprint>` | Remove trusted key |
+
+### Trust Management
+
+Avix uses GPG signature verification for package integrity:
+
+1. **Official packages** — verified against embedded official Avix public key
+2. **Third-party packages** — verified against keys in `TrustStore`
+
+**TrustStore location:** `AVIX_ROOT/etc/avix/trusted-keys/`
+
+```
+etc/avix/trusted-keys/
+├── <fingerprint>.asc           # ASCII-armored public key
+└── <fingerprint>.meta.yaml     # label, added_at, allowed_sources
+```
+
+**Allowed sources:** Optional glob patterns that restrict which package sources a key can sign for. If empty, the key is trusted for all sources.
 
 ### Library API
 
@@ -100,6 +120,13 @@ let req = ScaffoldRequest {
     output_dir: std::path::PathBuf::from("./agents"),
 };
 let path = PackageScaffold::create(req)?;
+
+// TrustStore API
+use avix_core::packaging::{TrustStore, TrustedKey};
+let store = TrustStore::new(root_path);
+let key = store.add(key_asc, "AcmeCorp", vec!["github:acmecorp/*".to_string()])?;
+let keys = store.list()?;
+store.remove(&fingerprint)?;
 ```
 
 ### Checksums File
@@ -164,7 +191,8 @@ avix agent install github:acme/avix-plugins/my-agent
 |------------|--------------|
 | `install:agent` | Install/uninstall agent packages |
 | `install:service` | Install/uninstall service packages |
-| `install:from-untrusted-source` | Required for unsigned packages (future: GPG verification) |
+| `auth:admin` | Add/remove trusted keys via `proc/package/trust-*` |
+| `install:from-untrusted-source` | Required for unsigned packages or packages from sources not covered by trusted keys |
 
 ---
 
@@ -220,7 +248,8 @@ The release workflow (`.github/workflows/release-packages.yml`) builds packages:
 
 | File | Description |
 |------|-------------|
-| `crates/avix-core/src/packaging/` | Offline tooling module |
+| `crates/avix-core/src/packaging/` | Offline tooling module (trust, gpg, builder, validator, scaffold) |
+| `crates/avix-core/official-pubkey.asc` | Embedded official Avix public key |
 | `crates/avix-core/src/agent_manifest/` | Agent manifest + installer |
 | `crates/avix-core/src/service/installer.rs` | Service installer |
 | `crates/avix-core/src/service/package_source.rs` | Package source resolver |
@@ -235,6 +264,5 @@ The release workflow (`.github/workflows/release-packages.yml`) builds packages:
 
 ## Future Work
 
-- **pkg-gap-F:** Third-party trust keyring (`TrustStore`, GPG verification)
 - Multi-language service scaffolding (Node.js, Python)
 - Package repository/index server
