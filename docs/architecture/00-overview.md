@@ -191,3 +191,10 @@ These are hard rules. Violating any of them is a bug.
 | 14-agent-persistence.md | Agent discovery (ManifestScanner), invocation records (InvocationStore), conversation JSONL, ATP/CLI/TUI/GUI surface |
 
 **Comprehensive narrative reference:** `docs/Avix-Architecture.md`
+
+**Specification references:**
+| Doc | Topic |
+|-----|-------|
+| `spec/packaging-and-installation.md` | Package authoring, installation syscalls, CLI/TUI/Web-UI, quotas (pkg-gaps A–E) |
+| `spec/service-authoring.md` | Service lifecycle, `service.yaml`, tool descriptors, restart watchdog |
+| `spec/agent-manifest.md` | Agent manifest format, manifest scanner, agent catalog |

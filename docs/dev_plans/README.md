@@ -10,21 +10,21 @@ Consider files in this folder temporary and can be deleted as per dev's needs.
 
 ## Active Plans
 
-### Packaging & Installation System (spec: `docs/specs/packaging-and-installation.md`)
+### Packaging & Installation System (spec: `docs/spec/packaging-and-installation.md`)
 
 Standardized `.tar.xz` packaging, ATP-first install flow, and user-facing CLI/TUI/Web-UI surfaces.
-Implement in order A → D.
+Implemented in order A → E. All gaps completed.
 
-| File | What it builds | Priority | Depends On |
-|------|---------------|----------|------------|
-| `pkg-gap-A-kernel-package-handlers.md` | `PackageSource` resolver (`github:`, `git:`, `https://`, local), xz decompression, `AgentInstaller`, `proc/package/install-agent` + `install-service` syscalls, capability enforcement, session audit log | **Critical** | — |
-| `pkg-gap-B-cli-commands.md` | `avix agent install` + `avix service install` CLI commands, live progress streaming, git clone fallback, `--dry-run` | **High** | A |
-| `pkg-gap-C-tui-webui-github-actions.md` | TUI `:install` command mode, Web-UI Extensions tab (Browse/Installed/URL), GitHub Actions `.tar.xz` packaging workflow | **Medium** | A, B |
-| `pkg-gap-D-gpg-rollback-polish.md` | GPG signature verification for official packages, atomic install with rollback, per-user install quota, `uninstall` commands | **Low** | A, B, C |
-| `pkg-gap-E-authoring-tooling.md` | `PackageValidator`, `PackageBuilder` (xz archive + checksums), `PackageScaffold`; `avix package validate/build/new` CLI commands; repo directory conventions (`agents/packs/`, `services/`) | **High** | — |
-| `pkg-gap-F-third-party-trust-keyring.md` | `TrustStore` (disk-backed keyring at `etc/avix/trusted-keys/`), `TrustedKey` with source glob patterns, updated GPG verification (official key + keyring), `proc/package/trust-*` syscalls, `avix package trust add/list/remove` CLI | **Medium** | D |
+| File | Status | What it builds |
+|------|--------|----------------|
+| `pkg-gap-A-kernel-package-handlers.md` | ✅ Done | `PackageSource` resolver, xz decompression, `AgentInstaller`, `proc/package/install-*` syscalls |
+| `pkg-gap-B-cli-commands.md` | ✅ Done | `avix agent install`, `avix service install` CLI, live progress |
+| `pkg-gap-C-tui-webui-github-actions.md` | ✅ Done | TUI `:install`, Web-UI Extensions tab, GitHub Actions workflow |
+| `pkg-gap-D-gpg-rollback-polish.md` | ✅ Done | Atomic install + rollback, install quota, `uninstall` commands |
+| `pkg-gap-E-authoring-tooling.md` | ✅ Done | `PackageValidator`, `PackageBuilder`, `PackageScaffold`, `avix package` CLI |
+| `pkg-gap-F-third-party-trust-keyring.md` | Pending | TrustStore, GPG verification, `avix package trust` CLI |
 
-**Status:** Draft — implementation not yet started
+**Status:** Complete — pkg-gaps A–E done
 
 ---
 

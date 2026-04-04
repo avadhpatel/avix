@@ -224,10 +224,24 @@ Supported providers: Anthropic, OpenAI, Ollama, Stability AI, ElevenLabs.
 
 All share `avix-client-core` ATP lib.
 
-### Service Management
+### Package Management
 
 ```bash
-# Install a service from a local package or URL
+# Package authoring (offline — no server required)
+avix client package new my-agent --type agent          # scaffold new agent
+avix client package new my-svc --type service          # scaffold new service
+avix client package validate ./my-agent                 # validate package structure
+avix client package build ./my-agent --version v0.1.0   # build .tar.xz + checksums
+
+# Agent installation
+avix agent install ./my-agent.tar.xz                    # from local archive
+avix agent install https://example.com/agent.tar.xz     # from URL
+avix agent install github:owner/repo/agent              # from GitHub Releases
+avix agent install git:https://github.com/user/repo     # from git
+avix agent catalog                                       # list installed agents
+avix agent uninstall my-agent [--scope user|system]     # remove agent
+
+# Service installation
 avix service install ./github-svc-1.2.0.tar.gz --checksum sha256:abc123
 avix service install https://pkg.avix.dev/github-svc-1.2.0.tar.gz
 

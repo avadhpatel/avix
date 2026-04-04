@@ -293,6 +293,7 @@ a running system is `avix config init` → `avix start`.
 | Injecting `_caller` unconditionally | Only inject when `ServiceRegistry::is_caller_scoped(svc)` returns true |
 | Writing invocation records via VFS | Use `LocalProvider` directly (kernel is trusted) — VFS ACL layer would block it |
 | Confusing sessions with invocations | Sessions are ephemeral (`/proc/`); invocations are persistent (`users/<u>/agents/`) |
+| Using `service.unit` instead of `service.yaml` | Services use `service.yaml` (YAML), not TOML |
 
 ---
 
