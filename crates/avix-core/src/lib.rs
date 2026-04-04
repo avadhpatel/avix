@@ -19,6 +19,7 @@ pub mod llm_svc;
 pub mod mcp_bridge;
 pub mod memfs;
 pub mod memory_svc;
+pub mod packaging;
 pub mod params;
 pub mod pipe;
 pub mod process;

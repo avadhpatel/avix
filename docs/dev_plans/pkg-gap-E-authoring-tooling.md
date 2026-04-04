@@ -1,6 +1,6 @@
 # pkg-gap-E — Package Authoring Tooling
 
-> **Status:** Pending
+> **Status:** Completed
 > **Priority:** High — needed before any agent/service packages can be published
 > **Depends on:** nothing (pure local tooling, no ATP required)
 > **Blocks:** nothing (but pkg-gap-A install depends on well-formed packages existing)
@@ -37,18 +37,17 @@ No ATP. No kernel interaction. All commands work without a running server.
 
 ```
 agents/
-└── packs/
-    └── <agent-name>/          # e.g. universal-tool-explorer/
-        ├── manifest.yaml      # REQUIRED
-        ├── system-prompt.md   # REQUIRED (or referenced in manifest)
-        ├── examples/          # optional
-        └── README.md          # optional
+└── <agent-name>/              # e.g. universal-tool-explorer/
+    ├── manifest.yaml           # REQUIRED
+    ├── system-prompt.md       # REQUIRED (or referenced in manifest)
+    ├── examples/              # optional
+    └── README.md              # optional
 
 services/
 └── <service-name>/            # e.g. workspace/
     ├── Cargo.toml             # REQUIRED for Rust services
     ├── src/
-    ├── service.unit           # REQUIRED
+    ├── service.yaml           # REQUIRED
     ├── tools/                 # optional: *.tool.yaml descriptors
     └── README.md              # optional
 ```
