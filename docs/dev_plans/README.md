@@ -10,6 +10,22 @@ Consider files in this folder temporary and can be deleted as per dev's needs.
 
 ## Active Plans
 
+### Packaging & Installation System (spec: `docs/specs/packaging-and-installation.md`)
+
+Standardized `.tar.xz` packaging, ATP-first install flow, and user-facing CLI/TUI/Web-UI surfaces.
+Implement in order A → D.
+
+| File | What it builds | Priority | Depends On |
+|------|---------------|----------|------------|
+| `pkg-gap-A-kernel-package-handlers.md` | `PackageSource` resolver (`github:`, `git:`, `https://`, local), xz decompression, `AgentInstaller`, `proc/package/install-agent` + `install-service` syscalls, capability enforcement, session audit log | **Critical** | — |
+| `pkg-gap-B-cli-commands.md` | `avix agent install` + `avix service install` CLI commands, live progress streaming, git clone fallback, `--dry-run` | **High** | A |
+| `pkg-gap-C-tui-webui-github-actions.md` | TUI `:install` command mode, Web-UI Extensions tab (Browse/Installed/URL), GitHub Actions `.tar.xz` packaging workflow | **Medium** | A, B |
+| `pkg-gap-D-gpg-rollback-polish.md` | GPG signature verification for official packages, atomic install with rollback, per-user install quota, `uninstall` commands | **Low** | A, B, C |
+
+**Status:** Draft — implementation not yet started
+
+---
+
 ### Session Management (spec: `docs/architecture/14-agent-persistence.md`)
 
 Implement first-class Session abstraction for multi-turn agent workflows.
