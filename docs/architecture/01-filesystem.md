@@ -56,32 +56,33 @@ AVIX_ROOT/                 (e.g. ~/avix-data or /var/avix-data)
 │   ├── crews.yaml
 │   ├── crontab.yaml
 │   └── fstab.yaml
-├── bin/                   → VFS /bin/
-├── services/              → VFS /services/
-│   └── <svcname>/
-│       ├── service.yaml
-│       ├── bin/
-│       ├── tools/
-│       ├── workspace/
-│       └── .install.json
-├── users/                 → VFS /users/
-│   └── <username>/
-│       ├── workspace/
-│       ├── snapshots/
-│       ├── defaults.yaml
-│       ├── limits.yaml
-│       ├── bin/               → VFS /users/<username>/bin/ (user-installed agents)
-│       │   └── <agent-name>/
-│       │       └── manifest.yaml
-│       └── agents/            → invocation records (written by kernel via LocalProvider)
-│           └── <agent-name>/
-│               └── invocations/
-│                   ├── <uuid>.yaml          (summary: status, tokens, timing)
-│                   └── <uuid>/
-│                       └── conversation.jsonl
-├── crews/                 → VFS /crews/
-├── secrets/               → VFS /secrets/ (AES-256-GCM blobs, chmod 700)
-└── logs/                  → /var/log/avix/
+├── data/
+│   ├── bin/               → VFS /bin/ (system-installed agents)
+│   ├── services/           → VFS /services/
+│   │   └── <svcname>@<version>/
+│   │       ├── service.yaml
+│   │       ├── bin/
+│   │       ├── tools/
+│   │       ├── workspace/
+│   │       └── .install.json
+│   ├── users/              → VFS /users/
+│   │   └── <username>/
+│   │       ├── workspace/
+│   │       ├── snapshots/
+│   │       ├── defaults.yaml
+│   │       ├── limits.yaml
+│   │       ├── bin/           → VFS /users/<username>/bin/ (user-installed agents)
+│   │       │   └── <agent-name>@<version>/
+│   │       │       └── manifest.yaml
+│   │       └── agents/        → invocation records (written by kernel via LocalProvider)
+│   │           └── <agent-name>/
+│   │               └── invocations/
+│   │                   ├── <uuid>.yaml          (summary: status, tokens, timing)
+│   │                   └── <uuid>/
+│   │                       └── conversation.jsonl
+│   ├── crews/              → VFS /crews/
+│   └── secrets/            → VFS /secrets/ (AES-256-GCM blobs, chmod 700)
+└── logs/                   → /var/log/avix/
 ```
 
 File permissions (set by installer, not Avix core):
@@ -91,9 +92,9 @@ File permissions (set by installer, not Avix core):
 | `AVIX_ROOT/etc/` | 700 | Only avix process user can read |
 | `AVIX_ROOT/etc/auth.conf` | 600 | Credential hashes |
 | `AVIX_ROOT/etc/kernel.yaml` | 600 | Master key source |
-| `AVIX_ROOT/secrets/` | 700 | Kernel-only tree |
-| `AVIX_ROOT/secrets/**/*.enc` | 600 | Encrypted blobs |
-| `AVIX_ROOT/users/` | 755 | No secrets — freely readable |
+| `AVIX_ROOT/data/secrets/` | 700 | Kernel-only tree |
+| `AVIX_ROOT/data/secrets/**/*.enc` | 600 | Encrypted blobs |
+| `AVIX_ROOT/data/users/` | 755 | No secrets — freely readable |
 
 ---
 

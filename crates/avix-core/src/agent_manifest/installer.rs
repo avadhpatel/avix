@@ -91,20 +91,45 @@ impl AgentInstaller {
             }
         };
 
+        // Use versioned directory name: <name>@<version>
+        let versioned_name = format!("{}@{}", manifest.name, manifest.version);
+        
         let install_dir = match &req.scope {
-            InstallScope::System => self.root.join("bin").join(&manifest.name),
+            InstallScope::System => self.root.join("data").join("bin").join(&versioned_name),
             InstallScope::User(u) => self
                 .root
+                .join("data")
                 .join("users")
                 .join(u)
                 .join("bin")
-                .join(&manifest.name),
+                .join(&versioned_name),
         };
+        
+        // Check if this specific version is already installed
         if install_dir.exists() {
             return Err(AvixError::ConfigParse(format!(
-                "agent already installed: {}",
-                manifest.name
+                "agent version already installed: {}@{}",
+                manifest.name, manifest.version
             )));
+        }
+
+        // Also check if a different version of the same agent exists (for potential upgrade path)
+        let base_dir = match &req.scope {
+            InstallScope::System => self.root.join("data").join("bin"),
+            InstallScope::User(u) => self.root.join("data").join("users").join(u).join("bin"),
+        };
+        
+        // Find any existing versions of this agent
+        if let Ok(entries) = std::fs::read_dir(&base_dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                    if let Ok(name) = entry.file_name().into_string() {
+                        if name.starts_with(&format!("{}@", manifest.name)) {
+                            tracing::debug!("found existing version of {}: {}", manifest.name, name);
+                        }
+                    }
+                }
+            }
         }
 
         let mut guard = InstallGuard::new(install_dir.clone());
@@ -242,7 +267,7 @@ mod tests {
         assert_eq!(result.version, "1.0.0");
         assert!(root
             .path()
-            .join("users/alice/bin/test-agent/manifest.yaml")
+            .join("data/users/alice/bin/test-agent@1.0.0/manifest.yaml")
             .exists());
     }
 
@@ -268,7 +293,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.name, "system-agent");
-        assert!(root.path().join("bin/system-agent/manifest.yaml").exists());
+        assert!(root.path().join("data/bin/system-agent@1.0.0/manifest.yaml").exists());
     }
 
     #[tokio::test]

@@ -14,9 +14,9 @@ solve it, it is a service.
 Services are **language-agnostic host processes**. Any language that can open a socket and
 speak JSON-RPC 2.0 with 4-byte length-prefix framing can implement a service.
 
-All services live under `AVIX_ROOT/services/`. Built-in services are compiled into the
+All services live under `AVIX_ROOT/data/services/`. Built-in services are compiled into the
 `avix` binary. Installed services are added via `avix service install` or the ATP
-`sys/install` syscall. **At runtime the kernel treats built-in and installed services
+`proc/package/install-service` syscall. **At runtime the kernel treats built-in and installed services
 identically.**
 
 ---
@@ -51,7 +51,7 @@ avix start
     │
     ├─ Service → ipc.register → kernel
     │       Kernel validates token, records endpoint, scans *.tool.yaml from
-    │       AVIX_ROOT/services/<name>/tools/ and registers descriptors in ToolRegistry
+    │       AVIX_ROOT/data/services/<name>@<version>/tools/ and registers descriptors in ToolRegistry
     │
     ├─ Service optionally calls ipc.tool-add / ipc.tool-remove at runtime
     │
@@ -135,7 +135,7 @@ jobs:
 
 ## Tool Descriptor Files (`*.tool.yaml`)
 
-Services place typed tool descriptors in `AVIX_ROOT/services/<name>/tools/`. The
+Services place typed tool descriptors in `AVIX_ROOT/data/services/<name>@<version>/tools/`. The
 `ToolScanner` reads these at `ipc.register` time and populates the `ToolRegistry`.
 Implementation: `crates/avix-core/src/tool_registry/scanner.rs`.
 
@@ -187,7 +187,7 @@ output:
 On success, the kernel:
 1. Validates the token against the `ServiceManager` token map
 2. Records the endpoint in `ServiceRegistry`
-3. Scans `AVIX_ROOT/services/<name>/tools/*.tool.yaml`
+3. Scans `AVIX_ROOT/data/services/<name>@<version>/tools/*.tool.yaml`
 4. Registers all discovered `ToolEntry` records in `ToolRegistry`
 5. Stamps `registered_at` on the `ServiceRecord`
 
@@ -304,7 +304,7 @@ Implementation: `crates/avix-core/src/service/installer.rs`.
 2. **Verify checksum** — SHA-256, format `"sha256:<hex>"`; error on mismatch
 3. **Extract tarball** — strips top-level directory; sets `0o755` on `bin/` entries (Unix)
 4. **Validate manifest** — errors if no `service.yaml` found in the tarball
-5. **Conflict check** — errors if `AVIX_ROOT/services/<name>/` already exists
+5. **Conflict check** — errors if `AVIX_ROOT/data/services/<name>@<version>/` already exists
 6. **Copy to install dir** — walks extracted tree with `walkdir`, copies all files
 7. **Write receipt** — writes `.install.json` (`InstallReceipt`) with name, version,
    install timestamp, source URL, and tool list
@@ -502,8 +502,8 @@ Implementation: `crates/avix-core/src/router/dispatcher.rs`.
 
 | Path | Owner | Writable by service? |
 |------|-------|:-------------------:|
-| `AVIX_ROOT/services/<name>/` | Installer / kernel | No |
-| `AVIX_ROOT/services/<name>/workspace/` | Service | Yes |
+| `AVIX_ROOT/data/services/<name>@<version>/` | Installer / kernel | No |
+| `AVIX_ROOT/data/services/<name>@<version>/workspace/` | Service | Yes |
 | `AVIX_ROOT/proc/services/<name>/status.yaml` | Kernel | No |
 | `AVIX_ROOT/secrets/service/<name>/` | Admin CLI / kernel | No (kernel-injected) |
 

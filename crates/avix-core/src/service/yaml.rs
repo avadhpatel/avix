@@ -35,7 +35,26 @@ impl ServiceUnit {
     }
 
     pub fn load_for_service(root: &Path, name: &str) -> Result<Self, AvixError> {
-        Self::load(&root.join("services").join(name).join("service.yaml"))
+        // Scan for any versioned directory matching this service name in data/services
+        let services_dir = root.join("data").join("services");
+        let mut found_path = None;
+
+        if let Ok(entries) = std::fs::read_dir(&services_dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                    if let Ok(dir_name) = entry.file_name().into_string() {
+                        if dir_name.starts_with(&format!("{}@", name)) {
+                            found_path = Some(entry.path().join("service.yaml"));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        let path = found_path
+            .ok_or_else(|| AvixError::ConfigParse(format!("service not found: {}", name)))?;
+        Self::load(&path)
     }
 }
 

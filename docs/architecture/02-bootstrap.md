@@ -38,7 +38,7 @@ sequenceDiagram
     RT->>P1: phase1::run(&vfs) — write VFS skeleton
     P1-->>RT: /proc/, /kernel/defaults/, /kernel/limits/ created
     RT->>RT: load etc/signing.key → master_key
-    RT->>RT: phase2::mount_persistent_trees() — mount /etc/avix, /users, /secrets
+    RT->>RT: phase2::mount_persistent_trees() — mount /etc/avix, /users, /crews, /services, /bin
     RT->>RT: create Arc<AtpEventBus> (shared — lives for full daemon lifetime)
     RT-->>P2: start_daemon() called
     P2->>P2: IpcExecutorFactory::new(process_table, event_bus)
@@ -272,9 +272,9 @@ never configures itself.
 | `<root>/etc/users.yaml` | `UsersConfig` | Initialising user as first identity |
 | `<root>/etc/crews.yaml` | `CrewsConfig` | Empty crew list |
 | `<root>/etc/crontab.yaml` | `CrontabFile` | Empty scheduled jobs list |
-| `<root>/etc/fstab.yaml` | `Fstab` | Local mounts for `etc`, `users/<identity>`, `secrets` |
+| `<root>/etc/fstab.yaml` | `Fstab` | Local mounts for `etc`, `users`, `crews`, `services`, `bin` |
 | `<root>/data/users/<identity>/` | directory | User workspace backing directory |
-| `<root>/secrets/` | directory | Secrets backing directory |
+| `<root>/data/secrets/` | directory | Secrets backing directory |
 
 ### Idempotency
 

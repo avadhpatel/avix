@@ -25,7 +25,7 @@ Everything is mediated through the tool interface.
 | `memory.agent` | File indexing and context retrieval. | Yes | `fs:read`, `llm:inference` |
 | `observer.agent` | System health monitoring. | Optional | `fs:read`, `kernel:root` |
 
-All agents live in `/bin/` (system) or `/users/<username>/bin/` (user-installed).
+All agents live in `/bin/<name>@<version>/` (system) or `/users/<username>/bin/<name>@<version>/` (user-installed).
 
 ---
 
@@ -496,8 +496,8 @@ It scans two VFS directories:
 
 | Tree | Scope | ATP op |
 |------|-------|--------|
-| `/bin/<name>/manifest.yaml` | System — all users | `proc/list-installed` |
-| `/users/<username>/bin/<name>/manifest.yaml` | User — personal installs | `proc/list-installed` |
+| `/bin/<name>@<version>/manifest.yaml` | System — all users | `proc/list-installed` |
+| `/users/<username>/bin/<name>@<version>/manifest.yaml` | User — personal installs | `proc/list-installed` |
 
 System agents take precedence: if the same agent `name` appears in both trees, only the system version is returned.
 

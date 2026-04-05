@@ -50,7 +50,10 @@ pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
             // Transform: package/install-agent -> kernel/proc/package/install-agent
             let ipc_method = format!("kernel/proc/{}", op);
             tracing::info!(op, ipc_method = %ipc_method, "forwarding package op to kernel IPC");
-            ipc_forward(&id, &ipc_method, cmd.cmd.body, ctx.ipc.as_ref()).await
+            // Inject caller_identity into params for kernel to use
+            let mut body = cmd.cmd.body;
+            body["caller_identity"] = serde_json::json!(cmd.caller_identity);
+            ipc_forward(&id, &ipc_method, body, ctx.ipc.as_ref()).await
         }
         op => {
             tracing::warn!(op, "unknown proc op");

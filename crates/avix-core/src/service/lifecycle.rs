@@ -205,7 +205,8 @@ impl ServiceManager {
         drop(guard);
 
         // Scan and register tool descriptors from disk
-        let svc_dir = service_root.join("services").join(&svc_name);
+        // service_root is AVIX_ROOT, so we need data/services for disk path
+        let svc_dir = service_root.join("data").join("services").join(&svc_name);
         let entries = ToolScanner::scan_as_entries(&svc_name, &svc_dir)?;
         if let Some(reg) = &self.tool_registry {
             reg.add(&svc_name, entries).await?;

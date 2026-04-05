@@ -83,7 +83,13 @@ fn parse_scope(params: &Value, username: &str) -> Result<InstallScope, SyscallEr
 
 pub async fn install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
     check_capability(ctx, "proc/package/install-agent")?;
-    let username = "default";
+    
+    // Get username from params (injected by gateway from caller_identity)
+    let username = params
+        .get("caller_identity")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default");
+    
     INSTALL_QUOTA.check(username)?;
 
     let source = params
@@ -100,7 +106,6 @@ pub async fn install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path
         check_untrusted_source(ctx, source)?;
     }
 
-    let username = "default";
     let scope = parse_scope(&params, username)?;
     let version = params
         .get("version")
@@ -221,11 +226,16 @@ pub fn uninstall_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) ->
         .and_then(|v| v.as_str())
         .ok_or_else(|| SyscallError::Einval("missing name".into()))?;
 
-    let username = "default";
+    // Get username from params (injected by gateway from caller_identity)
+    let username = params
+        .get("caller_identity")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default");
+    
     let scope = parse_scope(&params, username)?;
     let install_dir = match scope {
-        InstallScope::System => avix_root.join("bin").join(name),
-        InstallScope::User(u) => avix_root.join("users").join(u).join("bin").join(name),
+        InstallScope::System => avix_root.join("data").join("bin").join(name),
+        InstallScope::User(u) => avix_root.join("data").join("users").join(u).join("bin").join(name),
     };
 
     if !install_dir.exists() {
@@ -246,16 +256,34 @@ pub fn uninstall_service(ctx: &SyscallContext, params: Value, avix_root: &Path) 
         .and_then(|v| v.as_str())
         .ok_or_else(|| SyscallError::Einval("missing name".into()))?;
 
-    let install_dir = avix_root.join("services").join(name);
+    // Find and remove any version of this service
+    let services_dir = avix_root.join("data").join("services");
+    let mut uninstalled = Vec::new();
+    
+    if let Ok(entries) = std::fs::read_dir(&services_dir) {
+        for entry in entries.flatten() {
+            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                if let Ok(dir_name) = entry.file_name().into_string() {
+                    if dir_name.starts_with(&format!("{}@", name)) {
+                        let path = entry.path();
+                        if let Err(e) = std::fs::remove_dir_all(&path) {
+                            return Err(SyscallError::Eio(format!(
+                                "failed to remove {}: {}",
+                                dir_name, e
+                            )));
+                        }
+                        uninstalled.push(dir_name);
+                    }
+                }
+            }
+        }
+    }
 
-    if !install_dir.exists() {
+    if uninstalled.is_empty() {
         return Err(SyscallError::Einval(format!("service not installed: {name}")));
     }
 
-    std::fs::remove_dir_all(&install_dir)
-        .map_err(|e| SyscallError::Eio(format!("failed to remove {}: {}", name, e)))?;
-
-    Ok(json!({ "uninstalled": name }))
+    Ok(json!({ "uninstalled": uninstalled }))
 }
 
 pub fn trust_add(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {

@@ -63,10 +63,10 @@ my-service-v1.0.0/
 
 Packages are distributed as tar.xz archives. The installer extracts to a versioned directory:
 
-- **Agents:** `AVIX_ROOT/bin/<agent-name>-<version>/` (system) or `AVIX_ROOT/users/<username>/bin/<agent-name>-<version>/` (user)
-- **Services:** `AVIX_ROOT/services/<service-name>-<version>/`
+- **Agents:** `AVIX_ROOT/data/bin/<agent-name>@<version>/` (system) or `AVIX_ROOT/data/users/<username>/bin/<agent-name>@<version>/` (user)
+- **Services:** `AVIX_ROOT/data/services/<service-name>@<version>/`
 
-The versioned directory prevents conflicts when installing multiple versions. The `avix agent catalog` command shows all installed versions.
+The versioned directory (using `@` separator) prevents conflicts when installing multiple versions. The `avix agent catalog` command shows all installed versions.
 
 ---
 

@@ -10,6 +10,7 @@ use crate::memfs::{LocalProvider, VfsRouter};
 ///   `/users`     → `{root}/data/users`   (persistent agent workspace + memory)
 ///   `/crews`     → `{root}/data/crews`   (shared crew memory)
 ///   `/services`  → `{root}/data/services` (service state)
+///   `/bin`       → `{root}/data/bin`     (system-installed agents)
 ///
 /// Ephemeral paths (`/proc/`, `/kernel/`) are NOT mounted — they stay in `MemFs`.
 pub async fn mount_persistent_trees(vfs: &VfsRouter, root: &Path) -> Result<(), AvixError> {
@@ -18,6 +19,7 @@ pub async fn mount_persistent_trees(vfs: &VfsRouter, root: &Path) -> Result<(), 
         ("/users", root.join("data/users")),
         ("/crews", root.join("data/crews")),
         ("/services", root.join("data/services")),
+        ("/bin", root.join("data/bin")),
     ];
 
     for (prefix, dir) in &mounts {

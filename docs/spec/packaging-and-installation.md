@@ -206,10 +206,10 @@ avix agent uninstall my-agent [--scope user|system]
     ├─ Kernel:
     │   ├─ Check install:agent capability
     │   ├─ Determine scope (user vs system)
-    │   ├─ Remove /users/<u>/bin/<agent> or /bin/<agent>
+    │   ├─ Remove /data/users/<u>/bin/<agent>@<version> or /data/bin/<agent>@<version>
     │   └─ Refresh ManifestScanner
     │
-    └─ Return: { uninstalled: "my-agent" }
+    └─ Return: { uninstalled: ["my-agent@1.0.0"] }
 ```
 
 ---

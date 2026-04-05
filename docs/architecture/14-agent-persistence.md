@@ -10,9 +10,9 @@ Avix distinguishes three related but separate concepts:
 
 | Concept | Lifetime | Location |
 |---------|----------|----------|
-| **Installed agent** | Persistent — survives reboot | `/bin/<name>/` (system) or `/users/<username>/bin/<name>/` (user) |
-| **Session** | Persistent — survives reboot | `<AVIX_ROOT>/users/<username>/sessions/` |
-| **Invocation** | Persistent — survives reboot | `<AVIX_ROOT>/users/<username>/agents/<agent>/invocations/` |
+| **Installed agent** | Persistent — survives reboot | `/bin/<name>@<version>/` (system) or `/users/<username>/bin/<name>@<version>/` (user) |
+| **Session** | Persistent — survives reboot | `<AVIX_ROOT>/data/users/<username>/sessions/` |
+| **Invocation** | Persistent — survives reboot | `<AVIX_ROOT>/data/users/<username>/agents/<agent>/invocations/` |
 
 An _installed agent_ is a manifest describing an agent that can be spawned. A _session_ is a persistent container for one or more agent invocations working toward a shared goal. An _invocation_ is a single spawn→exit lifecycle — the running record of one execution, including conversation history.
 
@@ -24,11 +24,16 @@ An _installed agent_ is a manifest describing an agent that can be spawned. A _s
 
 The `ManifestScanner` enumerates all agents available to a given user by scanning two VFS trees:
 
-1. `/bin/` — **System scope** — installed by an operator; available to all users.
-2. `/users/<username>/bin/` — **User scope** — personal installs; available only to that user.
+1. `/bin/` — **System scope** — installed by an operator; available to all users; backed by `AVIX_ROOT/data/bin/`
+2. `/users/<username>/bin/` — **User scope** — personal installs; available only that user; backed by `AVIX_ROOT/data/users/<username>/bin/`
 
 **Resolution order / collision rule:** when a user-installed agent has the same `name` as a system agent, the system agent wins and the user entry is silently omitted.
 
+```
+ManifestScanner::scan(username)
+  └── scan_dir("/bin/", System)           → reads /bin/<name>@<version>/manifest.yaml for each dir
+  └── scan_dir("/users/<u>/bin/", User)   → reads /users/<u>/bin/<name>@<version>/manifest.yaml
+         (skips names already present in system results)
 ```
 ManifestScanner::scan(username)
   └── scan_dir("/bin/", System)           → reads /bin/<dir>/manifest.yaml for each dir
