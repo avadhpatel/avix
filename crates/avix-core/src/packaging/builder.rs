@@ -146,29 +146,15 @@ impl PackageBuilder {
         Ok(())
     }
 
-    fn read_name(dir: &Path, pkg_type: &PackageType) -> Result<String, AvixError> {
-        match pkg_type {
-            PackageType::Agent => {
-                let content = std::fs::read_to_string(dir.join("manifest.yaml"))
-                    .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-                let m: serde_yaml::Value = serde_yaml::from_str(&content)
-                    .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-                m["name"]
-                    .as_str()
-                    .map(|s| s.to_owned())
-                    .ok_or_else(|| AvixError::ConfigParse("manifest.yaml missing name".into()))
-            }
-            PackageType::Service => {
-                let content = std::fs::read_to_string(dir.join("service.unit"))
-                    .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-                let u: toml::Value =
-                    toml::from_str(&content).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-                u["name"]
-                    .as_str()
-                    .map(|s| s.to_owned())
-                    .ok_or_else(|| AvixError::ConfigParse("service.unit missing name".into()))
-            }
-        }
+    fn read_name(dir: &Path, _pkg_type: &PackageType) -> Result<String, AvixError> {
+        let content = std::fs::read_to_string(dir.join("manifest.yaml"))
+            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let m: serde_yaml::Value = serde_yaml::from_str(&content)
+            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        m["metadata"]["name"]
+            .as_str()
+            .map(|s| s.to_owned())
+            .ok_or_else(|| AvixError::ConfigParse("manifest.yaml missing metadata.name".into()))
     }
 }
 
@@ -182,7 +168,7 @@ mod tests {
         let src = TempDir::new().unwrap();
         std::fs::write(
             src.path().join("manifest.yaml"),
-            "name: test-agent\nversion: \"0.1.0\"\nsystem_prompt_path: system-prompt.md\n",
+            "apiVersion: avix/v1\nkind: Agent\nmetadata:\n  name: test-agent\n  version: \"0.1.0\"\nspec:\n  systemPromptPath: system-prompt.md\n",
         )
         .unwrap();
         std::fs::write(src.path().join("system-prompt.md"), "# Test\n").unwrap();
@@ -233,7 +219,7 @@ mod tests {
         let src = TempDir::new().unwrap();
         std::fs::write(
             src.path().join("manifest.yaml"),
-            "name: test\nversion: \"0.1.0\"\nsystem_prompt_path: system-prompt.md\n",
+            "apiVersion: avix/v1\nkind: Agent\nmetadata:\n  name: test\n  version: \"0.1.0\"\nspec:\n  systemPromptPath: system-prompt.md\n",
         )
         .unwrap();
         std::fs::write(src.path().join("system-prompt.md"), "# Test\n").unwrap();
@@ -259,7 +245,7 @@ mod tests {
         let src1 = TempDir::new().unwrap();
         std::fs::write(
             src1.path().join("manifest.yaml"),
-            "name: test1\nversion: \"0.1.0\"\nsystem_prompt_path: system-prompt.md\n",
+            "apiVersion: avix/v1\nkind: Agent\nmetadata:\n  name: test1\n  version: \"0.1.0\"\nspec:\n  systemPromptPath: system-prompt.md\n",
         )
         .unwrap();
         std::fs::write(src1.path().join("system-prompt.md"), "# Test\n").unwrap();
@@ -267,7 +253,7 @@ mod tests {
         let src2 = TempDir::new().unwrap();
         std::fs::write(
             src2.path().join("manifest.yaml"),
-            "name: test2\nversion: \"0.1.0\"\nsystem_prompt_path: system-prompt.md\n",
+            "apiVersion: avix/v1\nkind: Agent\nmetadata:\n  name: test2\n  version: \"0.1.0\"\nspec:\n  systemPromptPath: system-prompt.md\n",
         )
         .unwrap();
         std::fs::write(src2.path().join("system-prompt.md"), "# Test\n").unwrap();
@@ -317,7 +303,7 @@ mod tests {
         let src = TempDir::new().unwrap();
         std::fs::write(
             src.path().join("manifest.yaml"),
-            "name: test\nversion: \"0.1.0\"\n",
+            "apiVersion: avix/v1\nkind: Agent\nmetadata:\n  name: test\n  version: \"0.1.0\"\nspec: {}\n",
         )
         .unwrap();
 

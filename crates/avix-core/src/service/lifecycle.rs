@@ -270,7 +270,7 @@ impl ServiceManager {
         Ok(env)
     }
 
-    /// Scan `root/services/` for installed `service.yaml` files.
+    /// Scan `root/services/` for installed `manifest.yaml` files.
     pub fn discover_installed(root: &Path) -> Result<Vec<ServiceUnit>, AvixError> {
         let services_dir = root.join("services");
         if !services_dir.exists() {
@@ -281,7 +281,7 @@ impl ServiceManager {
             std::fs::read_dir(&services_dir).map_err(|e| AvixError::ConfigParse(e.to_string()))?
         {
             let entry = entry.map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-            let unit_path = entry.path().join("service.yaml");
+            let unit_path = entry.path().join("manifest.yaml");
             if unit_path.exists() {
                 units.push(ServiceUnit::load(&unit_path)?);
             }
@@ -410,20 +410,9 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn minimal_unit_toml(name: &str) -> String {
+    fn minimal_unit_yaml(name: &str) -> String {
         format!(
-            r#"
-name: {name}
-version: 1.0.0
-
-unit:
-
-service:
-  binary: /bin/{name}
-
-tools:
-  namespace: /tools/{name}/
-"#
+            "apiVersion: avix/v1\nkind: Service\nmetadata:\n  name: {name}\n  version: 1.0.0\nspec:\n  binary: /bin/{name}\n  tools:\n    namespace: /tools/{name}/\n"
         )
     }
 
@@ -432,7 +421,7 @@ tools:
         let dir = TempDir::new().unwrap();
         let svc_dir = dir.path().join("services").join("my-svc");
         std::fs::create_dir_all(&svc_dir).unwrap();
-        std::fs::write(svc_dir.join("service.yaml"), minimal_unit_toml("my-svc")).unwrap();
+        std::fs::write(svc_dir.join("manifest.yaml"), minimal_unit_yaml("my-svc")).unwrap();
         let units = ServiceManager::discover_installed(dir.path()).unwrap();
         assert_eq!(units.len(), 1);
         assert_eq!(units[0].name, "my-svc");
@@ -459,7 +448,7 @@ tools:
         for name in ["svc-a", "svc-b", "svc-c"] {
             let svc_dir = dir.path().join("services").join(name);
             std::fs::create_dir_all(&svc_dir).unwrap();
-            std::fs::write(svc_dir.join("service.yaml"), minimal_unit_toml(name)).unwrap();
+            std::fs::write(svc_dir.join("manifest.yaml"), minimal_unit_yaml(name)).unwrap();
         }
         let mut units = ServiceManager::discover_installed(dir.path()).unwrap();
         units.sort_by(|a, b| a.name.cmp(&b.name));
@@ -511,7 +500,7 @@ tools:
             .unwrap();
 
         // Write a tool descriptor for the service
-        let tools_dir = dir.path().join("services").join("my-svc").join("tools");
+        let tools_dir = dir.path().join("data").join("services").join("my-svc").join("tools");
         std::fs::create_dir_all(&tools_dir).unwrap();
         std::fs::write(
             tools_dir.join("echo.tool.yaml"),

@@ -1,6 +1,6 @@
 use super::PackageType;
-use crate::agent_manifest::AgentManifestFile;
-use crate::service::ServiceUnit;
+use crate::agent_manifest::AgentManifest;
+use crate::service::ServiceManifest;
 use std::path::Path;
 
 #[derive(Debug)]
@@ -38,51 +38,61 @@ impl PackageValidator {
                 path: "manifest.yaml".into(),
                 message: format!("cannot read: {e}"),
             }),
-            Ok(content) => {
-                if let Err(e) = serde_yaml::from_str::<AgentManifestFile>(&content) {
-                    errors.push(ValidationError {
-                        path: "manifest.yaml".into(),
-                        message: format!("parse error: {e}"),
-                    });
-                } else {
-                    let m: serde_yaml::Value = serde_yaml::from_str(&content).unwrap_or_default();
-                    if m["name"].as_str().unwrap_or("").is_empty() {
+            Ok(content) => match AgentManifest::from_yaml(&content) {
+                Err(e) => errors.push(ValidationError {
+                    path: "manifest.yaml".into(),
+                    message: format!("parse error: {e}"),
+                }),
+                Ok(m) => {
+                    if m.metadata.name.is_empty() {
                         errors.push(ValidationError {
                             path: "manifest.yaml".into(),
-                            message: "name is empty".into(),
+                            message: "metadata.name is empty".into(),
                         });
                     }
-                    if m["version"].as_str().unwrap_or("").is_empty() {
+                    if m.metadata.version.is_empty() {
                         errors.push(ValidationError {
                             path: "manifest.yaml".into(),
-                            message: "version is empty".into(),
+                            message: "metadata.version is empty".into(),
                         });
                     }
-                    if let Some(prompt_path) = m["system_prompt_path"].as_str() {
+                    if let Some(ref prompt_path) = m.spec.system_prompt_path {
                         if !dir.join(prompt_path).exists() {
                             errors.push(ValidationError {
-                                path: prompt_path.into(),
-                                message: "system_prompt_path references missing file".into(),
+                                path: prompt_path.clone(),
+                                message: "systemPromptPath references missing file".into(),
                             });
                         }
                     }
                 }
-            }
+            },
         }
     }
 
     fn validate_service(dir: &Path, errors: &mut Vec<ValidationError>) {
-        let unit_path = dir.join("service.yaml");
-        match std::fs::read_to_string(&unit_path) {
+        let manifest_path = dir.join("manifest.yaml");
+        match ServiceManifest::load(&manifest_path) {
             Err(e) => errors.push(ValidationError {
-                path: "service.yaml".into(),
-                message: format!("cannot read: {e}"),
+                path: "manifest.yaml".into(),
+                message: format!("cannot read or parse: {e}"),
             }),
-            Ok(content) => {
-                if let Err(e) = serde_yaml::from_str::<ServiceUnit>(&content) {
+            Ok(m) => {
+                if m.metadata.name.is_empty() {
                     errors.push(ValidationError {
-                        path: "service.yaml".into(),
-                        message: format!("parse error: {e}"),
+                        path: "manifest.yaml".into(),
+                        message: "metadata.name is empty".into(),
+                    });
+                }
+                if m.metadata.version.is_empty() {
+                    errors.push(ValidationError {
+                        path: "manifest.yaml".into(),
+                        message: "metadata.version is empty".into(),
+                    });
+                }
+                if m.spec.binary.is_empty() {
+                    errors.push(ValidationError {
+                        path: "manifest.yaml".into(),
+                        message: "spec.binary is empty".into(),
                     });
                 }
             }
@@ -112,14 +122,33 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    const AGENT_MANIFEST: &str = r#"
+apiVersion: avix/v1
+kind: Agent
+metadata:
+  name: test
+  version: "0.1.0"
+spec:
+  systemPromptPath: system-prompt.md
+"#;
+
+    const SERVICE_MANIFEST: &str = r#"
+apiVersion: avix/v1
+kind: Service
+metadata:
+  name: test-svc
+  version: "0.1.0"
+  description: Test service
+spec:
+  binary: /bin/test-svc
+  tools:
+    namespace: /tools/test/
+"#;
+
     #[test]
     fn detect_agent_from_manifest_yaml() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(
-            dir.path().join("manifest.yaml"),
-            "name: test\nversion: 0.1.0\n",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("manifest.yaml"), AGENT_MANIFEST).unwrap();
 
         let result = PackageType::detect(dir.path());
         assert!(result.is_ok());
@@ -127,9 +156,9 @@ mod tests {
     }
 
     #[test]
-    fn detect_service_from_service_unit() {
+    fn detect_service_from_manifest_yaml() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("service.yaml"), "name: test\n").unwrap();
+        std::fs::write(dir.path().join("manifest.yaml"), SERVICE_MANIFEST).unwrap();
 
         let result = PackageType::detect(dir.path());
         assert!(result.is_ok());
@@ -145,13 +174,22 @@ mod tests {
     }
 
     #[test]
-    fn valid_agent_pack_passes() {
+    fn detect_unknown_kind_errors() {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("manifest.yaml"),
-            "name: test\nversion: \"0.1.0\"\nsystem_prompt_path: system-prompt.md\n",
+            "apiVersion: avix/v1\nkind: Unknown\nmetadata:\n  name: x\n  version: 1.0.0\nspec: {}\n",
         )
         .unwrap();
+
+        let result = PackageType::detect(dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn valid_agent_pack_passes() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("manifest.yaml"), AGENT_MANIFEST).unwrap();
         std::fs::write(dir.path().join("system-prompt.md"), "# Test\n").unwrap();
 
         let result = PackageValidator::validate(dir.path());
@@ -172,10 +210,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("manifest.yaml"),
-            "name: \"\"\nversion: \"0.1.0\"\n",
+            "apiVersion: avix/v1\nkind: Agent\nmetadata:\n  name: \"\"\n  version: \"0.1.0\"\nspec: {}\n",
         )
         .unwrap();
-        std::fs::write(dir.path().join("system-prompt.md"), "# Test\n").unwrap();
 
         let result = PackageValidator::validate(dir.path());
         assert!(result.is_err());
@@ -188,7 +225,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("manifest.yaml"),
-            "name: test\nversion: \"0.1.0\"\nsystem_prompt_path: nonexistent.md\n",
+            "apiVersion: avix/v1\nkind: Agent\nmetadata:\n  name: test\n  version: \"0.1.0\"\nspec:\n  systemPromptPath: nonexistent.md\n",
         )
         .unwrap();
 
@@ -201,9 +238,9 @@ mod tests {
     #[test]
     fn valid_service_passes() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("service.yaml"), "name: test\nversion: \"0.1.0\"\n\nunit:\n  description: \"\"\n\nservice:\n  binary: \"/bin/test\"\n  language: \"rust\"\n\ntools:\n  namespace: \"/tools/test/\"\n  provides: []\n").unwrap();
+        std::fs::write(dir.path().join("manifest.yaml"), SERVICE_MANIFEST).unwrap();
         std::fs::create_dir_all(dir.path().join("bin")).unwrap();
-        std::fs::write(dir.path().join("bin/test"), "").unwrap();
+        std::fs::write(dir.path().join("bin/test-svc"), "").unwrap();
 
         let result = PackageValidator::validate(dir.path());
         assert!(result.is_ok());
@@ -211,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn service_missing_unit_errors() {
+    fn service_missing_manifest_errors() {
         let dir = TempDir::new().unwrap();
 
         let result = PackageValidator::validate(dir.path());
@@ -221,7 +258,7 @@ mod tests {
     #[test]
     fn service_missing_bin_errors() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("service.yaml"), "name: test\nversion: \"0.1.0\"\n\nunit:\n  description: \"\"\n\nservice:\n  binary: \"/bin/test\"\n  language: \"rust\"\n\ntools:\n  namespace: \"/tools/test/\"\n  provides: []\n").unwrap();
+        std::fs::write(dir.path().join("manifest.yaml"), SERVICE_MANIFEST).unwrap();
 
         let result = PackageValidator::validate(dir.path());
         assert!(result.is_err());
@@ -232,7 +269,7 @@ mod tests {
     #[test]
     fn service_empty_bin_errors() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("service.yaml"), "name: test\nversion: \"0.1.0\"\n\nunit:\n  description: \"\"\n\nservice:\n  binary: \"/bin/test\"\n  language: \"rust\"\n\ntools:\n  namespace: \"/tools/test/\"\n  provides: []\n").unwrap();
+        std::fs::write(dir.path().join("manifest.yaml"), SERVICE_MANIFEST).unwrap();
         std::fs::create_dir_all(dir.path().join("bin")).unwrap();
 
         let result = PackageValidator::validate(dir.path());

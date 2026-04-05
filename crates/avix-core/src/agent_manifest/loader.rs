@@ -8,7 +8,7 @@ use crate::error::AvixError;
 use crate::memfs::{VfsPath, VfsRouter};
 
 pub struct ManifestLoader {
-    vfs: Arc<VfsRouter>,
+    pub(crate) vfs: Arc<VfsRouter>,
 }
 
 impl ManifestLoader {
@@ -16,28 +16,35 @@ impl ManifestLoader {
         Self { vfs }
     }
 
-    /// Load a manifest for a named agent.
+    /// Load a manifest for a named agent, returning the manifest and its package directory.
     ///
     /// Resolution order:
     ///   1. `/bin/<name>@<version>/manifest.yaml`  (system-installed, any version)
     ///   2. `/users/<username>/bin/<name>@<version>/manifest.yaml`  (user-installed, any version)
-    ///
-    /// Scans for any directory matching `<name>@*` pattern.
-    pub async fn load(&self, name: &str, username: &str) -> Result<AgentManifest, AvixError> {
-        // Try system path first - scan for any version
+    pub async fn load_with_dir(
+        &self,
+        name: &str,
+        username: &str,
+    ) -> Result<(AgentManifest, String), AvixError> {
         if let Some(path) = self.find_versioned_manifest("/bin", name).await {
-            return self.load_from_path(&path).await;
+            let pkg_dir = path.trim_end_matches("/manifest.yaml").to_string();
+            return self.load_from_path(&path).await.map(|m| (m, pkg_dir));
         }
 
-        // Then try user path
         let user_bin = format!("/users/{}/bin", username);
         if let Some(path) = self.find_versioned_manifest(&user_bin, name).await {
-            return self.load_from_path(&path).await;
+            let pkg_dir = path.trim_end_matches("/manifest.yaml").to_string();
+            return self.load_from_path(&path).await.map(|m| (m, pkg_dir));
         }
 
         Err(AvixError::ManifestNotFound {
             path: format!("/bin/{}/manifest.yaml", name),
         })
+    }
+
+    /// Load a manifest for a named agent.
+    pub async fn load(&self, name: &str, username: &str) -> Result<AgentManifest, AvixError> {
+        self.load_with_dir(name, username).await.map(|(m, _)| m)
     }
 
     /// Find a manifest in a versioned directory (e.g., /bin/researcher@1.0.0/)
@@ -53,7 +60,6 @@ impl ManifestLoader {
         };
 
         for entry in entries {
-            // Match <name>@<version> pattern
             if let Some(versioned_name) = entry.strip_prefix(&format!("{}@", name)) {
                 if !versioned_name.is_empty() {
                     let manifest_path = format!("{}/{}/manifest.yaml", base_dir, entry);
@@ -81,9 +87,9 @@ impl ManifestLoader {
         let manifest = AgentManifest::from_yaml(
             std::str::from_utf8(&raw).map_err(|e| AvixError::ConfigParse(e.to_string()))?,
         )?;
-        if manifest.kind != "AgentManifest" {
+        if manifest.kind != "Agent" {
             return Err(AvixError::ManifestKindMismatch {
-                expected: "AgentManifest".into(),
+                expected: "Agent".into(),
                 found: manifest.kind,
             });
         }
@@ -91,25 +97,24 @@ impl ManifestLoader {
         Ok(manifest)
     }
 
-    /// Verify the manifest's `metadata.signature` against a SHA-256 hash of its
+    /// Verify the manifest's `packaging.signature` against a SHA-256 hash of its
     /// canonical YAML content.
     ///
-    /// If the signature is `"sha256:"` (empty hex), verification is skipped with a
-    /// warning — this is the dev/test sentinel value.
+    /// If the signature is absent or `"sha256:"` (empty hex), verification is skipped
+    /// with a warning — this is the dev/test sentinel value.
     pub fn verify_signature(
         _raw_yaml: &[u8],
         manifest: &AgentManifest,
         path: &str,
     ) -> Result<(), AvixError> {
-        let sig = &manifest.metadata.signature;
+        let sig = manifest.packaging.signature.as_deref().unwrap_or("");
         let hex_part = sig.strip_prefix("sha256:").unwrap_or("");
         if hex_part.is_empty() {
             warn!(path, "signature verification skipped for dev manifest");
             return Ok(());
         }
-        // Re-serialise with signature zeroed to compute the canonical hash.
         let mut canonical = manifest.clone();
-        canonical.metadata.signature = "sha256:".to_string();
+        canonical.packaging.signature = Some("sha256:".to_string());
         let canonical_yaml =
             serde_yaml::to_string(&canonical).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         let hash = Sha256::digest(canonical_yaml.as_bytes());
@@ -131,19 +136,18 @@ mod tests {
 
     const ECHO_BOT_YAML: &str = r#"
 apiVersion: avix/v1
-kind: AgentManifest
+kind: Agent
 metadata:
   name: echo-bot
   version: 1.0.0
   description: Simple echo agent
   author: avix-core
-  createdAt: "2026-03-15T10:00:00Z"
+packaging:
   signature: "sha256:"
 spec:
+  systemPromptPath: system-prompt.md
   entrypoint:
     type: llm-loop
-  defaults:
-    systemPrompt: "You are a helpful assistant."
 "#;
 
     async fn vfs_with_manifest(path: &str, yaml: &str) -> Arc<VfsRouter> {
@@ -188,10 +192,6 @@ kind: SomethingElse
 metadata:
   name: x
   version: 1.0.0
-  description: x
-  author: x
-  createdAt: "2026-01-01T00:00:00Z"
-  signature: "sha256:"
 spec: {}
 "#;
         let vfs = vfs_with_manifest("/bin/x@1.0.0/manifest.yaml", wrong_kind).await;
@@ -229,5 +229,14 @@ spec: {}
         let loader = ManifestLoader::new(vfs);
         let result = loader.load("missing-agent", "alice").await;
         assert!(matches!(result, Err(AvixError::ManifestNotFound { .. })));
+    }
+
+    #[tokio::test]
+    async fn load_with_dir_returns_package_directory() {
+        let vfs = vfs_with_manifest("/bin/echo-bot@1.0.0/manifest.yaml", ECHO_BOT_YAML).await;
+        let loader = ManifestLoader::new(vfs);
+        let (manifest, pkg_dir) = loader.load_with_dir("echo-bot", "alice").await.unwrap();
+        assert_eq!(manifest.metadata.name, "echo-bot");
+        assert_eq!(pkg_dir, "/bin/echo-bot@1.0.0");
     }
 }

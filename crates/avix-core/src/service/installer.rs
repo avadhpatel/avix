@@ -69,7 +69,7 @@ impl ServiceInstaller {
         let tmp_dir = tempfile::tempdir().map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         self.extract_tarball(&bytes, tmp_dir.path())?;
 
-        let unit = ServiceUnit::load(&tmp_dir.path().join("service.yaml"))?;
+        let unit = ServiceUnit::load(&tmp_dir.path().join("manifest.yaml"))?;
 
         self.check_conflicts(&unit)?;
 
@@ -99,7 +99,7 @@ impl ServiceInstaller {
             source_url: Some(req.source.clone()),
             checksum: req.checksum.clone(),
             installed_at: chrono::Utc::now(),
-            service_unit_path: install_dir.join("service.yaml").display().to_string(),
+            service_unit_path: install_dir.join("manifest.yaml").display().to_string(),
             binary_path: unit.service.binary.clone(),
         };
         let receipt_path = install_dir.join(".install.json");
@@ -208,7 +208,7 @@ impl ServiceInstaller {
                         .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
                 }
 
-                if stripped == Path::new("service.yaml") || stripped == Path::new("manifest.yaml") {
+                if stripped == Path::new("manifest.yaml") {
                     found_unit = true;
                 }
             }
@@ -216,7 +216,7 @@ impl ServiceInstaller {
 
         if !found_unit {
             return Err(AvixError::ConfigParse(
-                "tarball missing required service.yaml or manifest.yaml file".into(),
+                "tarball missing required manifest.yaml file".into(),
             ));
         }
         Ok(())
@@ -271,9 +271,7 @@ mod tests {
             let mut ar = tar::Builder::new(enc);
 
             let unit_content = format!(
-                "name: {name}\nversion: {version}\n\
-                 unit:\n  description: test\nservice:\n  binary: /services/{name}/bin/{name}\n\
-                 tools:\n  namespace: /tools/{name}/\n"
+                "apiVersion: avix/v1\nkind: Service\nmetadata:\n  name: {name}\n  version: {version}\n  description: test\nspec:\n  binary: /services/{name}/bin/{name}\n  tools:\n    namespace: /tools/{name}/\n"
             );
             let mut header = tar::Header::new_gnu();
             header.set_size(unit_content.len() as u64);
@@ -281,7 +279,7 @@ mod tests {
             header.set_cksum();
             ar.append_data(
                 &mut header,
-                format!("{name}-{version}/service.yaml"),
+                format!("{name}-{version}/manifest.yaml"),
                 unit_content.as_bytes(),
             )
             .unwrap();
@@ -353,7 +351,7 @@ mod tests {
         let bytes = make_tarball("echo-svc", "1.0.0");
         let dest = TempDir::new().unwrap();
         installer.extract_tarball(&bytes, dest.path()).unwrap();
-        assert!(dest.path().join("service.yaml").exists());
+        assert!(dest.path().join("manifest.yaml").exists());
     }
 
     #[test]
@@ -369,7 +367,7 @@ mod tests {
     #[test]
     fn extract_tarball_fails_on_missing_service_unit() {
         let installer = ServiceInstaller::new(PathBuf::from("/tmp"));
-        // Build a tarball with no service.yaml
+        // Build a tarball with no manifest.yaml
         let mut buf = Vec::new();
         {
             let enc = flate2::write::GzEncoder::new(&mut buf, flate2::Compression::default());
@@ -391,7 +389,7 @@ mod tests {
     fn check_conflicts_errors_if_already_installed() {
         let dir = TempDir::new().unwrap();
         let installer = ServiceInstaller::new(dir.path().to_path_buf());
-        std::fs::create_dir_all(dir.path().join("services").join("echo-svc")).unwrap();
+        std::fs::create_dir_all(dir.path().join("data").join("services").join("echo-svc@1.0.0")).unwrap();
         let unit = make_test_unit("echo-svc");
         assert!(installer.check_conflicts(&unit).is_err());
     }
@@ -424,8 +422,8 @@ mod tests {
 
         assert_eq!(result.name, "test-svc");
         assert_eq!(result.version, "1.0.0");
-        assert!(root.path().join("services/test-svc/service.yaml").exists());
-        assert!(root.path().join("services/test-svc/.install.json").exists());
+        assert!(root.path().join("data/services/test-svc@1.0.0/manifest.yaml").exists());
+        assert!(root.path().join("data/services/test-svc@1.0.0/.install.json").exists());
     }
 
     #[tokio::test]
@@ -448,7 +446,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.name, "cs-svc");
-        assert!(root.path().join("services/cs-svc/.install.json").exists());
+        assert!(root.path().join("data/services/cs-svc@2.0.0/.install.json").exists());
     }
 
     #[tokio::test]
@@ -517,9 +515,7 @@ mod tests {
             let mut ar = tar::Builder::new(enc);
 
             let unit_content = format!(
-                "name: {name}\nversion: {version}\n\
-                 unit:\n  description: test\nservice:\n  binary: /services/{name}/bin/{name}\n\
-                 tools:\n  namespace: /tools/{name}/\n"
+                "apiVersion: avix/v1\nkind: Service\nmetadata:\n  name: {name}\n  version: {version}\n  description: test\nspec:\n  binary: /services/{name}/bin/{name}\n  tools:\n    namespace: /tools/{name}/\n"
             );
             let mut header = tar::Header::new_gnu();
             header.set_size(unit_content.len() as u64);
@@ -527,7 +523,7 @@ mod tests {
             header.set_cksum();
             ar.append_data(
                 &mut header,
-                format!("{name}-{version}/service.yaml"),
+                format!("{name}-{version}/manifest.yaml"),
                 unit_content.as_bytes(),
             )
             .unwrap();
@@ -555,16 +551,16 @@ mod tests {
         let bytes = make_xz_tarball("xz-svc", "1.0.0");
         let dest = TempDir::new().unwrap();
         installer.extract_tarball(&bytes, dest.path()).unwrap();
-        assert!(dest.path().join("service.yaml").exists());
+        assert!(dest.path().join("manifest.yaml").exists());
     }
 
     #[tokio::test]
-    async fn extract_gz_tarball_backward_compat() {
+    async fn extract_gz_tarball() {
         let installer = ServiceInstaller::new(PathBuf::from("/tmp"));
         let bytes = make_tarball("gz-svc", "1.0.0");
         let dest = TempDir::new().unwrap();
         installer.extract_tarball(&bytes, dest.path()).unwrap();
-        assert!(dest.path().join("service.yaml").exists());
+        assert!(dest.path().join("manifest.yaml").exists());
     }
 
     fn make_xz_tarball_with_manifest(name: &str, version: &str) -> Vec<u8> {
@@ -574,8 +570,9 @@ mod tests {
             let enc = XzEncoder::new(&mut buf, 6);
             let mut ar = tar::Builder::new(enc);
 
-            let manifest_content =
-                format!("name: {name}\nversion: {version}\ndescription: test agent\n");
+            let manifest_content = format!(
+                "apiVersion: avix/v1\nkind: Service\nmetadata:\n  name: {name}\n  version: {version}\n  description: test agent\nspec:\n  binary: /bin/{name}\n  tools:\n    namespace: /tools/{name}/\n"
+            );
             let mut header = tar::Header::new_gnu();
             header.set_size(manifest_content.len() as u64);
             header.set_mode(0o644);

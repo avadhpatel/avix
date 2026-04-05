@@ -186,39 +186,47 @@ impl Default for ManifestEnvironment {
 #[serde(rename_all = "camelCase")]
 pub struct ManifestDefaults {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_prompt: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub goal_template: Option<String>,
     #[serde(default)]
     pub environment: ManifestEnvironment,
 }
 
-// ── Metadata ──────────────────────────────────────────────────────────────────
+// ── Shared metadata ───────────────────────────────────────────────────────────
 
-fn default_compat_version() -> u32 {
-    1
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentManifestMetadata {
+pub struct ManifestMetadata {
     pub name: String,
     pub version: String,
-    #[serde(default = "default_compat_version")]
-    pub compatibility_version: u32,
+    #[serde(default)]
     pub description: String,
+    #[serde(default)]
     pub author: String,
-    pub created_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
-    pub signature: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PackagingMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 // ── Spec ──────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentManifestSpec {
+pub struct AgentSpec {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt_path: Option<String>,
+    #[serde(default)]
+    pub requested_capabilities: Vec<String>,
     #[serde(default)]
     pub entrypoint: ManifestEntrypoint,
     #[serde(default)]
@@ -229,6 +237,10 @@ pub struct AgentManifestSpec {
     pub snapshot: ManifestSnapshot,
     #[serde(default)]
     pub defaults: ManifestDefaults,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 // ── Top-level document ────────────────────────────────────────────────────────
@@ -238,8 +250,10 @@ pub struct AgentManifest {
     #[serde(rename = "apiVersion")]
     pub api_version: String,
     pub kind: String,
-    pub metadata: AgentManifestMetadata,
-    pub spec: AgentManifestSpec,
+    pub metadata: ManifestMetadata,
+    #[serde(default)]
+    pub packaging: PackagingMetadata,
+    pub spec: AgentSpec,
 }
 
 impl AgentManifest {
@@ -270,34 +284,37 @@ mod tests {
 
     const MINIMAL_YAML: &str = r#"
 apiVersion: avix/v1
-kind: AgentManifest
+kind: Agent
 metadata:
   name: echo-bot
   version: 1.0.0
   description: Simple echo agent
   author: avix-core
-  createdAt: "2026-03-15T10:00:00Z"
-  signature: "sha256:abc123"
 spec:
   entrypoint:
     type: llm-loop
-  defaults:
-    systemPrompt: "You are a helpful assistant."
+  systemPromptPath: system-prompt.md
 "#;
 
     const FULL_YAML: &str = r#"
 apiVersion: avix/v1
-kind: AgentManifest
+kind: Agent
 metadata:
   name: researcher
   version: 1.3.0
-  compatibilityVersion: 1
   description: General-purpose web & document researcher
   author: kernel-team
   createdAt: "2026-03-10T14:22:00Z"
   license: MIT
+  tags: [research, web]
+packaging:
+  source: "github:avix/agents"
   signature: "sha256:abc123def456"
 spec:
+  systemPromptPath: system-prompt.md
+  requestedCapabilities:
+    - fs:*
+    - web:*
   entrypoint:
     type: llm-loop
     modelRequirements:
@@ -318,23 +335,25 @@ spec:
     restoreOnCrash: true
     compressionEnabled: true
   defaults:
-    systemPrompt: "You are a research assistant."
     goalTemplate: "Research: {{topic}}"
     environment:
       temperature: 0.7
       topP: 0.9
       timeoutSec: 300
+  visibility: public
+  scope: system
 "#;
 
     // T-MGA-01
     #[test]
     fn minimal_manifest_parses() {
         let m = AgentManifest::from_yaml(MINIMAL_YAML).unwrap();
-        assert_eq!(m.kind, "AgentManifest");
+        assert_eq!(m.kind, "Agent");
         assert_eq!(m.metadata.name, "echo-bot");
         assert_eq!(m.spec.entrypoint.entrypoint_type, EntrypointType::LlmLoop);
         assert_eq!(m.spec.entrypoint.max_tool_chain, 5);
         assert_eq!(m.spec.entrypoint.max_turns_per_goal, 20);
+        assert_eq!(m.spec.system_prompt_path.as_deref(), Some("system-prompt.md"));
     }
 
     // T-MGA-02
@@ -354,6 +373,16 @@ spec:
         );
         assert_eq!(reparsed.spec.snapshot.mode, SnapshotMode::PerTurn);
         assert!(reparsed.spec.snapshot.restore_on_crash);
+        assert_eq!(reparsed.spec.visibility.as_deref(), Some("public"));
+        assert_eq!(reparsed.spec.scope.as_deref(), Some("system"));
+        assert_eq!(
+            reparsed.spec.requested_capabilities,
+            vec!["fs:*", "web:*"]
+        );
+        assert_eq!(
+            reparsed.packaging.source.as_deref(),
+            Some("github:avix/agents")
+        );
     }
 
     // T-MGA-03
@@ -361,14 +390,10 @@ spec:
     fn manifest_defaults_applied() {
         let yaml = r#"
 apiVersion: avix/v1
-kind: AgentManifest
+kind: Agent
 metadata:
   name: minimal
   version: 0.1.0
-  description: Minimal
-  author: test
-  createdAt: "2026-01-01T00:00:00Z"
-  signature: "sha256:aaa"
 spec: {}
 "#;
         let m = AgentManifest::from_yaml(yaml).unwrap();
@@ -391,6 +416,9 @@ spec: {}
         assert!(!m.spec.snapshot.restore_on_crash);
         assert!(m.spec.snapshot.compression_enabled);
         assert!((m.spec.defaults.environment.temperature - 0.7).abs() < f32::EPSILON);
+        assert!(m.spec.system_prompt_path.is_none());
+        assert!(m.spec.requested_capabilities.is_empty());
+        assert!(m.packaging.source.is_none());
     }
 
     // T-MGA-04
@@ -450,14 +478,10 @@ kind: SomethingElse
 metadata:
   name: x
   version: 1.0.0
-  description: x
-  author: x
-  createdAt: "2026-01-01T00:00:00Z"
-  signature: "sha256:aaa"
 spec: {}
 "#;
         let m = AgentManifest::from_yaml(yaml).unwrap();
-        assert_ne!(m.kind, "AgentManifest");
+        assert_ne!(m.kind, "Agent");
     }
 
     // T-MGA-09
@@ -469,5 +493,21 @@ spec: {}
         };
         assert_eq!(tools.required.len(), 1);
         assert_eq!(tools.optional.len(), 2);
+    }
+
+    // T-MGA-10
+    #[test]
+    fn packaging_metadata_defaults_to_none() {
+        let yaml = r#"
+apiVersion: avix/v1
+kind: Agent
+metadata:
+  name: x
+  version: 1.0.0
+spec: {}
+"#;
+        let m = AgentManifest::from_yaml(yaml).unwrap();
+        assert!(m.packaging.source.is_none());
+        assert!(m.packaging.signature.is_none());
     }
 }

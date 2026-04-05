@@ -1,0 +1,24 @@
+apiVersion: avix/v1
+kind: Service
+metadata:
+  name: mcp-bridge
+  version: "0.1.0"
+  description: "MCP bridge — connects external MCP servers to the Avix tool registry"
+packaging:
+  source: "system"
+  signature: "sha256:"
+spec:
+  binary: /services/mcp-bridge/bin/mcp-bridge
+  language: any
+  restart: on-failure
+  restartDelay: 10s
+  maxConcurrent: 50
+  queueMax: 200
+  after:
+    - kernel
+  capabilities:
+    hostAccess:
+      - network
+  tools:
+    namespace: /tools/mcp/
+    provides: []

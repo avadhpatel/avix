@@ -1,5 +1,6 @@
 apiVersion: avix/v1
-kind: AgentManifest
+kind: Agent
+
 metadata:
   name: universal-tool-explorer
   version: "0.1.0"
@@ -12,13 +13,14 @@ metadata:
     - explorer
     - workspace
     - testing
-spec:
-  # Runtime settings used by RuntimeExecutor
-  contextWindowTokens: 128000
-  maxToolChainLength: 50
-  hilRequiredTools: []                    # No human-in-the-loop required for this demo
 
-  # Capabilities this agent requests (kernel will intersect with user's granted capabilities)
+packaging:
+  source: "system"
+  signature: "sha256:"
+
+spec:
+  systemPromptPath: system-prompt.md
+
   requestedCapabilities:
     - kernel:*
     - fs:*
@@ -29,14 +31,17 @@ spec:
     - session:write
     - cap:*
 
-  # System prompt configuration
-  systemPrompt:
-    source: file
-    path: system-prompt.md
+  entrypoint:
+    type: llm-loop
+    modelRequirements:
+      minContextWindow: 128000
+      requiredCapabilities: [tool_use]
+      recommended: claude-sonnet-4
+    maxToolChain: 50
+    maxTurnsPerGoal: 50
 
-  # Default goal shown in catalog / UI
-  defaultGoalTemplate: "Explore the entire Avix tool registry, create a new project in the workspace using workspace/create-project, generate a complete system status report, write it to the workspace (triggering FileDiff parts in history), read it back, summarize the exploration with llm/complete, and finally mark the session Idle."
+  defaults:
+    goalTemplate: "Explore the entire Avix tool registry, create a new project in the workspace using workspace/create-project, generate a complete system status report, write it to the workspace (triggering FileDiff parts in history), read it back, summarize the exploration with llm/complete, and finally mark the session Idle."
 
-  # Catalog & visibility
   visibility: public
   scope: system

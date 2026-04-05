@@ -10,10 +10,33 @@
 The Avix packaging system handles distribution and installation of two package types: **Agents** (LLM-driven conversational processes) and **Services** (deterministic background processes). Both use a tar.xz archive format with embedded metadata.
 
 Key design decisions:
-- Package type is detected by file presence: `manifest.yaml` → Agent, `service.yaml` → Service
+- Both package types use a single `manifest.yaml` with a shared envelope; `kind` field distinguishes them
 - Signature verification uses GPG with a two-stage trust model (official embedded key + admin-managed third-party keyring)
 - Install operations are async; uninstall is sync
 - `--no-verify` flag bypasses signature verification for air-gapped or development scenarios
+
+---
+
+## Unified Manifest Format
+
+All packages — Agent and Service — use the same `manifest.yaml` envelope:
+
+```yaml
+apiVersion: avix/v1
+kind: Agent | Service        # determines package type
+metadata:
+  name: <string>             # required
+  version: <string>          # required (semver)
+  description: <string>      # optional
+  author: <string>           # optional
+  license: <string>          # optional
+  tags: [<string>]           # optional
+packaging:
+  source: <string>           # optional: "system", "github:…", "https://…"
+  signature: <string>        # optional: "sha256:<hex>" or GPG fingerprint
+spec:
+  ...                        # kind-specific fields (see below)
+```
 
 ---
 
@@ -26,22 +49,46 @@ An agent is an LLM-driven process with a system prompt, metadata, and optional e
 **Directory structure (unpacked):**
 ```
 universal-tool-explorer-v0.1/
-├── manifest.yaml              # Required: agent metadata
+├── manifest.yaml              # Required: agent metadata (kind: Agent)
 ├── system-prompt.md           # Required: LLM system prompt
 ├── README.md                  # Optional: documentation
 └── examples/                  # Optional: example conversation files
     └── example-goal.md
 ```
 
-**manifest.yaml schema:**
+**manifest.yaml schema (Agent):**
 ```yaml
-name: universal-tool-explorer
-version: 0.1.0
-description: Explore tool capabilities across all available tools
-system_prompt_path: system-prompt.md
+apiVersion: avix/v1
+kind: Agent
+metadata:
+  name: universal-tool-explorer
+  version: "0.1.0"
+  description: "Discover and exercise every available tool"
+  author: "Avix Core Team"
+  license: MIT
+  tags: [demo, tools]
+packaging:
+  source: "system"
+  signature: "sha256:"
+spec:
+  systemPromptPath: system-prompt.md
+  requestedCapabilities:
+    - kernel:*
+    - fs:*
+  entrypoint:
+    type: llm-loop
+    modelRequirements:
+      minContextWindow: 128000
+      requiredCapabilities: [tool_use]
+    maxToolChain: 50
+    maxTurnsPerGoal: 50
+  defaults:
+    goalTemplate: "Explore the tool registry..."
+  visibility: public
+  scope: system
 ```
 
-Required fields: `name`, `version`, `description`, `system_prompt_path`. The referenced prompt file must exist in the package root.
+Required spec fields: `systemPromptPath`. The referenced prompt file must exist in the package root.
 
 ### Service Packages
 
@@ -50,12 +97,44 @@ A service is a deterministic process exposing tools via the Avix tool registry.
 **Directory structure (unpacked):**
 ```
 my-service-v1.0.0/
-├── service.yaml               # Required: service definition
+├── manifest.yaml              # Required: service definition (kind: Service)
 └── bin/                       # Required: contains executable
     └── my-service
 ```
 
-**service.yaml schema:** See `docs/architecture/07-services.md` — uses the same `ServiceUnit` format as disk-installed services.
+**manifest.yaml schema (Service):**
+```yaml
+apiVersion: avix/v1
+kind: Service
+metadata:
+  name: my-service
+  version: "1.0.0"
+  description: "My service description"
+packaging:
+  source: "system"
+  signature: "sha256:"
+spec:
+  binary: /services/my-service/bin/my-service
+  language: rust
+  restart: on-failure
+  restartDelay: 5s
+  maxConcurrent: 20
+  requires:
+    - other.svc
+  after:
+    - router.svc
+  capabilities:
+    callerScoped: false
+    hostAccess:
+      - filesystem
+  tools:
+    namespace: /tools/my-service/
+    provides: []
+  jobs:
+    maxConcurrent: 5
+```
+
+The `spec` fields map 1-to-1 with the `ServiceUnit` runtime struct via `ServiceUnit::from_manifest()`. All camelCase field names are used on disk; the struct uses snake_case internally.
 
 ---
 
@@ -72,26 +151,27 @@ The versioned directory (using `@` separator) prevents conflicts when installing
 
 ## Package Detection
 
-Detection happens at the filesystem level before parsing:
+Detection reads the `kind` field from `manifest.yaml`:
 
 ```rust
 // crates/avix-core/src/packaging/mod.rs
 impl PackageType {
     pub fn detect(dir: &Path) -> Result<Self, AvixError> {
-        if dir.join("manifest.yaml").exists() {
-            return Ok(Self::Agent);
+        let content = std::fs::read_to_string(dir.join("manifest.yaml"))
+            .map_err(|_| AvixError::ConfigParse("manifest.yaml not found".into()))?;
+        #[derive(serde::Deserialize)]
+        struct KindProbe { kind: String }
+        let probe: KindProbe = serde_yaml::from_str(&content)?;
+        match probe.kind.as_str() {
+            "Agent" => Ok(Self::Agent),
+            "Service" => Ok(Self::Service),
+            other => Err(AvixError::ConfigParse(format!("unknown kind: {other}"))),
         }
-        if dir.join("service.yaml").exists() {
-            return Ok(Self::Service);
-        }
-        Err(AvixError::ConfigParse(
-            "cannot detect package type: no manifest.yaml or service.yaml found".into(),
-        ))
     }
 }
 ```
 
-**Detection order:** Agent (manifest.yaml) is checked first, then Service (service.yaml). This means a package with both files is treated as an Agent.
+Any `manifest.yaml` with an unknown `kind` value is rejected with an error.
 
 ---
 
@@ -246,17 +326,43 @@ The quota is checked before any install operation begins.
 
 `PackageValidator` validates packages before installation:
 
-**Agent validation:**
-- `manifest.yaml` exists and parses
-- `name` is non-empty
-- `version` is non-empty
-- `system_prompt_path` file exists
+**Agent validation** (parses as `AgentManifest`):
+- `manifest.yaml` exists and parses with `kind: Agent`
+- `metadata.name` is non-empty
+- `metadata.version` is non-empty
+- `spec.systemPromptPath` file exists relative to package root
 
-**Service validation:**
-- `service.yaml` exists and parses as `ServiceUnit`
+**Service validation** (parses as `ServiceManifest`):
+- `manifest.yaml` exists and parses with `kind: Service`
+- `metadata.name` is non-empty
+- `metadata.version` is non-empty
+- `spec.binary` is non-empty
 - `bin/` directory exists and is non-empty
 
 Validation errors are collected and returned as a `Vec<ValidationError>`.
+
+---
+
+## Scaffold Templates
+
+`PackageScaffold` generates starter packages for both kinds:
+
+**Agent scaffold** (`avix package new --type agent <name>`):
+```
+<name>/
+├── manifest.yaml    # kind: Agent with name/version/description
+├── system-prompt.md # starter prompt
+└── README.md
+```
+
+**Service scaffold** (`avix package new --type service <name>`):
+```
+<name>/
+├── manifest.yaml    # kind: Service with full spec skeleton
+├── Cargo.toml
+├── src/main.rs
+└── README.md
+```
 
 ---
 
@@ -278,7 +384,8 @@ Validation errors are collected and returned as a `Vec<ValidationError>`.
 
 | Error | Cause | Resolution |
 |-------|-------|------------|
-| `cannot detect package type` | No manifest.yaml or service.yaml | Add the required file to the package |
+| `manifest.yaml not found` | No manifest.yaml in package root | Add `manifest.yaml` with correct `kind` field |
+| `unknown kind: <x>` | Unrecognized `kind` value in manifest | Use `kind: Agent` or `kind: Service` |
 | `signing key is not trusted` | Unknown signing key | Run `avix package trust add` to add the publisher's key |
 | `key not trusted for source` | Third-party key's allowed_sources doesn't match | Add matching source pattern or use key without restrictions |
 | `install quota exceeded` | More than 10 installs per hour | Wait until the hour resets |

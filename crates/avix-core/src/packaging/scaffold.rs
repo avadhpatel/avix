@@ -33,9 +33,8 @@ impl PackageScaffold {
         std::fs::write(
             dir.join("manifest.yaml"),
             format!(
-            "name: {}\nversion: \"{}\"\ndescription: \"\"\nsystem_prompt_path: system-prompt.md\n",
-            name, version
-        ),
+                "apiVersion: avix/v1\nkind: Agent\nmetadata:\n  name: {name}\n  version: \"{version}\"\n  description: \"\"\nspec:\n  systemPromptPath: system-prompt.md\n"
+            ),
         )
         .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         std::fs::write(
@@ -57,43 +56,16 @@ impl PackageScaffold {
         std::fs::create_dir_all(dir.join("tools"))
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         std::fs::write(
-            dir.join("service.yaml"),
+            dir.join("manifest.yaml"),
             format!(
-                r#"name: "{}"
-version: "{}"
-
-unit:
-  description: ""
-  after: ["router.svc"]
-
-service:
-  binary: "/services/{name}/bin/{name}"
-  language: "rust"
-  restart: "on-failure"
-
-capabilities:
-  caller_scoped: false
-
-tools:
-  namespace: "/tools/{name}/"
-  provides: []
-"#,
-                name, version
+                "apiVersion: avix/v1\nkind: Service\nmetadata:\n  name: {name}\n  version: \"{version}\"\n  description: \"\"\nspec:\n  binary: \"/services/{name}/bin/{name}\"\n  language: rust\n  restart: on-failure\n  after:\n    - router.svc\n  capabilities:\n    callerScoped: false\n  tools:\n    namespace: \"/tools/{name}/\"\n    provides: []\n"
             ),
         )
         .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         std::fs::write(
             dir.join("Cargo.toml"),
             format!(
-                r#"[package]
-name    = "{}"
-version = "{}"
-edition = "2021"
-
-[[bin]]
-name = "{}"
-path = "src/main.rs"
-"#,
+                "[package]\nname    = \"{}\"\nversion = \"{}\"\nedition = \"2021\"\n\n[[bin]]\nname = \"{}\"\npath = \"src/main.rs\"\n",
                 name, version, name
             ),
         )
@@ -144,7 +116,7 @@ mod tests {
         };
 
         let result = PackageScaffold::create(req).unwrap();
-        assert!(result.join("service.yaml").exists());
+        assert!(result.join("manifest.yaml").exists());
         assert!(result.join("Cargo.toml").exists());
         assert!(result.join("src/main.rs").exists());
     }
@@ -178,11 +150,12 @@ mod tests {
         let result = PackageScaffold::create(req).unwrap();
         let content = std::fs::read_to_string(result.join("manifest.yaml")).unwrap();
         let parsed: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
-        assert_eq!(parsed["name"].as_str(), Some("test-agent"));
+        assert_eq!(parsed["kind"].as_str(), Some("Agent"));
+        assert_eq!(parsed["metadata"]["name"].as_str(), Some("test-agent"));
     }
 
     #[test]
-    fn scaffold_service_unit_is_valid_yaml() {
+    fn scaffold_service_manifest_is_valid_yaml() {
         let dir = TempDir::new().unwrap();
         let req = ScaffoldRequest {
             name: "test-svc".into(),
@@ -192,8 +165,9 @@ mod tests {
         };
 
         let result = PackageScaffold::create(req).unwrap();
-        let content = std::fs::read_to_string(result.join("service.yaml")).unwrap();
+        let content = std::fs::read_to_string(result.join("manifest.yaml")).unwrap();
         let parsed: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
-        assert_eq!(parsed["name"].as_str(), Some("test-svc"));
+        assert_eq!(parsed["kind"].as_str(), Some("Service"));
+        assert_eq!(parsed["metadata"]["name"].as_str(), Some("test-svc"));
     }
 }

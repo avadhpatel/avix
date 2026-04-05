@@ -295,8 +295,7 @@ parse the full document into `AgentManifest` or `ServiceManifest`.
 - Add `ServiceManifest`, `ServiceSpec` structs
 - Add `ServiceManifest::load(path: &Path) -> Result<Self, AvixError>`
 - Add `ServiceUnit::from_manifest(m: &ServiceManifest) -> Self`
-- Update `ServiceUnit::load` to try `manifest.yaml` (kind=Service) first, fall back to
-  old `service.yaml` flat format for backward compat during transition
+- Update `ServiceUnit::load` to load `manifest.yaml` (kind=Service) only
 - Update `load_for_service` to scan for `manifest.yaml` in `<name>@*/` dirs
 - Update all in-file tests to write the new format
 
@@ -412,5 +411,5 @@ Same conversion as workspace above.
    can't embed a multi-line file inline without quoting). The runtime reads the file via VFS
    at spawn time.
 
-6. **Backward compat shim for `service.yaml`** — `ServiceUnit::load` tries `manifest.yaml`
-   first; falls back to legacy flat format. Removes cleanly once all callers are updated.
+6. **No backward compatibility shims** — all callers are updated to use `manifest.yaml`
+   directly. The old `service.yaml` flat format is not supported.

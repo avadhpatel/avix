@@ -6,7 +6,7 @@ use tracing::warn;
 use super::loader::ManifestLoader;
 use super::schema::{AgentManifest, ManifestTools, ModelRequirements};
 use crate::error::AvixError;
-use crate::memfs::VfsRouter;
+use crate::memfs::{VfsPath, VfsRouter};
 
 // ── User permissions ──────────────────────────────────────────────────────────
 
@@ -38,7 +38,6 @@ impl ToolGrantResolver {
         user_permissions: &UserToolPermissions,
         agent_name: &str,
     ) -> Result<Vec<String>, AvixError> {
-        // Build permitted set: allowed minus denied.
         let permitted: std::collections::HashSet<&str> = user_permissions
             .allowed_tools
             .iter()
@@ -53,7 +52,6 @@ impl ToolGrantResolver {
 
         let mut granted: Vec<String> = Vec::new();
 
-        // Required tools: must all be in permitted.
         for tool in &manifest_tools.required {
             if permitted.contains(tool.as_str()) {
                 granted.push(tool.clone());
@@ -65,14 +63,12 @@ impl ToolGrantResolver {
             }
         }
 
-        // Optional tools: silently omit if not permitted.
         for tool in &manifest_tools.optional {
             if permitted.contains(tool.as_str()) && !granted.contains(tool) {
                 granted.push(tool.clone());
             }
         }
 
-        // Always-granted built-ins.
         for builtin in Self::ALWAYS_GRANTED {
             let s = builtin.to_string();
             if !granted.contains(&s) {
@@ -90,9 +86,6 @@ pub struct ModelValidator;
 
 impl ModelValidator {
     /// Validate that `selected_model` satisfies `requirements`.
-    ///
-    /// v1: checks model name is non-empty and logs a warning if min_context_window > 0.
-    /// Full enforcement (actual context window lookup via llm.svc) is deferred.
     pub fn validate(
         selected_model: &str,
         requirements: &ModelRequirements,
@@ -119,7 +112,6 @@ pub struct GoalRenderer;
 
 impl GoalRenderer {
     /// Render `template` by substituting `{{key}}` with values from `vars`.
-    /// Unknown `{{key}}` tokens that have no corresponding var are left as-is.
     pub fn render(template: &str, vars: &HashMap<String, String>) -> String {
         let mut result = template.to_string();
         for (k, v) in vars {
@@ -143,13 +135,15 @@ pub struct ResolvedSpawnContext {
 // ── Spawn resolver ────────────────────────────────────────────────────────────
 
 pub struct SpawnResolver {
+    vfs: Arc<VfsRouter>,
     loader: ManifestLoader,
 }
 
 impl SpawnResolver {
     pub fn new(vfs: Arc<VfsRouter>) -> Self {
         Self {
-            loader: ManifestLoader::new(vfs),
+            loader: ManifestLoader::new(Arc::clone(&vfs)),
+            vfs,
         }
     }
 
@@ -163,16 +157,11 @@ impl SpawnResolver {
         vars: HashMap<String, String>,
         user_permissions: &UserToolPermissions,
     ) -> Result<ResolvedSpawnContext, AvixError> {
-        let manifest = self.loader.load(agent_name, username).await?;
+        let (manifest, pkg_dir) = self.loader.load_with_dir(agent_name, username).await?;
         ModelValidator::validate(selected_model, &manifest.spec.entrypoint.model_requirements)?;
         let granted_tools =
             ToolGrantResolver::resolve(&manifest.spec.tools, user_permissions, agent_name)?;
-        let system_prompt = manifest
-            .spec
-            .defaults
-            .system_prompt
-            .clone()
-            .unwrap_or_default();
+        let system_prompt = self.load_system_prompt(&manifest, &pkg_dir).await;
         let rendered_goal = match &manifest.spec.defaults.goal_template {
             Some(tmpl) => GoalRenderer::render(tmpl, &vars),
             None => goal.to_string(),
@@ -184,6 +173,26 @@ impl SpawnResolver {
             system_prompt,
             rendered_goal,
         })
+    }
+
+    /// Read the system prompt file from the VFS package directory.
+    /// Returns an empty string if no `systemPromptPath` is set or the file is missing.
+    async fn load_system_prompt(&self, manifest: &AgentManifest, pkg_dir: &str) -> String {
+        let Some(ref rel_path) = manifest.spec.system_prompt_path else {
+            return String::new();
+        };
+        let full_path = format!("{}/{}", pkg_dir, rel_path);
+        let Ok(vfs_path) = VfsPath::parse(&full_path) else {
+            warn!(path = full_path, "invalid system prompt path");
+            return String::new();
+        };
+        match self.vfs.read(&vfs_path).await {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(_) => {
+                warn!(path = full_path, "system prompt file not found in VFS");
+                String::new()
+            }
+        }
     }
 }
 
@@ -216,9 +225,7 @@ mod tests {
         let granted = ToolGrantResolver::resolve(&tools, &perms, "researcher").unwrap();
         assert!(granted.contains(&"fs/read".to_string()));
         assert!(granted.contains(&"web/search".to_string()));
-        // code/interpreter is optional and not in user perms — absent
         assert!(!granted.contains(&"code/interpreter".to_string()));
-        // built-ins always present
         assert!(granted.contains(&"cap/list".to_string()));
     }
 
@@ -285,34 +292,42 @@ mod tests {
 
     const ECHO_BOT_YAML: &str = r#"
 apiVersion: avix/v1
-kind: AgentManifest
+kind: Agent
 metadata:
   name: echo-bot
   version: 1.0.0
   description: Simple echo agent
   author: avix-core
-  createdAt: "2026-03-15T10:00:00Z"
+packaging:
   signature: "sha256:"
 spec:
+  systemPromptPath: system-prompt.md
   entrypoint:
     type: llm-loop
-  defaults:
-    systemPrompt: "You are a helpful assistant."
 "#;
 
-    async fn vfs_with_manifest(path: &str, yaml: &str) -> Arc<VfsRouter> {
+    async fn vfs_with_files(files: &[(&str, &str)]) -> Arc<VfsRouter> {
         let vfs = Arc::new(VfsRouter::new());
-        let vfs_path = VfsPath::parse(path).unwrap();
-        vfs.write(&vfs_path, yaml.as_bytes().to_vec())
-            .await
-            .unwrap();
+        for (path, content) in files {
+            let vfs_path = VfsPath::parse(path).unwrap();
+            vfs.write(&vfs_path, content.as_bytes().to_vec())
+                .await
+                .unwrap();
+        }
         vfs
     }
 
     // T-MGB-11
     #[tokio::test]
     async fn spawn_resolver_produces_correct_context() {
-        let vfs = vfs_with_manifest("/bin/echo-bot@1.0.0/manifest.yaml", ECHO_BOT_YAML).await;
+        let vfs = vfs_with_files(&[
+            ("/bin/echo-bot@1.0.0/manifest.yaml", ECHO_BOT_YAML),
+            (
+                "/bin/echo-bot@1.0.0/system-prompt.md",
+                "You are a helpful assistant.",
+            ),
+        ])
+        .await;
         let resolver = SpawnResolver::new(vfs);
         let perms = make_perms(&["fs/read"], &[]);
         let ctx = resolver
@@ -337,20 +352,17 @@ spec:
     async fn spawn_resolver_renders_goal_template() {
         let yaml = r#"
 apiVersion: avix/v1
-kind: AgentManifest
+kind: Agent
 metadata:
   name: researcher
   version: 1.0.0
-  description: Researcher
-  author: test
-  createdAt: "2026-01-01T00:00:00Z"
+packaging:
   signature: "sha256:"
 spec:
   defaults:
-    systemPrompt: "You are a researcher."
     goalTemplate: "Research: {{topic}}"
 "#;
-        let vfs = vfs_with_manifest("/bin/researcher@1.0.0/manifest.yaml", yaml).await;
+        let vfs = vfs_with_files(&[("/bin/researcher@1.0.0/manifest.yaml", yaml)]).await;
         let resolver = SpawnResolver::new(vfs);
         let perms = make_perms(&[], &[]);
         let vars = HashMap::from([("topic".into(), "quantum computing".into())]);
@@ -366,6 +378,34 @@ spec:
             .await
             .unwrap();
         assert_eq!(ctx.rendered_goal, "Research: quantum computing");
+    }
+
+    #[tokio::test]
+    async fn spawn_resolver_empty_system_prompt_when_no_path() {
+        let yaml = r#"
+apiVersion: avix/v1
+kind: Agent
+metadata:
+  name: minimal
+  version: 1.0.0
+packaging:
+  signature: "sha256:"
+spec: {}
+"#;
+        let vfs = vfs_with_files(&[("/bin/minimal@1.0.0/manifest.yaml", yaml)]).await;
+        let resolver = SpawnResolver::new(vfs);
+        let ctx = resolver
+            .resolve(
+                "minimal",
+                "alice",
+                "do something",
+                "claude-sonnet-4",
+                HashMap::new(),
+                &make_perms(&[], &[]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ctx.system_prompt, "");
     }
 
     #[test]

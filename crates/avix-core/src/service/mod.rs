@@ -21,4 +21,7 @@ pub use process::ServiceProcess;
 pub use status::{ServiceState, ServiceStatus};
 pub use token::ServiceToken;
 pub use watchdog::ServiceWatchdog;
-pub use yaml::{parse_duration, HostAccess, RestartPolicy, ServiceSource, ServiceUnit};
+pub use yaml::{
+    parse_duration, HostAccess, RestartPolicy, ServiceManifest, ServiceSource, ServiceSpec,
+    ServiceUnit,
+};

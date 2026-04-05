@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::agent_manifest::git_fetch::git_clone_to;
-use crate::agent_manifest::manifest_file::AgentManifestFile;
+use crate::agent_manifest::schema::AgentManifest;
 use crate::error::AvixError;
 use crate::service::installer::ServiceInstaller;
 use crate::service::package_source::PackageSource;
@@ -64,7 +64,10 @@ impl AgentInstaller {
                 let tmp = tempfile::tempdir().map_err(|e| AvixError::ConfigParse(e.to_string()))?;
                 git_clone_to(url, tmp.path()).await?;
                 let manifest_path = tmp.path().join("manifest.yaml");
-                let manifest = AgentManifestFile::load(&manifest_path)?;
+                let content = std::fs::read_to_string(&manifest_path).map_err(|e| {
+                    AvixError::ConfigParse(format!("cannot read manifest.yaml: {e}"))
+                })?;
+                let manifest = AgentManifest::from_yaml(&content)?;
                 (Some(tmp), manifest)
             }
             _ => {
@@ -86,13 +89,15 @@ impl AgentInstaller {
                 let extractor = ServiceInstaller::new(self.root.clone());
                 extractor.extract_tarball(&bytes, tmp.path())?;
 
-                let manifest = AgentManifestFile::load(&tmp.path().join("manifest.yaml"))?;
+                let content = std::fs::read_to_string(&tmp.path().join("manifest.yaml"))
+                    .map_err(|e| AvixError::ConfigParse(format!("cannot read manifest.yaml: {e}")))?;
+                let manifest = AgentManifest::from_yaml(&content)?;
                 (Some(tmp), manifest)
             }
         };
 
         // Use versioned directory name: <name>@<version>
-        let versioned_name = format!("{}@{}", manifest.name, manifest.version);
+        let versioned_name = format!("{}@{}", manifest.metadata.name, manifest.metadata.version);
 
         let install_dir = match &req.scope {
             InstallScope::System => self.root.join("data").join("bin").join(&versioned_name),
@@ -109,7 +114,7 @@ impl AgentInstaller {
         if install_dir.exists() {
             return Err(AvixError::ConfigParse(format!(
                 "agent version already installed: {}@{}",
-                manifest.name, manifest.version
+                manifest.metadata.name, manifest.metadata.version
             )));
         }
 
@@ -124,10 +129,10 @@ impl AgentInstaller {
             for entry in entries.flatten() {
                 if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
                     if let Ok(name) = entry.file_name().into_string() {
-                        if name.starts_with(&format!("{}@", manifest.name)) {
+                        if name.starts_with(&format!("{}@", manifest.metadata.name)) {
                             tracing::debug!(
                                 "found existing version of {}: {}",
-                                manifest.name,
+                                manifest.metadata.name,
                                 name
                             );
                         }
@@ -152,8 +157,8 @@ impl AgentInstaller {
 
         guard.commit();
         Ok(AgentInstallResult {
-            name: manifest.name,
-            version: manifest.version,
+            name: manifest.metadata.name,
+            version: manifest.metadata.version,
             install_dir,
         })
     }
@@ -227,7 +232,7 @@ mod tests {
             let mut ar = tar::Builder::new(enc);
 
             let manifest_content = format!(
-                "name: {}\nversion: {}\ndescription: Test agent\n",
+                "apiVersion: avix/v1\nkind: Agent\nmetadata:\n  name: {}\n  version: {}\n  description: Test agent\nspec: {{}}\n",
                 name, version
             );
             let mut header = tar::Header::new_gnu();

@@ -1,0 +1,26 @@
+apiVersion: avix/v1
+kind: Service
+metadata:
+  name: workspace
+  version: "0.1.0"
+  description: "High-level workspace abstraction with session history integration"
+  author: "avix/workspace"
+packaging:
+  source: "system"
+  signature: "sha256:"
+spec:
+  binary: /services/workspace/bin/workspace
+  language: rust
+  restart: always
+  restartDelay: 5s
+  maxConcurrent: 20
+  after:
+    - memfs.svc
+    - router.svc
+  capabilities:
+    callerScoped: true
+    hostAccess:
+      - filesystem
+  tools:
+    namespace: /tools/workspace/
+    provides: []

@@ -21,14 +21,19 @@ pub enum PackageType {
 
 impl PackageType {
     pub fn detect(dir: &Path) -> Result<Self, AvixError> {
-        if dir.join("manifest.yaml").exists() {
-            return Ok(Self::Agent);
+        let path = dir.join("manifest.yaml");
+        let content = std::fs::read_to_string(&path)
+            .map_err(|_| AvixError::ConfigParse("manifest.yaml not found".into()))?;
+        #[derive(serde::Deserialize)]
+        struct KindProbe {
+            kind: String,
         }
-        if dir.join("service.yaml").exists() {
-            return Ok(Self::Service);
+        let probe: KindProbe = serde_yaml::from_str(&content)
+            .map_err(|e| AvixError::ConfigParse(format!("manifest.yaml parse error: {e}")))?;
+        match probe.kind.as_str() {
+            "Agent" => Ok(Self::Agent),
+            "Service" => Ok(Self::Service),
+            other => Err(AvixError::ConfigParse(format!("unknown kind: {other}"))),
         }
-        Err(AvixError::ConfigParse(
-            "cannot detect package type: no manifest.yaml or service.yaml found".into(),
-        ))
     }
 }

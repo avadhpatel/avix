@@ -2,7 +2,62 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent_manifest::schema::{ManifestMetadata, PackagingMetadata};
 use crate::error::AvixError;
+
+// ── ServiceManifest (on-disk format) ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ServiceManifest {
+    #[serde(rename = "apiVersion")]
+    pub api_version: String,
+    pub kind: String,
+    pub metadata: ManifestMetadata,
+    #[serde(default)]
+    pub packaging: PackagingMetadata,
+    pub spec: ServiceSpec,
+}
+
+impl ServiceManifest {
+    pub fn load(path: &Path) -> Result<Self, AvixError> {
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            AvixError::ConfigParse(format!("cannot read {}: {e}", path.display()))
+        })?;
+        serde_yaml::from_str(&content)
+            .map_err(|e| AvixError::ConfigParse(format!("manifest.yaml parse error: {e}")))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceSpec {
+    pub binary: String,
+    #[serde(default = "default_language")]
+    pub language: String,
+    #[serde(default)]
+    pub restart: RestartPolicy,
+    #[serde(default = "default_restart_delay")]
+    pub restart_delay: String,
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: u32,
+    #[serde(default = "default_queue_max")]
+    pub queue_max: u32,
+    #[serde(default = "default_queue_timeout")]
+    pub queue_timeout: String,
+    #[serde(default)]
+    pub run_as: RunAs,
+    #[serde(default)]
+    pub requires: Vec<String>,
+    #[serde(default)]
+    pub after: Vec<String>,
+    #[serde(default)]
+    pub capabilities: CapabilitiesSection,
+    pub tools: ToolsSection,
+    #[serde(default)]
+    pub jobs: JobsSection,
+}
+
+// ── ServiceUnit (internal runtime struct) ────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ServiceUnit {
@@ -27,15 +82,42 @@ fn default_source() -> ServiceSource {
 }
 
 impl ServiceUnit {
+    /// Load a service manifest from the given path (must be a `manifest.yaml`).
     pub fn load(path: &Path) -> Result<Self, AvixError> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| AvixError::ConfigParse(format!("cannot read {}: {e}", path.display())))?;
-        serde_yaml::from_str(&content)
-            .map_err(|e| AvixError::ConfigParse(format!("service.yaml parse error: {e}")))
+        let m = ServiceManifest::load(path)?;
+        Ok(Self::from_manifest(&m))
+    }
+
+    /// Convert from the on-disk `ServiceManifest` to the internal runtime struct.
+    pub fn from_manifest(m: &ServiceManifest) -> Self {
+        Self {
+            name: m.metadata.name.clone(),
+            version: m.metadata.version.clone(),
+            source: ServiceSource::System,
+            signature: m.packaging.signature.clone(),
+            unit: UnitSection {
+                description: m.metadata.description.clone(),
+                author: m.metadata.author.clone(),
+                requires: m.spec.requires.clone(),
+                after: m.spec.after.clone(),
+            },
+            service: ServiceSection {
+                binary: m.spec.binary.clone(),
+                language: m.spec.language.clone(),
+                restart: m.spec.restart.clone(),
+                restart_delay: m.spec.restart_delay.clone(),
+                max_concurrent: m.spec.max_concurrent,
+                queue_max: m.spec.queue_max,
+                queue_timeout: m.spec.queue_timeout.clone(),
+                run_as: m.spec.run_as.clone(),
+            },
+            capabilities: m.spec.capabilities.clone(),
+            tools: m.spec.tools.clone(),
+            jobs: m.spec.jobs.clone(),
+        }
     }
 
     pub fn load_for_service(root: &Path, name: &str) -> Result<Self, AvixError> {
-        // Scan for any versioned directory matching this service name in data/services
         let services_dir = root.join("data").join("services");
         let mut found_path = None;
 
@@ -44,7 +126,7 @@ impl ServiceUnit {
                 if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
                     if let Ok(dir_name) = entry.file_name().into_string() {
                         if dir_name.starts_with(&format!("{}@", name)) {
-                            found_path = Some(entry.path().join("service.yaml"));
+                            found_path = Some(entry.path().join("manifest.yaml"));
                             break;
                         }
                     }
@@ -132,6 +214,7 @@ pub enum RunAs {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct CapabilitiesSection {
     #[serde(default)]
     pub required: Vec<String>,
@@ -191,7 +274,9 @@ pub struct ToolsSection {
     pub provides: Vec<String>,
 }
 
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct JobsSection {
     #[serde(default = "default_max_active")]
     pub max_active: u32,
@@ -231,34 +316,32 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn write_unit(dir: &TempDir, content: &str) -> std::path::PathBuf {
-        let path = dir.path().join("service.yaml");
+    fn write_manifest(dir: &TempDir, content: &str) -> std::path::PathBuf {
+        let path = dir.path().join("manifest.yaml");
         std::fs::write(&path, content).unwrap();
         path
     }
 
+    const MINIMAL_MANIFEST: &str = r#"
+apiVersion: avix/v1
+kind: Service
+metadata:
+  name: github-svc
+  version: 1.0.0
+  description: GitHub integration
+spec:
+  binary: /services/github-svc/bin/github-svc
+  tools:
+    namespace: /tools/github/
+    provides:
+      - list-prs
+      - create-issue
+"#;
+
     #[test]
     fn minimal_unit_parses() {
         let dir = TempDir::new().unwrap();
-        let path = write_unit(
-            &dir,
-            r#"
-name: github-svc
-version: 1.0.0
-
-unit:
-  description: GitHub integration
-
-service:
-  binary: /services/github-svc/bin/github-svc
-
-tools:
-  namespace: /tools/github/
-  provides:
-    - list-prs
-    - create-issue
-"#,
-        );
+        let path = write_manifest(&dir, MINIMAL_MANIFEST);
         let unit = ServiceUnit::load(&path).unwrap();
         assert_eq!(unit.name, "github-svc");
         assert_eq!(unit.version, "1.0.0");
@@ -270,17 +353,18 @@ tools:
     #[test]
     fn defaults_are_applied() {
         let dir = TempDir::new().unwrap();
-        let path = write_unit(
+        let path = write_manifest(
             &dir,
             r#"
-name: min-svc
-version: 0.1.0
-
-service:
+apiVersion: avix/v1
+kind: Service
+metadata:
+  name: min-svc
+  version: 0.1.0
+spec:
   binary: /bin/min-svc
-
-tools:
-  namespace: /tools/min/
+  tools:
+    namespace: /tools/min/
 "#,
         );
         let unit = ServiceUnit::load(&path).unwrap();
@@ -294,24 +378,24 @@ tools:
     #[test]
     fn caller_scoped_and_host_access_parse() {
         let dir = TempDir::new().unwrap();
-        let path = write_unit(
+        let path = write_manifest(
             &dir,
             r#"
-name: multi-svc
-version: 1.0.0
-
-service:
+apiVersion: avix/v1
+kind: Service
+metadata:
+  name: multi-svc
+  version: 1.0.0
+spec:
   binary: /bin/multi-svc
-
-capabilities:
-  caller_scoped: true
-  required:
-    - fs:read
-  host_access:
-    - network
-
-tools:
-  namespace: /tools/multi/
+  capabilities:
+    callerScoped: true
+    required:
+      - fs:read
+    hostAccess:
+      - network
+  tools:
+    namespace: /tools/multi/
 "#,
         );
         let unit = ServiceUnit::load(&path).unwrap();
@@ -342,14 +426,17 @@ tools:
     #[test]
     fn missing_binary_errors() {
         let dir = TempDir::new().unwrap();
-        let path = write_unit(
+        let path = write_manifest(
             &dir,
             r#"
-name: bad
-version: 1.0.0
-
-tools:
-  namespace: /tools/bad/
+apiVersion: avix/v1
+kind: Service
+metadata:
+  name: bad
+  version: 1.0.0
+spec:
+  tools:
+    namespace: /tools/bad/
 "#,
         );
         assert!(ServiceUnit::load(&path).is_err());
@@ -358,21 +445,71 @@ tools:
     #[test]
     fn load_for_service_constructs_correct_path() {
         let dir = TempDir::new().unwrap();
-        let svc_dir = dir.path().join("services").join("my-svc");
+        let svc_dir = dir.path().join("data").join("services").join("my-svc@1.0.0");
         std::fs::create_dir_all(&svc_dir).unwrap();
-        let content = r#"
-name: my-svc
-version: 1.0.0
-
-service:
-  binary: /bin/my-svc
-
-tools:
-  namespace: /tools/my/
-"#;
-        std::fs::write(svc_dir.join("service.yaml"), content).unwrap();
+        std::fs::write(svc_dir.join("manifest.yaml"), MINIMAL_MANIFEST.replace("github-svc", "my-svc")).unwrap();
         let unit = ServiceUnit::load_for_service(dir.path(), "my-svc").unwrap();
         assert_eq!(unit.name, "my-svc");
+    }
+
+    #[test]
+    fn from_manifest_maps_fields_correctly() {
+        let m = ServiceManifest {
+            api_version: "avix/v1".into(),
+            kind: "Service".into(),
+            metadata: ManifestMetadata {
+                name: "test-svc".into(),
+                version: "2.0.0".into(),
+                description: "Test service".into(),
+                author: "test-team".into(),
+                license: None,
+                tags: vec![],
+                created_at: None,
+            },
+            packaging: PackagingMetadata {
+                source: Some("system".into()),
+                signature: Some("sha256:".into()),
+            },
+            spec: ServiceSpec {
+                binary: "/bin/test-svc".into(),
+                language: "rust".into(),
+                restart: RestartPolicy::Always,
+                restart_delay: "10s".into(),
+                max_concurrent: 5,
+                queue_max: 50,
+                queue_timeout: "2s".into(),
+                run_as: RunAs::Service,
+                requires: vec!["memfs.svc".into()],
+                after: vec!["router.svc".into()],
+                capabilities: CapabilitiesSection {
+                    caller_scoped: true,
+                    required: vec!["fs:read".into()],
+                    host_access: vec![HostAccess::Network],
+                    scope: None,
+                },
+                tools: ToolsSection {
+                    namespace: "/tools/test/".into(),
+                    provides: vec!["list".into()],
+                },
+                jobs: JobsSection {
+                    max_active: 2,
+                    job_timeout: "600s".into(),
+                    persist: true,
+                },
+            },
+        };
+
+        let unit = ServiceUnit::from_manifest(&m);
+        assert_eq!(unit.name, "test-svc");
+        assert_eq!(unit.version, "2.0.0");
+        assert_eq!(unit.unit.description, "Test service");
+        assert_eq!(unit.unit.after, vec!["router.svc"]);
+        assert_eq!(unit.service.binary, "/bin/test-svc");
+        assert_eq!(unit.service.restart, RestartPolicy::Always);
+        assert_eq!(unit.service.max_concurrent, 5);
+        assert!(unit.capabilities.caller_scoped);
+        assert_eq!(unit.tools.namespace, "/tools/test/");
+        assert_eq!(unit.jobs.max_active, 2);
     }
 
     #[test]
