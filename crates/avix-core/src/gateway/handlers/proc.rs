@@ -53,8 +53,8 @@ pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
         | "package/trust-add"
         | "package/trust-list"
         | "package/trust-remove" => {
-            // Transform kebab-case to path: package/install-agent -> kernel/proc/package/install-agent
-            let ipc_method = format!("kernel/proc/{}", op.replace('-', "/"));
+            // Map directly: package/install-agent -> kernel/proc/package/install-agent
+            let ipc_method = format!("kernel/proc/{}", op);
             tracing::info!(op, ipc_method = %ipc_method, "forwarding package op to kernel IPC");
             ipc_forward(&id, &ipc_method, cmd.cmd.body, ctx.ipc.as_ref()).await
         }

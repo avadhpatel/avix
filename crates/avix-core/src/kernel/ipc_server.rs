@@ -10,7 +10,9 @@ use crate::ipc::{IpcServer, IpcServerHandle};
 use crate::kernel::proc::ProcHandler;
 use crate::process::entry::ProcessStatus;
 use crate::process::table::ProcessTable;
+use crate::syscall::SyscallHandler;
 use crate::types::Pid;
+use crate::types::token::CapabilityToken;
 
 /// Kernel IPC server — listens on AVIX_KERNEL_SOCK and dispatches
 /// `kernel/proc/*` requests to `ProcHandler`.
@@ -384,6 +386,83 @@ async fn dispatch_request(
                 Ok(pid) => JsonRpcResponse::ok(id, json!({ "pid": pid })),
                 Err(e) => {
                     warn!(error = %e, "kernel/proc/session/resume failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+
+        "kernel/proc/package/install-agent" => {
+            debug!("handling kernel/proc/package/install-agent");
+            let ctx = crate::syscall::SyscallContext {
+                caller_pid: 0,
+                token: CapabilityToken::test_token(&["proc/package/install-agent"]),
+            };
+            let result = crate::syscall::domain::pkg_::install_agent(
+                &ctx,
+                params,
+                std::path::Path::new("/tmp"),
+            );
+            match result {
+                Ok(v) => JsonRpcResponse::ok(id, v),
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/package/install-agent failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+        "kernel/proc/package/uninstall-agent" => {
+            debug!("handling kernel/proc/package/uninstall-agent");
+            let ctx = crate::syscall::SyscallContext {
+                caller_pid: 0,
+                token: CapabilityToken::test_token(&["proc/package/install-agent"]),
+            };
+            let result = crate::syscall::domain::pkg_::uninstall_agent(
+                &ctx,
+                params,
+                std::path::Path::new("/tmp"),
+            );
+            match result {
+                Ok(v) => JsonRpcResponse::ok(id, v),
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/package/uninstall-agent failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+        "kernel/proc/package/install-service" => {
+            debug!("handling kernel/proc/package/install-service");
+            let ctx = crate::syscall::SyscallContext {
+                caller_pid: 0,
+                token: CapabilityToken::test_token(&["proc/package/install-service"]),
+            };
+            let result = crate::syscall::domain::pkg_::install_service(
+                &ctx,
+                params,
+                std::path::Path::new("/tmp"),
+            );
+            match result {
+                Ok(v) => JsonRpcResponse::ok(id, v),
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/package/install-service failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+        "kernel/proc/package/uninstall-service" => {
+            debug!("handling kernel/proc/package/uninstall-service");
+            let ctx = crate::syscall::SyscallContext {
+                caller_pid: 0,
+                token: CapabilityToken::test_token(&["proc/package/install-service"]),
+            };
+            let result = crate::syscall::domain::pkg_::uninstall_service(
+                &ctx,
+                params,
+                std::path::Path::new("/tmp"),
+            );
+            match result {
+                Ok(v) => JsonRpcResponse::ok(id, v),
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/package/uninstall-service failed");
                     JsonRpcResponse::err(id, -32000, &e.to_string(), None)
                 }
             }
