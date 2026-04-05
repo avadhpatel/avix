@@ -215,8 +215,8 @@ spec:
     #[tokio::test]
     async fn two_system_agents_returned() {
         let vfs = make_vfs_with(&[
-            ("/bin/researcher/manifest.yaml", MANIFEST_YAML),
-            ("/bin/coder/manifest.yaml", CODER_YAML),
+            ("/bin/researcher@1.0.0/manifest.yaml", MANIFEST_YAML),
+            ("/bin/coder@1.0.0/manifest.yaml", CODER_YAML),
         ])
         .await;
         let scanner = ManifestScanner::new(vfs);
@@ -231,7 +231,7 @@ spec:
     // T-SCN-03
     #[tokio::test]
     async fn user_agent_returned_with_user_scope() {
-        let vfs = make_vfs_with(&[("/users/alice/bin/my-bot/manifest.yaml", MANIFEST_YAML)]).await;
+        let vfs = make_vfs_with(&[("/users/alice/bin/my-bot@1.0.0/manifest.yaml", MANIFEST_YAML)]).await;
         let scanner = ManifestScanner::new(vfs);
         let result = scanner.scan("alice").await;
         assert_eq!(result.len(), 1);
@@ -243,8 +243,8 @@ spec:
     #[tokio::test]
     async fn system_wins_on_name_collision() {
         let vfs = make_vfs_with(&[
-            ("/bin/researcher/manifest.yaml", MANIFEST_YAML),
-            ("/users/alice/bin/researcher/manifest.yaml", MANIFEST_YAML),
+            ("/bin/researcher@1.0.0/manifest.yaml", MANIFEST_YAML),
+            ("/users/alice/bin/researcher@1.0.0/manifest.yaml", MANIFEST_YAML),
         ])
         .await;
         let scanner = ManifestScanner::new(vfs);
@@ -257,8 +257,8 @@ spec:
     #[tokio::test]
     async fn malformed_manifest_is_skipped() {
         let vfs = make_vfs_with(&[
-            ("/bin/bad/manifest.yaml", "not: valid: yaml: : :"),
-            ("/bin/researcher/manifest.yaml", MANIFEST_YAML),
+            ("/bin/bad@1.0.0/manifest.yaml", "not: valid: yaml: : :"),
+            ("/bin/researcher@1.0.0/manifest.yaml", MANIFEST_YAML),
         ])
         .await;
         let scanner = ManifestScanner::new(vfs);
@@ -271,9 +271,9 @@ spec:
     #[tokio::test]
     async fn scan_all_spans_multiple_users() {
         let vfs = make_vfs_with(&[
-            ("/bin/researcher/manifest.yaml", MANIFEST_YAML),
-            ("/users/alice/bin/coder/manifest.yaml", CODER_YAML),
-            ("/users/bob/bin/coder/manifest.yaml", CODER_YAML), // same name as alice's — deduplicated
+            ("/bin/researcher@1.0.0/manifest.yaml", MANIFEST_YAML),
+            ("/users/alice/bin/coder@1.0.0/manifest.yaml", CODER_YAML),
+            ("/users/bob/bin/coder@1.0.0/manifest.yaml", CODER_YAML), // same name as alice's — deduplicated
         ])
         .await;
         // Ensure /users is listable by writing .keep entries

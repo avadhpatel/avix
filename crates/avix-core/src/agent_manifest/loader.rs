@@ -19,22 +19,51 @@ impl ManifestLoader {
     /// Load a manifest for a named agent.
     ///
     /// Resolution order:
-    ///   1. `/bin/<name>/manifest.yaml`  (system-installed)
-    ///   2. `/users/<username>/bin/<name>/manifest.yaml`  (user-installed)
+    ///   1. `/bin/<name>@<version>/manifest.yaml`  (system-installed, any version)
+    ///   2. `/users/<username>/bin/<name>@<version>/manifest.yaml`  (user-installed, any version)
+    ///
+    /// Scans for any directory matching `<name>@*` pattern.
     pub async fn load(&self, name: &str, username: &str) -> Result<AgentManifest, AvixError> {
-        let system_path = format!("/bin/{}/manifest.yaml", name);
-        if let Ok(path) = VfsPath::parse(&system_path) {
-            if self.vfs.exists(&path).await {
-                return self.load_from_path(&system_path).await;
+        // Try system path first - scan for any version
+        if let Some(path) = self.find_versioned_manifest("/bin", name).await {
+            return self.load_from_path(&path).await;
+        }
+        
+        // Then try user path
+        let user_bin = format!("/users/{}/bin", username);
+        if let Some(path) = self.find_versioned_manifest(&user_bin, name).await {
+            return self.load_from_path(&path).await;
+        }
+        
+        Err(AvixError::ManifestNotFound { path: format!("/bin/{}/manifest.yaml", name) })
+    }
+
+    /// Find a manifest in a versioned directory (e.g., /bin/researcher@1.0.0/)
+    async fn find_versioned_manifest(&self, base_dir: &str, name: &str) -> Option<String> {
+        let dir = match VfsPath::parse(base_dir) {
+            Ok(p) => p,
+            Err(_) => return None,
+        };
+        
+        let entries = match self.vfs.list(&dir).await {
+            Ok(e) => e,
+            Err(_) => return None,
+        };
+        
+        for entry in entries {
+            // Match <name>@<version> pattern
+            if let Some(versioned_name) = entry.strip_prefix(&format!("{}@", name)) {
+                if !versioned_name.is_empty() {
+                    let manifest_path = format!("{}/{}/manifest.yaml", base_dir, entry);
+                    if let Ok(path) = VfsPath::parse(&manifest_path) {
+                        if self.vfs.exists(&path).await {
+                            return Some(manifest_path);
+                        }
+                    }
+                }
             }
         }
-        let user_path = format!("/users/{}/bin/{}/manifest.yaml", username, name);
-        if let Ok(path) = VfsPath::parse(&user_path) {
-            if self.vfs.exists(&path).await {
-                return self.load_from_path(&user_path).await;
-            }
-        }
-        Err(AvixError::ManifestNotFound { path: system_path })
+        None
     }
 
     /// Load from an exact VFS path.
@@ -174,7 +203,7 @@ spec: {}
 
     #[tokio::test]
     async fn loader_resolves_system_path_first() {
-        let vfs = vfs_with_manifest("/bin/echo-bot/manifest.yaml", ECHO_BOT_YAML).await;
+        let vfs = vfs_with_manifest("/bin/echo-bot@1.0.0/manifest.yaml", ECHO_BOT_YAML).await;
         let loader = ManifestLoader::new(vfs);
         let manifest = loader.load("echo-bot", "alice").await.unwrap();
         assert_eq!(manifest.metadata.name, "echo-bot");
@@ -182,7 +211,7 @@ spec: {}
 
     #[tokio::test]
     async fn loader_falls_back_to_user_path() {
-        let vfs = vfs_with_manifest("/users/alice/bin/echo-bot/manifest.yaml", ECHO_BOT_YAML).await;
+        let vfs = vfs_with_manifest("/users/alice/bin/echo-bot@1.0.0/manifest.yaml", ECHO_BOT_YAML).await;
         let loader = ManifestLoader::new(vfs);
         let manifest = loader.load("echo-bot", "alice").await.unwrap();
         assert_eq!(manifest.metadata.name, "echo-bot");

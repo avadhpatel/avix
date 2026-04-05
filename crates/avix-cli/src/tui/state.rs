@@ -693,7 +693,7 @@ mod tests {
                 version: "1.0.0".to_string(),
                 description: "Research agent".to_string(),
                 author: "team".to_string(),
-                path: "/bin/researcher/manifest.yaml".to_string(),
+                path: "/bin/researcher@1.0.0/manifest.yaml".to_string(),
                 scope: AgentScope::System,
             },
             AgentManifestSummary {
@@ -701,7 +701,7 @@ mod tests {
                 version: "2.0.0".to_string(),
                 description: "Code generation".to_string(),
                 author: "team".to_string(),
-                path: "/bin/coder/manifest.yaml".to_string(),
+                path: "/bin/coder@2.0.0/manifest.yaml".to_string(),
                 scope: AgentScope::System,
             },
         ];

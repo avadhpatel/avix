@@ -312,7 +312,7 @@ spec:
     // T-MGB-11
     #[tokio::test]
     async fn spawn_resolver_produces_correct_context() {
-        let vfs = vfs_with_manifest("/bin/echo-bot/manifest.yaml", ECHO_BOT_YAML).await;
+        let vfs = vfs_with_manifest("/bin/echo-bot@1.0.0/manifest.yaml", ECHO_BOT_YAML).await;
         let resolver = SpawnResolver::new(vfs);
         let perms = make_perms(&["fs/read"], &[]);
         let ctx = resolver
@@ -350,7 +350,7 @@ spec:
     systemPrompt: "You are a researcher."
     goalTemplate: "Research: {{topic}}"
 "#;
-        let vfs = vfs_with_manifest("/bin/researcher/manifest.yaml", yaml).await;
+        let vfs = vfs_with_manifest("/bin/researcher@1.0.0/manifest.yaml", yaml).await;
         let resolver = SpawnResolver::new(vfs);
         let perms = make_perms(&[], &[]);
         let vars = HashMap::from([("topic".into(), "quantum computing".into())]);

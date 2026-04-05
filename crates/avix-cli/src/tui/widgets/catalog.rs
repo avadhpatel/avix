@@ -61,7 +61,7 @@ mod tests {
             version: "1.0.0".to_string(),
             description: "Test agent".to_string(),
             author: "test".to_string(),
-            path: format!("/bin/{}/manifest.yaml", name),
+            path: format!("/bin/{}@1.0.0/manifest.yaml", name),
             scope,
         }
     }
