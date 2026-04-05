@@ -75,11 +75,14 @@ impl ServiceInstaller {
 
         // Use versioned directory name: <name>@<version>
         let versioned_name = format!("{}@{}", unit.name, unit.version);
-        let install_dir = self.root.join("data").join("services").join(&versioned_name);
+        let install_dir = self
+            .root
+            .join("data")
+            .join("services")
+            .join(&versioned_name);
 
         let mut guard = ServiceInstallGuard::new(install_dir.clone());
-        std::fs::create_dir_all(&install_dir)
-            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        std::fs::create_dir_all(&install_dir).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
         if let Err(e) = std::fs::rename(tmp_dir.path(), &install_dir) {
             drop(tmp_dir);
@@ -226,14 +229,18 @@ impl ServiceInstaller {
     pub fn check_conflicts(&self, unit: &ServiceUnit) -> Result<(), AvixError> {
         // Check for this specific version
         let versioned_name = format!("{}@{}", unit.name, unit.version);
-        let existing = self.root.join("data").join("services").join(&versioned_name);
+        let existing = self
+            .root
+            .join("data")
+            .join("services")
+            .join(&versioned_name);
         if existing.exists() {
             return Err(AvixError::ConfigParse(format!(
                 "service version already installed: {}@{}",
                 unit.name, unit.version
             )));
         }
-        
+
         // Also check for any other versions of this service
         let services_dir = self.root.join("data").join("services");
         if let Ok(entries) = std::fs::read_dir(&services_dir) {
@@ -247,7 +254,7 @@ impl ServiceInstaller {
                 }
             }
         }
-        
+
         Ok(())
     }
 }

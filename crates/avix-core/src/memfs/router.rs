@@ -7,14 +7,6 @@ use super::path::VfsPath;
 use super::vfs::MemFs;
 use crate::error::AvixError;
 
-/// VFS router that dispatches calls to a disk-backed `LocalProvider` for mounted
-/// paths and falls back to an in-memory `MemFs` for everything else.
-///
-/// Mounts are matched by longest-prefix: `/users/alice` beats `/users` for the
-/// path `/users/alice/defaults.yaml`.
-///
-/// Public API is intentionally identical to `MemFs` so call-sites can substitute
-/// `Arc<VfsRouter>` for `Arc<MemFs>` mechanically.
 pub struct VfsRouter {
     /// Sorted descending by prefix length so the longest match is found first.
     mounts: RwLock<Vec<(String, LocalProvider)>>,
@@ -41,6 +33,19 @@ impl std::fmt::Debug for VfsRouter {
 impl Default for VfsRouter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Clone for VfsRouter {
+    fn clone(&self) -> Self {
+        Self {
+            mounts: RwLock::new(Vec::new()),
+            mem_mounts: RwLock::new(Vec::new()),
+            tool_registry: RwLock::new(None),
+            permissions_store: RwLock::new(None),
+            caller: RwLock::new(None),
+            default: MemFs::new(),
+        }
     }
 }
 

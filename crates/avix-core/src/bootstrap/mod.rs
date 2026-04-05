@@ -2,12 +2,12 @@ pub mod executor_factory;
 pub mod phase1;
 pub(crate) mod phase2;
 
+use crate::agent_manifest::scanner::ManifestScanner;
 use crate::auth::atp_token::ATPTokenStore;
 use crate::auth::service::AuthService;
 use crate::config::LlmConfig;
 use crate::error::AvixError;
 use crate::exec_svc::ExecIpcServer;
-use crate::agent_manifest::scanner::ManifestScanner;
 use crate::gateway::config::GatewayConfig;
 use crate::gateway::event_bus::AtpEventBus;
 use crate::gateway::server::GatewayServer;
@@ -249,7 +249,8 @@ impl Runtime {
         );
         // Retain a reference so phase3 can wire in service_manager and tool_registry.
         self.proc_handler = Some(Arc::clone(&proc_handler));
-        let kernel_server = KernelIpcServer::new(self.kernel_sock.clone(), proc_handler, self.root.clone());
+        let kernel_server =
+            KernelIpcServer::new(self.kernel_sock.clone(), proc_handler, self.root.clone());
         kernel_server.start().await?;
         tracing::info!(sock = %self.kernel_sock.display(), "kernel IPC server started");
         Ok(())

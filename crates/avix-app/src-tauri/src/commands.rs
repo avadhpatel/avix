@@ -285,12 +285,8 @@ pub async fn install_agent(
                 "no_verify": request.no_verify,
                 "session_id": request.session_id,
             });
-            let mut cmd = avix_client_core::atp::types::Cmd::new(
-                "proc",
-                "package/install-agent",
-                "",
-                body,
-            );
+            let mut cmd =
+                avix_client_core::atp::types::Cmd::new("proc", "package/install-agent", "", body);
             cmd.token = dispatcher.token.clone();
             dispatcher
                 .call(&cmd)
@@ -321,12 +317,8 @@ pub async fn install_service(
                 "no_verify": request.no_verify,
                 "session_id": request.session_id,
             });
-            let mut cmd = avix_client_core::atp::types::Cmd::new(
-                "proc",
-                "package/install-service",
-                "",
-                body,
-            );
+            let mut cmd =
+                avix_client_core::atp::types::Cmd::new("proc", "package/install-service", "", body);
             cmd.token = dispatcher.token.clone();
             dispatcher
                 .call(&cmd)

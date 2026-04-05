@@ -360,7 +360,11 @@ async fn dispatch_parsed_command(
                 timestamp: std::time::Instant::now(),
             };
             let _ = action_tx.send(Action::LogEvent(log_event)).await;
-            action_tx.send(Action::InstallStart { name: source.clone() }).await?;
+            action_tx
+                .send(Action::InstallStart {
+                    name: source.clone(),
+                })
+                .await?;
             if let Some(dispatcher) = shared_state.read().await.dispatcher.clone() {
                 let action_tx_c = action_tx.clone();
                 let source_c = source.clone();
@@ -398,7 +402,9 @@ async fn dispatch_parsed_command(
                     }
                 });
             } else {
-                action_tx.send(Action::InstallError("No connection to server".to_string())).await?;
+                action_tx
+                    .send(Action::InstallError("No connection to server".to_string()))
+                    .await?;
             }
         }
         ParsedCommand::InstallService { source } => {
@@ -408,7 +414,11 @@ async fn dispatch_parsed_command(
                 timestamp: std::time::Instant::now(),
             };
             let _ = action_tx.send(Action::LogEvent(log_event)).await;
-            action_tx.send(Action::InstallStart { name: source.clone() }).await?;
+            action_tx
+                .send(Action::InstallStart {
+                    name: source.clone(),
+                })
+                .await?;
             if let Some(dispatcher) = shared_state.read().await.dispatcher.clone() {
                 let action_tx_c = action_tx.clone();
                 let source_c = source.clone();
@@ -435,7 +445,9 @@ async fn dispatch_parsed_command(
                     }
                 });
             } else {
-                action_tx.send(Action::InstallError("No connection to server".to_string())).await?;
+                action_tx
+                    .send(Action::InstallError("No connection to server".to_string()))
+                    .await?;
             }
         }
     }
@@ -1052,20 +1064,18 @@ fn ui(f: &mut ratatui::Frame, state: &TuiState) {
         let install_block = match &state.install {
             super::state::InstallState::InProgress { name, progress } => {
                 let progress_text: String = progress.join("\n");
-                ratatui::widgets::Paragraph::new(progress_text)
-                    .block(
-                        ratatui::widgets::Block::default()
-                            .borders(ratatui::widgets::Borders::ALL)
-                            .title(format!("Installing {}...", name)),
-                    )
+                ratatui::widgets::Paragraph::new(progress_text).block(
+                    ratatui::widgets::Block::default()
+                        .borders(ratatui::widgets::Borders::ALL)
+                        .title(format!("Installing {}...", name)),
+                )
             }
             super::state::InstallState::Done { name } => {
-                ratatui::widgets::Paragraph::new(format!("✓ Installed {}", name))
-                    .block(
-                        ratatui::widgets::Block::default()
-                            .borders(ratatui::widgets::Borders::ALL)
-                            .title("Install Complete"),
-                    )
+                ratatui::widgets::Paragraph::new(format!("✓ Installed {}", name)).block(
+                    ratatui::widgets::Block::default()
+                        .borders(ratatui::widgets::Borders::ALL)
+                        .title("Install Complete"),
+                )
             }
             super::state::InstallState::Failed { name, error } => {
                 ratatui::widgets::Paragraph::new(format!("✗ Failed to install {}: {}", name, error))

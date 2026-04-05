@@ -132,7 +132,8 @@ pub async fn run(sub: AgentCmd, json: bool) -> Result<()> {
 
         AgentCmd::Catalog { username } => {
             let dispatcher = connect_config(None, None).await?;
-            let user = username.as_deref().unwrap_or("default");
+            // Empty string signals the gateway to inject the caller's identity.
+            let user = username.as_deref().unwrap_or("");
             let agents = list_installed(&dispatcher, user).await?;
             emit(json, format_catalog, agents);
         }
@@ -143,7 +144,7 @@ pub async fn run(sub: AgentCmd, json: bool) -> Result<()> {
             live,
         } => {
             let dispatcher = connect_config(None, None).await?;
-            let user = username.as_deref().unwrap_or("default");
+            let user = username.as_deref().unwrap_or("");
             let records = if live {
                 list_invocations_live(&dispatcher, user, agent.as_deref()).await?
             } else {
@@ -199,8 +200,8 @@ pub async fn run(sub: AgentCmd, json: bool) -> Result<()> {
             let source = if source.starts_with("file://") {
                 source.clone()
             } else if std::path::Path::new(&source).exists() {
-                let abs = std::fs::canonicalize(&source)
-                    .context("failed to resolve absolute path")?;
+                let abs =
+                    std::fs::canonicalize(&source).context("failed to resolve absolute path")?;
                 format!("file://{}", abs.display())
             } else {
                 source
@@ -215,8 +216,7 @@ pub async fn run(sub: AgentCmd, json: bool) -> Result<()> {
                 "session_id": session,
             });
 
-            let cmd =
-                AtpCmd_::new("proc", "package/install-agent", &dispatcher.token, body);
+            let cmd = AtpCmd_::new("proc", "package/install-agent", &dispatcher.token, body);
             let reply = dispatcher
                 .call(&cmd)
                 .await
@@ -254,8 +254,7 @@ pub async fn run(sub: AgentCmd, json: bool) -> Result<()> {
                 "scope": scope,
             });
 
-            let cmd =
-                AtpCmd_::new("proc", "package/uninstall-agent", &dispatcher.token, body);
+            let cmd = AtpCmd_::new("proc", "package/uninstall-agent", &dispatcher.token, body);
             let reply = dispatcher
                 .call(&cmd)
                 .await

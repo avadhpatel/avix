@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-use crate::error::AvixError;
 use super::PackageType;
+use crate::error::AvixError;
+use std::path::PathBuf;
 
 pub struct ScaffoldRequest {
     pub name: String,
@@ -15,7 +15,10 @@ impl PackageScaffold {
     pub fn create(req: ScaffoldRequest) -> Result<PathBuf, AvixError> {
         let dir = req.output_dir.join(&req.name);
         if dir.exists() {
-            return Err(AvixError::ConfigParse(format!("directory already exists: {}", dir.display())));
+            return Err(AvixError::ConfigParse(format!(
+                "directory already exists: {}",
+                dir.display()
+            )));
         }
         match req.pkg_type {
             PackageType::Agent => Self::scaffold_agent(&dir, &req.name, &req.version),
@@ -27,16 +30,24 @@ impl PackageScaffold {
     fn scaffold_agent(dir: &std::path::Path, name: &str, version: &str) -> Result<(), AvixError> {
         std::fs::create_dir_all(dir.join("examples"))
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        std::fs::write(dir.join("manifest.yaml"), format!(
+        std::fs::write(
+            dir.join("manifest.yaml"),
+            format!(
             "name: {}\nversion: \"{}\"\ndescription: \"\"\nsystem_prompt_path: system-prompt.md\n",
             name, version
-        )).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        std::fs::write(dir.join("system-prompt.md"),
-            format!("# {}\n\nYou are a helpful agent.\n", name)
-        ).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        std::fs::write(dir.join("README.md"),
-            format!("# {}\n\nDescribe your agent here.\n", name)
-        ).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        ),
+        )
+        .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        std::fs::write(
+            dir.join("system-prompt.md"),
+            format!("# {}\n\nYou are a helpful agent.\n", name),
+        )
+        .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        std::fs::write(
+            dir.join("README.md"),
+            format!("# {}\n\nDescribe your agent here.\n", name),
+        )
+        .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         Ok(())
     }
 
@@ -45,8 +56,10 @@ impl PackageScaffold {
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         std::fs::create_dir_all(dir.join("tools"))
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        std::fs::write(dir.join("service.yaml"), format!(
-r#"name: "{}"
+        std::fs::write(
+            dir.join("service.yaml"),
+            format!(
+                r#"name: "{}"
 version: "{}"
 
 unit:
@@ -65,10 +78,14 @@ tools:
   namespace: "/tools/{name}/"
   provides: []
 "#,
-            name, version
-        )).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        std::fs::write(dir.join("Cargo.toml"), format!(
-r#"[package]
+                name, version
+            ),
+        )
+        .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            format!(
+                r#"[package]
 name    = "{}"
 version = "{}"
 edition = "2021"
@@ -77,14 +94,20 @@ edition = "2021"
 name = "{}"
 path = "src/main.rs"
 "#,
-            name, version, name
-        )).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        std::fs::write(dir.join("src/main.rs"),
-            format!("fn main() {{\n    println!(\"Hello from {}\");\n}}\n", name)
-        ).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        std::fs::write(dir.join("README.md"),
-            format!("# {}\n\nDescribe your service here.\n", name)
-        ).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+                name, version, name
+            ),
+        )
+        .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        std::fs::write(
+            dir.join("src/main.rs"),
+            format!("fn main() {{\n    println!(\"Hello from {}\");\n}}\n", name),
+        )
+        .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        std::fs::write(
+            dir.join("README.md"),
+            format!("# {}\n\nDescribe your service here.\n", name),
+        )
+        .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         Ok(())
     }
 }
@@ -103,7 +126,7 @@ mod tests {
             version: "0.1.0".into(),
             output_dir: dir.path().to_path_buf(),
         };
-        
+
         let result = PackageScaffold::create(req).unwrap();
         assert!(result.join("manifest.yaml").exists());
         assert!(result.join("system-prompt.md").exists());
@@ -119,7 +142,7 @@ mod tests {
             version: "0.1.0".into(),
             output_dir: dir.path().to_path_buf(),
         };
-        
+
         let result = PackageScaffold::create(req).unwrap();
         assert!(result.join("service.yaml").exists());
         assert!(result.join("Cargo.toml").exists());
@@ -130,14 +153,14 @@ mod tests {
     fn scaffold_existing_dir_errors() {
         let dir = TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join("existing")).unwrap();
-        
+
         let req = ScaffoldRequest {
             name: "existing".into(),
             pkg_type: PackageType::Agent,
             version: "0.1.0".into(),
             output_dir: dir.path().to_path_buf(),
         };
-        
+
         let result = PackageScaffold::create(req);
         assert!(result.is_err());
     }
@@ -151,7 +174,7 @@ mod tests {
             version: "0.1.0".into(),
             output_dir: dir.path().to_path_buf(),
         };
-        
+
         let result = PackageScaffold::create(req).unwrap();
         let content = std::fs::read_to_string(result.join("manifest.yaml")).unwrap();
         let parsed: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
@@ -167,7 +190,7 @@ mod tests {
             version: "0.1.0".into(),
             output_dir: dir.path().to_path_buf(),
         };
-        
+
         let result = PackageScaffold::create(req).unwrap();
         let content = std::fs::read_to_string(result.join("service.yaml")).unwrap();
         let parsed: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();

@@ -231,7 +231,8 @@ spec:
     // T-SCN-03
     #[tokio::test]
     async fn user_agent_returned_with_user_scope() {
-        let vfs = make_vfs_with(&[("/users/alice/bin/my-bot@1.0.0/manifest.yaml", MANIFEST_YAML)]).await;
+        let vfs =
+            make_vfs_with(&[("/users/alice/bin/my-bot@1.0.0/manifest.yaml", MANIFEST_YAML)]).await;
         let scanner = ManifestScanner::new(vfs);
         let result = scanner.scan("alice").await;
         assert_eq!(result.len(), 1);
@@ -244,7 +245,10 @@ spec:
     async fn system_wins_on_name_collision() {
         let vfs = make_vfs_with(&[
             ("/bin/researcher@1.0.0/manifest.yaml", MANIFEST_YAML),
-            ("/users/alice/bin/researcher@1.0.0/manifest.yaml", MANIFEST_YAML),
+            (
+                "/users/alice/bin/researcher@1.0.0/manifest.yaml",
+                MANIFEST_YAML,
+            ),
         ])
         .await;
         let scanner = ManifestScanner::new(vfs);

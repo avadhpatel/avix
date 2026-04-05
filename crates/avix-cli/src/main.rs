@@ -400,8 +400,7 @@ mod tests {
 
     #[test]
     fn service_restart_parses() {
-        let cli =
-            Cli::try_parse_from(["avix", "client", "service", "restart", "my-svc"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "client", "service", "restart", "my-svc"]).unwrap();
         assert!(matches!(
             cli.command,
             Cmd::Client {
@@ -629,9 +628,8 @@ mod tests {
 
     #[test]
     fn secret_list_for_user_parses() {
-        let cli =
-            Cli::try_parse_from(["avix", "client", "secret", "list", "--for-user", "alice"])
-                .unwrap();
+        let cli = Cli::try_parse_from(["avix", "client", "secret", "list", "--for-user", "alice"])
+            .unwrap();
         match cli.command {
             Cmd::Client {
                 sub:
@@ -716,8 +714,7 @@ mod tests {
 
     #[test]
     fn session_show_parses() {
-        let cli =
-            Cli::try_parse_from(["avix", "client", "session", "show", "sess-123"]).unwrap();
+        let cli = Cli::try_parse_from(["avix", "client", "session", "show", "sess-123"]).unwrap();
         match cli.command {
             Cmd::Client {
                 sub:
@@ -825,11 +822,12 @@ mod tests {
             Cmd::Package {
                 sub:
                     PackageCmd::Trust {
-                        sub: TrustCmd::Add {
-                            key,
-                            name,
-                            allow_sources,
-                        },
+                        sub:
+                            TrustCmd::Add {
+                                key,
+                                name,
+                                allow_sources,
+                            },
                     },
             } => {
                 assert_eq!(key, "/keys/dev.asc");

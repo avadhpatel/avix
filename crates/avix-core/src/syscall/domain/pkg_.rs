@@ -83,25 +83,25 @@ fn parse_scope(params: &Value, username: &str) -> Result<InstallScope, SyscallEr
 
 pub async fn install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
     check_capability(ctx, "proc/package/install-agent")?;
-    
+
     // Get username from params (injected by gateway from caller_identity)
     let username = params
         .get("caller_identity")
         .and_then(|v| v.as_str())
         .unwrap_or("default");
-    
+
     INSTALL_QUOTA.check(username)?;
 
     let source = params
         .get("source")
         .and_then(|v| v.as_str())
         .ok_or_else(|| SyscallError::Einval("missing source".into()))?;
-    
+
     let no_verify = params
         .get("no_verify")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    
+
     if !no_verify {
         check_untrusted_source(ctx, source)?;
     }
@@ -143,7 +143,11 @@ pub async fn install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path
     }
 }
 
-pub async fn install_service(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
+pub async fn install_service(
+    ctx: &SyscallContext,
+    params: Value,
+    avix_root: &Path,
+) -> SyscallResult {
     check_capability(ctx, "proc/package/install-service")?;
     let username = "default";
     INSTALL_QUOTA.check(username)?;
@@ -152,12 +156,12 @@ pub async fn install_service(ctx: &SyscallContext, params: Value, avix_root: &Pa
         .get("source")
         .and_then(|v| v.as_str())
         .ok_or_else(|| SyscallError::Einval("missing source".into()))?;
-    
+
     let no_verify = params
         .get("no_verify")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    
+
     if !no_verify {
         check_untrusted_source(ctx, source)?;
     }
@@ -213,7 +217,11 @@ pub fn install_agent_sync(ctx: &SyscallContext, params: Value, avix_root: &Path)
     rt.block_on(install_agent(ctx, params, avix_root))
 }
 
-pub fn install_service_sync(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
+pub fn install_service_sync(
+    ctx: &SyscallContext,
+    params: Value,
+    avix_root: &Path,
+) -> SyscallResult {
     let rt = tokio::runtime::Handle::current();
     rt.block_on(install_service(ctx, params, avix_root))
 }
@@ -231,11 +239,16 @@ pub fn uninstall_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) ->
         .get("caller_identity")
         .and_then(|v| v.as_str())
         .unwrap_or("default");
-    
+
     let scope = parse_scope(&params, username)?;
     let install_dir = match scope {
         InstallScope::System => avix_root.join("data").join("bin").join(name),
-        InstallScope::User(u) => avix_root.join("data").join("users").join(u).join("bin").join(name),
+        InstallScope::User(u) => avix_root
+            .join("data")
+            .join("users")
+            .join(u)
+            .join("bin")
+            .join(name),
     };
 
     if !install_dir.exists() {
@@ -259,7 +272,7 @@ pub fn uninstall_service(ctx: &SyscallContext, params: Value, avix_root: &Path) 
     // Find and remove any version of this service
     let services_dir = avix_root.join("data").join("services");
     let mut uninstalled = Vec::new();
-    
+
     if let Ok(entries) = std::fs::read_dir(&services_dir) {
         for entry in entries.flatten() {
             if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
@@ -280,7 +293,9 @@ pub fn uninstall_service(ctx: &SyscallContext, params: Value, avix_root: &Path) 
     }
 
     if uninstalled.is_empty() {
-        return Err(SyscallError::Einval(format!("service not installed: {name}")));
+        return Err(SyscallError::Einval(format!(
+            "service not installed: {name}"
+        )));
     }
 
     Ok(json!({ "uninstalled": uninstalled }))
@@ -389,40 +404,43 @@ mod tests {
         }
     }
 
-    #[test]
-    fn missing_install_capability_eperm() {
+    #[tokio::test]
+    async fn missing_install_capability_eperm() {
         let ctx = make_ctx(&[]);
         let avix_root = PathBuf::from("/tmp");
         let result = install_agent(
             &ctx,
             json!({"source": "file:///tmp/test"}),
             avix_root.as_path(),
-        );
+        )
+        .await;
         assert!(matches!(result, Err(SyscallError::Eperm(_, _))));
     }
 
-    #[test]
-    fn untrusted_source_without_cap_eperm() {
+    #[tokio::test]
+    async fn untrusted_source_without_cap_eperm() {
         let ctx = make_ctx(&["proc/package/install-agent"]);
         let avix_root = PathBuf::from("/tmp");
         let result = install_agent(
             &ctx,
             json!({"source": "https://example.com/agent.tar.xz"}),
             avix_root.as_path(),
-        );
+        )
+        .await;
         assert!(matches!(result, Err(SyscallError::Eperm(_, _))));
     }
 
-    #[test]
+    #[tokio::test]
     #[ignore = "requires network access to GitHub API"]
-    fn official_source_no_untrusted_cap_ok() {
+    async fn official_source_no_untrusted_cap_ok() {
         let ctx = make_ctx(&["proc/package/install-agent"]);
         let avix_root = PathBuf::from("/tmp");
         let result = install_agent(
             &ctx,
             json!({"source": "github:avadhpatel/avix/test-agent"}),
             avix_root.as_path(),
-        );
+        )
+        .await;
         assert!(matches!(result, Err(SyscallError::Eperm(_, _))));
     }
 
@@ -458,7 +476,8 @@ mod tests {
             &ctx,
             json!({"source": format!("file://{}", pkg_path.display()), "scope": "user"}),
             root.path(),
-        );
+        )
+        .await;
         assert!(result.is_ok());
     }
 }

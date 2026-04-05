@@ -51,7 +51,7 @@ pub async fn run(sub: SessionCmd, json: bool) -> Result<()> {
             username,
         } => {
             let dispatcher = connect_config(None, None).await?;
-            let username = username.as_deref().unwrap_or("default");
+            let username = username.as_deref().unwrap_or("");
             let reply = dispatcher
                 .call(&AtpCmd_::new(
                     "proc",
@@ -84,7 +84,7 @@ pub async fn run(sub: SessionCmd, json: bool) -> Result<()> {
 
         SessionCmd::List { username, status } => {
             let dispatcher = connect_config(None, None).await?;
-            let username = username.as_deref().unwrap_or("default");
+            let username = username.as_deref().unwrap_or("");
             let reply = dispatcher
                 .call(&AtpCmd_::new(
                     "proc",

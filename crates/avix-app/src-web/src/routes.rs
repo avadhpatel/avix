@@ -299,10 +299,7 @@ pub async fn invoke_handler(
                 .as_str()
                 .ok_or_else(|| bad_request("missing source"))?
                 .to_string();
-            let scope = req.args["scope"]
-                .as_str()
-                .unwrap_or("user")
-                .to_string();
+            let scope = req.args["scope"].as_str().unwrap_or("user").to_string();
             let version = req.args["version"].as_str().map(str::to_string);
             let checksum = req.args["checksum"].as_str().map(str::to_string);
             let no_verify = req.args["no_verify"].as_bool().unwrap_or(false);
@@ -321,12 +318,8 @@ pub async fn invoke_handler(
                 "session_id": session_id,
             });
             drop(s);
-            let mut cmd = avix_client_core::atp::types::Cmd::new(
-                "proc",
-                "package/install-agent",
-                "",
-                body,
-            );
+            let mut cmd =
+                avix_client_core::atp::types::Cmd::new("proc", "package/install-agent", "", body);
             cmd.token = dispatcher.token.clone();
             dispatcher
                 .call(&cmd)
@@ -340,10 +333,7 @@ pub async fn invoke_handler(
                 .as_str()
                 .ok_or_else(|| bad_request("missing source"))?
                 .to_string();
-            let scope = req.args["scope"]
-                .as_str()
-                .unwrap_or("system")
-                .to_string();
+            let scope = req.args["scope"].as_str().unwrap_or("system").to_string();
             let version = req.args["version"].as_str().map(str::to_string);
             let checksum = req.args["checksum"].as_str().map(str::to_string);
             let no_verify = req.args["no_verify"].as_bool().unwrap_or(false);
@@ -362,12 +352,8 @@ pub async fn invoke_handler(
                 "session_id": session_id,
             });
             drop(s);
-            let mut cmd = avix_client_core::atp::types::Cmd::new(
-                "proc",
-                "package/install-service",
-                "",
-                body,
-            );
+            let mut cmd =
+                avix_client_core::atp::types::Cmd::new("proc", "package/install-service", "", body);
             cmd.token = dispatcher.token.clone();
             dispatcher
                 .call(&cmd)

@@ -10,8 +10,8 @@ pub use scaffold::{PackageScaffold, ScaffoldRequest};
 pub use trust::{TrustStore, TrustedKey};
 pub use validator::{PackageValidator, ValidationError};
 
-use std::path::Path;
 use crate::error::AvixError;
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PackageType {

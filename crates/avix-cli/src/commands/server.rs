@@ -209,8 +209,7 @@ pub async fn run(sub: ServerCmd) -> Result<()> {
                     )
                 })?;
 
-            let llm_client: Box<dyn LlmClient> =
-                build_llm_client(provider_cfg, &resolved_model)?;
+            let llm_client: Box<dyn LlmClient> = build_llm_client(provider_cfg, &resolved_model)?;
 
             let runtime = Runtime::bootstrap_with_root(&root).await?;
             println!(

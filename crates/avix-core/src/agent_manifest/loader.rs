@@ -28,14 +28,16 @@ impl ManifestLoader {
         if let Some(path) = self.find_versioned_manifest("/bin", name).await {
             return self.load_from_path(&path).await;
         }
-        
+
         // Then try user path
         let user_bin = format!("/users/{}/bin", username);
         if let Some(path) = self.find_versioned_manifest(&user_bin, name).await {
             return self.load_from_path(&path).await;
         }
-        
-        Err(AvixError::ManifestNotFound { path: format!("/bin/{}/manifest.yaml", name) })
+
+        Err(AvixError::ManifestNotFound {
+            path: format!("/bin/{}/manifest.yaml", name),
+        })
     }
 
     /// Find a manifest in a versioned directory (e.g., /bin/researcher@1.0.0/)
@@ -44,12 +46,12 @@ impl ManifestLoader {
             Ok(p) => p,
             Err(_) => return None,
         };
-        
+
         let entries = match self.vfs.list(&dir).await {
             Ok(e) => e,
             Err(_) => return None,
         };
-        
+
         for entry in entries {
             // Match <name>@<version> pattern
             if let Some(versioned_name) = entry.strip_prefix(&format!("{}@", name)) {
@@ -211,7 +213,11 @@ spec: {}
 
     #[tokio::test]
     async fn loader_falls_back_to_user_path() {
-        let vfs = vfs_with_manifest("/users/alice/bin/echo-bot@1.0.0/manifest.yaml", ECHO_BOT_YAML).await;
+        let vfs = vfs_with_manifest(
+            "/users/alice/bin/echo-bot@1.0.0/manifest.yaml",
+            ECHO_BOT_YAML,
+        )
+        .await;
         let loader = ManifestLoader::new(vfs);
         let manifest = loader.load("echo-bot", "alice").await.unwrap();
         assert_eq!(manifest.metadata.name, "echo-bot");

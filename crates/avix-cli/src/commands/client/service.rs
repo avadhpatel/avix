@@ -121,8 +121,8 @@ pub async fn run(sub: ServiceCmd, json: bool) -> Result<()> {
             let source = if source.starts_with("file://") {
                 source.clone()
             } else if std::path::Path::new(&source).exists() {
-                let abs = std::fs::canonicalize(&source)
-                    .context("failed to resolve absolute path")?;
+                let abs =
+                    std::fs::canonicalize(&source).context("failed to resolve absolute path")?;
                 format!("file://{}", abs.display())
             } else {
                 source
@@ -137,9 +137,11 @@ pub async fn run(sub: ServiceCmd, json: bool) -> Result<()> {
                 "session_id": session,
             });
 
-            let cmd =
-                AtpCmd_::new("proc", "package/install-service", &dispatcher.token, body);
-            let reply = dispatcher.call(&cmd).await.context("install-service failed")?;
+            let cmd = AtpCmd_::new("proc", "package/install-service", &dispatcher.token, body);
+            let reply = dispatcher
+                .call(&cmd)
+                .await
+                .context("install-service failed")?;
 
             if !reply.ok {
                 let msg = reply
@@ -217,8 +219,8 @@ pub async fn run(sub: ServiceCmd, json: bool) -> Result<()> {
             }
             let yaml = std::fs::read_to_string(&status_path)
                 .with_context(|| format!("cannot read {}", status_path.display()))?;
-            let status: ServiceStatus = serde_yaml::from_str(&yaml)
-                .with_context(|| "failed to parse status.yaml")?;
+            let status: ServiceStatus =
+                serde_yaml::from_str(&yaml).with_context(|| "failed to parse status.yaml")?;
 
             emit(
                 json,
@@ -312,9 +314,7 @@ pub async fn run(sub: ServiceCmd, json: bool) -> Result<()> {
             } else {
                 let status_path = root.join("proc/services").join(&name).join("status.yaml");
                 if status_path.exists() {
-                    anyhow::bail!(
-                        "service '{name}' may be running — use --force to kill it first"
-                    );
+                    anyhow::bail!("service '{name}' may be running — use --force to kill it first");
                 }
             }
 

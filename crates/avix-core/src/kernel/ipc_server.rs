@@ -10,8 +10,8 @@ use crate::ipc::{IpcServer, IpcServerHandle};
 use crate::kernel::proc::ProcHandler;
 use crate::process::entry::ProcessStatus;
 use crate::process::table::ProcessTable;
-use crate::types::Pid;
 use crate::types::token::CapabilityToken;
+use crate::types::Pid;
 
 /// Kernel IPC server — listens on AVIX_KERNEL_SOCK and dispatches
 /// `kernel/proc/*` requests to `ProcHandler`.
@@ -67,7 +67,8 @@ async fn handle_message(
     match msg {
         IpcMessage::Request(req) => {
             debug!(method = %req.method, id = %req.id, "kernel IPC request");
-            let resp = dispatch_request(&req.id, &req.method, req.params, proc_handler, avix_root).await;
+            let resp =
+                dispatch_request(&req.id, &req.method, req.params, proc_handler, avix_root).await;
             Some(resp)
         }
         IpcMessage::Notification(notif) => {
@@ -402,11 +403,8 @@ async fn dispatch_request(
                 caller_pid: 0,
                 token: CapabilityToken::test_token(&["proc/package/install-agent"]),
             };
-            let result = crate::syscall::domain::pkg_::install_agent(
-                &ctx,
-                params,
-                &avix_root,
-            ).await;
+            let result =
+                crate::syscall::domain::pkg_::install_agent(&ctx, params, &avix_root).await;
             match result {
                 Ok(v) => JsonRpcResponse::ok(id, v),
                 Err(e) => {
@@ -423,12 +421,9 @@ async fn dispatch_request(
             };
             let root = avix_root.clone();
             let result = tokio::task::spawn_blocking(move || {
-                crate::syscall::domain::pkg_::uninstall_agent(
-                    &ctx,
-                    params.clone(),
-                    &root,
-                )
-            }).await;
+                crate::syscall::domain::pkg_::uninstall_agent(&ctx, params.clone(), &root)
+            })
+            .await;
             match result {
                 Ok(Ok(v)) => JsonRpcResponse::ok(id, v),
                 Ok(Err(e)) => {
@@ -447,11 +442,8 @@ async fn dispatch_request(
                 caller_pid: 0,
                 token: CapabilityToken::test_token(&["proc/package/install-service"]),
             };
-            let result = crate::syscall::domain::pkg_::install_service(
-                &ctx,
-                params,
-                &avix_root,
-            ).await;
+            let result =
+                crate::syscall::domain::pkg_::install_service(&ctx, params, &avix_root).await;
             match result {
                 Ok(v) => JsonRpcResponse::ok(id, v),
                 Err(e) => {
@@ -468,12 +460,9 @@ async fn dispatch_request(
             };
             let root = avix_root.clone();
             let result = tokio::task::spawn_blocking(move || {
-                crate::syscall::domain::pkg_::uninstall_service(
-                    &ctx,
-                    params.clone(),
-                    &root,
-                )
-            }).await;
+                crate::syscall::domain::pkg_::uninstall_service(&ctx, params.clone(), &root)
+            })
+            .await;
             match result {
                 Ok(Ok(v)) => JsonRpcResponse::ok(id, v),
                 Ok(Err(e)) => {

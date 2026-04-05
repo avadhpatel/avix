@@ -114,6 +114,7 @@ points only — they parse CLI args, call `avix-core`, and exit.
 ---
 
 ## Development Workflow
+Read the Serena initial instructions and activate the current directory as a project in Serena. If Serena LSP is not available let the user know.
 
 ### TDD — Tests First, Always
 

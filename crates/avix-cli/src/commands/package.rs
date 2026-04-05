@@ -63,9 +63,7 @@ pub enum TrustCmd {
     /// List all trusted keys
     List,
     /// Remove a trusted key by fingerprint
-    Remove {
-        fingerprint: String,
-    },
+    Remove { fingerprint: String },
 }
 
 pub async fn run(sub: PackageCmd) -> Result<()> {
@@ -74,20 +72,18 @@ pub async fn run(sub: PackageCmd) -> Result<()> {
     };
 
     match sub {
-        PackageCmd::Validate { path } => {
-            match PackageValidator::validate(&path) {
-                Ok(pkg_type) => {
-                    println!("✓ Valid {:?} package", pkg_type);
-                }
-                Err(errors) => {
-                    eprintln!("Validation failed ({} error(s)):", errors.len());
-                    for e in &errors {
-                        eprintln!("  {}: {}", e.path, e.message);
-                    }
-                    std::process::exit(1);
-                }
+        PackageCmd::Validate { path } => match PackageValidator::validate(&path) {
+            Ok(pkg_type) => {
+                println!("✓ Valid {:?} package", pkg_type);
             }
-        }
+            Err(errors) => {
+                eprintln!("Validation failed ({} error(s)):", errors.len());
+                for e in &errors {
+                    eprintln!("  {}: {}", e.path, e.message);
+                }
+                std::process::exit(1);
+            }
+        },
 
         PackageCmd::Build {
             path,
@@ -160,9 +156,7 @@ pub async fn run(sub: PackageCmd) -> Result<()> {
                     let store = TrustStore::new(&root);
                     let keys = store.list().context("list trusted keys")?;
                     if keys.is_empty() {
-                        println!(
-                            "No third-party keys trusted (official Avix key always active)."
-                        );
+                        println!("No third-party keys trusted (official Avix key always active).");
                         return Ok(());
                     }
                     for k in &keys {
