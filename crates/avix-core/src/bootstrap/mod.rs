@@ -7,6 +7,7 @@ use crate::auth::service::AuthService;
 use crate::config::LlmConfig;
 use crate::error::AvixError;
 use crate::exec_svc::ExecIpcServer;
+use crate::agent_manifest::scanner::ManifestScanner;
 use crate::gateway::config::GatewayConfig;
 use crate::gateway::event_bus::AtpEventBus;
 use crate::gateway::server::GatewayServer;
@@ -43,7 +44,7 @@ pub struct Runtime {
     master_key: Arc<String>,
     boot_log: Vec<BootLogEntry>,
     service_pids: std::collections::HashMap<String, Pid>,
-    vfs: VfsRouter,
+    vfs: Arc<VfsRouter>,
     process_table: Arc<ProcessTable>,
     root: PathBuf,
     runtime_dir: PathBuf,
@@ -71,7 +72,7 @@ impl Runtime {
     pub async fn bootstrap_with_root(root: &Path) -> Result<Self, AvixError> {
         let mut log = Vec::new();
         let service_pids = std::collections::HashMap::new();
-        let vfs = VfsRouter::new();
+        let vfs = Arc::new(VfsRouter::new());
         let process_table = Arc::new(ProcessTable::new());
         let runtime_dir = std::env::var("AVIX_RUNTIME_DIR")
             .map(PathBuf::from)
@@ -233,6 +234,8 @@ impl Runtime {
             .with_tracer(Arc::clone(&self.tracer)),
         );
 
+        let scanner = Arc::new(ManifestScanner::new(Arc::clone(&self.vfs)));
+
         let proc_handler = Arc::new(
             ProcHandler::new_with_factory(
                 Arc::clone(&self.process_table),
@@ -241,6 +244,7 @@ impl Runtime {
                 self.runtime_dir.clone(),
                 factory,
             )
+            .with_manifest_scanner(scanner)
             .with_tracer(Arc::clone(&self.tracer)),
         );
         // Retain a reference so phase3 can wire in service_manager and tool_registry.
