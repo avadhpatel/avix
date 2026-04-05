@@ -10,7 +10,6 @@ use crate::ipc::{IpcServer, IpcServerHandle};
 use crate::kernel::proc::ProcHandler;
 use crate::process::entry::ProcessStatus;
 use crate::process::table::ProcessTable;
-use crate::syscall::SyscallHandler;
 use crate::types::Pid;
 use crate::types::token::CapabilityToken;
 
