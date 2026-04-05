@@ -90,7 +90,15 @@ pub fn install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> S
         .get("source")
         .and_then(|v| v.as_str())
         .ok_or_else(|| SyscallError::Einval("missing source".into()))?;
-    check_untrusted_source(ctx, source)?;
+    
+    let no_verify = params
+        .get("no_verify")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    
+    if !no_verify {
+        check_untrusted_source(ctx, source)?;
+    }
 
     let username = "default";
     let scope = parse_scope(&params, username)?;
@@ -103,10 +111,6 @@ pub fn install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> S
         .get("checksum")
         .and_then(|v| v.as_str())
         .map(|s| s.to_owned());
-    let no_verify = params
-        .get("no_verify")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let session_id = params
         .get("session_id")
         .and_then(|v| v.as_str())
@@ -146,7 +150,15 @@ pub fn install_service(ctx: &SyscallContext, params: Value, avix_root: &Path) ->
         .get("source")
         .and_then(|v| v.as_str())
         .ok_or_else(|| SyscallError::Einval("missing source".into()))?;
-    check_untrusted_source(ctx, source)?;
+    
+    let no_verify = params
+        .get("no_verify")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    
+    if !no_verify {
+        check_untrusted_source(ctx, source)?;
+    }
 
     let version = params
         .get("version")
@@ -157,10 +169,6 @@ pub fn install_service(ctx: &SyscallContext, params: Value, avix_root: &Path) ->
         .get("checksum")
         .and_then(|v| v.as_str())
         .map(|s| s.to_owned());
-    let no_verify = params
-        .get("no_verify")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let _session_id = params
         .get("session_id")
         .and_then(|v| v.as_str())
