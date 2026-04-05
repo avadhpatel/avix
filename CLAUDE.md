@@ -1,3 +1,5 @@
+**Token efficiency is critical.** Claude must follow the Strict Token-Saving Rules below on every single response.
+
 # CLAUDE.md — Avix Development Instructions
 
 > This file tells Claude Code how to work on this codebase. Read it fully at the start
@@ -98,6 +100,25 @@ These are hard rules. Violating any of them is a bug, not a design choice.
 
 ---
 
+## Strict Token-Saving Rules for Claude
+
+Claude **must minimize token usage and avoid unnecessary work** at all times. The following rules are mandatory and override any default behavior:
+
+- **Never explore or read files** unless they are explicitly listed in the current dev plan or the relevant architecture spec files.
+- **Never run full workspace commands**: Prohibited commands include `cargo test --workspace`, `cargo test`, `cargo check --workspace`, `cargo clippy --workspace`, `cargo build --workspace`, or any command without a specific package or test filter.
+- **Never suggest or make changes** to files not listed in the approved dev plan.
+- **Never perform large refactors**, add extra features, improve unrelated code, or "future-proof" anything unless explicitly asked in the task.
+- **Never write more code than necessary** to satisfy the current file's requirements in the dev plan.
+- **Never output long explanations**, full file diffs, or speculative plans unless the user specifically requests them. Keep responses concise and action-focused.
+- **In Mode 1**: Only create the dev plan file. Do not run any cargo commands or edit any source code.
+- **In Mode 2**: Work on **exactly one file at a time**. After finishing the changes, tests, and compile check for that file, immediately stop and wait for user instructions before moving to the next file (even if the plan lists more files).
+- **Testing is strictly targeted**: Only run tests that directly cover the code touched in the current file. Use precise filters (e.g. `cargo test crate_name::module::test_name`).
+- **After completing an entire dev plan** in Mode 2: Update only the relevant architecture spec files, then immediately hand control back to the user. Do not run any additional commands or make any other changes.
+
+Violating any of these rules wastes tokens and is considered incorrect behavior.
+
+---
+
 ## Crate Structure
 
 ```
@@ -114,33 +135,63 @@ points only — they parse CLI args, call `avix-core`, and exit.
 ---
 
 ## Development Workflow
-Read the Serena initial instructions and activate the current directory as a project in Serena. If Serena LSP is not available let the user know.
 
-### TDD — Tests First, Always
+Claude **operates in exactly one of two modes at any time**. It must never mix modes or perform actions from both modes in a single response. The user will explicitly indicate which mode to use (or the context will make it clear). Follow the chosen mode strictly and do not deviate.
 
-```
-1. Write the failing test
-2. Run: cargo test --workspace  → watch it fail
-3. Write the minimum implementation to make it pass
-4. Refactor
-5. Repeat
-```
+### Mode 1: Feature Planning & Dev Plan Creation
 
-Never write implementation code without a failing test already in place. No exceptions.
+Use this mode when the user requests a new feature, change, or task (or when no approved dev plan exists for the request).
 
-### Before Every Commit
+1. **Understand the task at hand** — fully read and internalize the user's request. Ask clarifying questions if anything is ambiguous.
+2. **Start with the architecture spec files** — immediately review all relevant documents in `docs/architecture/` (especially the numbered 00–09 series and any feature-specific specs) to identify every existing feature, component, invariant, and area that must be touched or extended.
+3. **Confirm the features with the user** — explicitly list every feature, component, or behavior that needs to be updated or added according to the architecture specs. Present this list clearly to the user and obtain **explicit confirmation** before proceeding.
+4. **Determine which files need to be changed** — based solely on the confirmed specs, identify the exact source files, test files, configuration files, or other files that must be created, modified, or deleted.
+5. **Write the final update plan** — create a new Markdown file (or update an existing one) in the `docs/dev_plans/` folder **exactly** following the instructions in the "Development Plans" section of this document. The dev plan must include:
+   - Clear task summary and the user-confirmed features
+   - All architecture spec files referenced
+   - Precise list of files to change/create/delete, with rationale
+   - Step-by-step implementation order (one file at a time)
+   - Targeted testing strategy (relevant tests only + target coverage requirements)
 
+Do **not** make any code changes, run any commands, or edit any files outside of creating the dev plan until the user explicitly approves the plan and instructs you to switch to Mode 2.
+
+### Mode 2: Feature Implementation from Dev Plan
+
+Use this mode **only** when the user explicitly tells you to implement from an approved dev-plan file located in `docs/dev_plans/`.
+
+1. Read the entire approved dev plan first.
+2. Implement **strictly one file at a time**, following the exact order specified in the dev plan:
+   - Make **only** the minimal code changes required for that specific file.
+   - Ensure every change **compiles cleanly** (run `cargo check` or `cargo build` **only** on the affected crate/package).
+   - Add or update **only the necessary tests** needed to achieve the target test coverage for the code touched (see "Testing" section in Code Conventions).
+   - Run **only the tests that apply to the code touched** (use precise filters such as `cargo test <module_path>::` or `cargo test --test <test_file>`). **Never** run full workspace tests, `cargo test`, or tests for untouched code.
+   - Verify that the relevant tests pass.
+3. After **all** files listed in the dev plan have been successfully implemented and their targeted tests pass:
+   - Update the relevant architecture specification files in `docs/architecture/` to accurately document the changes made. Architecture specs must remain the single source of truth.
+4. Stop. Do **not** perform any additional actions. Return control to the user and ask for the next instructions.
+
+**Important rules that apply in both modes:**
+- Claude must always stay in only one mode per response.
+- Never run full workspace tests (`cargo test --workspace`, `cargo test`, etc.) as they are slow and token-heavy.
+- Never edit architecture specs until Mode 2 is fully complete.
+- Never create or edit code without an approved dev plan (except for creating the dev plan itself in Mode 1).
+
+
+### Before Every Commit (targeted only)
+
+After finishing changes for a specific file or completing a dev plan:
 ```bash
-cargo test --workspace                     # all tests must pass
-cargo clippy --workspace -- -D warnings   # zero warnings
-cargo fmt --check                          # zero formatting diff
+# Only on the exact crate and test filters for files changed in this step
+cargo test <precise_test_filter>          # e.g. avix_core::some_module
+cargo clippy --package <touched_crate> -- -D warnings
+cargo fmt --check
 ```
-
-All three must exit 0. Fix before committing.
 
 ---
 
 ## Code Conventions
+
+Always make the **smallest possible change** that fulfills the dev plan for the current file. Do not add extra functionality, comments, or optimizations unless they are explicitly required. Prioritize compile success and targeted test coverage over elegance or completeness.
 
 ### Error Handling
 
