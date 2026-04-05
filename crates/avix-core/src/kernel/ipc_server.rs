@@ -22,13 +22,15 @@ use crate::types::token::CapabilityToken;
 pub struct KernelIpcServer {
     sock_path: PathBuf,
     proc_handler: Arc<ProcHandler>,
+    avix_root: PathBuf,
 }
 
 impl KernelIpcServer {
-    pub fn new(sock_path: PathBuf, proc_handler: Arc<ProcHandler>) -> Self {
+    pub fn new(sock_path: PathBuf, proc_handler: Arc<ProcHandler>, avix_root: PathBuf) -> Self {
         Self {
             sock_path,
             proc_handler,
+            avix_root,
         }
     }
 
@@ -39,11 +41,13 @@ impl KernelIpcServer {
         info!(sock = %path.display(), "kernel IPC server bound");
 
         let proc_handler = Arc::clone(&self.proc_handler);
+        let avix_root = self.avix_root;
         tokio::spawn(async move {
             if let Err(e) = server
                 .serve(move |msg| {
                     let ph = Arc::clone(&proc_handler);
-                    async move { handle_message(msg, ph).await }
+                    let root = avix_root.clone();
+                    async move { handle_message(msg, ph, root).await }
                 })
                 .await
             {
@@ -59,11 +63,12 @@ impl KernelIpcServer {
 async fn handle_message(
     msg: IpcMessage,
     proc_handler: Arc<ProcHandler>,
+    avix_root: PathBuf,
 ) -> Option<JsonRpcResponse> {
     match msg {
         IpcMessage::Request(req) => {
             debug!(method = %req.method, id = %req.id, "kernel IPC request");
-            let resp = dispatch_request(&req.id, &req.method, req.params, proc_handler).await;
+            let resp = dispatch_request(&req.id, &req.method, req.params, proc_handler, avix_root).await;
             Some(resp)
         }
         IpcMessage::Notification(notif) => {
@@ -78,6 +83,7 @@ async fn dispatch_request(
     method: &str,
     params: serde_json::Value,
     proc_handler: Arc<ProcHandler>,
+    avix_root: PathBuf,
 ) -> JsonRpcResponse {
     match method {
         "kernel/proc/spawn" => {
@@ -400,8 +406,8 @@ async fn dispatch_request(
             let result = crate::syscall::domain::pkg_::install_agent(
                 &ctx,
                 params,
-                std::path::Path::new("/tmp"),
-            );
+                &avix_root,
+            ).await;
             match result {
                 Ok(v) => JsonRpcResponse::ok(id, v),
                 Err(e) => {
@@ -416,15 +422,22 @@ async fn dispatch_request(
                 caller_pid: 0,
                 token: CapabilityToken::test_token(&["proc/package/install-agent"]),
             };
-            let result = crate::syscall::domain::pkg_::uninstall_agent(
-                &ctx,
-                params,
-                std::path::Path::new("/tmp"),
-            );
+            let root = avix_root.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::syscall::domain::pkg_::uninstall_agent(
+                    &ctx,
+                    params.clone(),
+                    &root,
+                )
+            }).await;
             match result {
-                Ok(v) => JsonRpcResponse::ok(id, v),
-                Err(e) => {
+                Ok(Ok(v)) => JsonRpcResponse::ok(id, v),
+                Ok(Err(e)) => {
                     warn!(error = %e, "kernel/proc/package/uninstall-agent failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/package/uninstall-agent task failed");
                     JsonRpcResponse::err(id, -32000, &e.to_string(), None)
                 }
             }
@@ -438,8 +451,8 @@ async fn dispatch_request(
             let result = crate::syscall::domain::pkg_::install_service(
                 &ctx,
                 params,
-                std::path::Path::new("/tmp"),
-            );
+                &avix_root,
+            ).await;
             match result {
                 Ok(v) => JsonRpcResponse::ok(id, v),
                 Err(e) => {
@@ -454,15 +467,22 @@ async fn dispatch_request(
                 caller_pid: 0,
                 token: CapabilityToken::test_token(&["proc/package/install-service"]),
             };
-            let result = crate::syscall::domain::pkg_::uninstall_service(
-                &ctx,
-                params,
-                std::path::Path::new("/tmp"),
-            );
+            let root = avix_root.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::syscall::domain::pkg_::uninstall_service(
+                    &ctx,
+                    params.clone(),
+                    &root,
+                )
+            }).await;
             match result {
-                Ok(v) => JsonRpcResponse::ok(id, v),
-                Err(e) => {
+                Ok(Ok(v)) => JsonRpcResponse::ok(id, v),
+                Ok(Err(e)) => {
                     warn!(error = %e, "kernel/proc/package/uninstall-service failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/package/uninstall-service task failed");
                     JsonRpcResponse::err(id, -32000, &e.to_string(), None)
                 }
             }
@@ -559,15 +579,21 @@ mod tests {
         Arc::new(ProcHandler::new(table, yaml_path, master_key))
     }
 
+    fn make_avix_root(dir: &TempDir) -> PathBuf {
+        dir.path().to_path_buf()
+    }
+
     #[tokio::test]
     async fn spawn_returns_pid() {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
+        let root = make_avix_root(&dir);
         let resp = dispatch_request(
             "req-1",
             "kernel/proc/spawn",
             json!({ "name": "test-agent", "goal": "do stuff", "session_id": "s1", "caller": "gw" }),
             ph,
+            root,
         )
         .await;
         assert!(resp.error.is_none());
@@ -579,6 +605,7 @@ mod tests {
     async fn list_returns_empty_then_one() {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
+        let root = make_avix_root(&dir);
 
         // Spawn one agent first
         dispatch_request(
@@ -586,10 +613,11 @@ mod tests {
             "kernel/proc/spawn",
             json!({ "name": "a1", "goal": "g1", "session_id": "s1", "caller": "gw" }),
             Arc::clone(&ph),
+            root.clone(),
         )
         .await;
 
-        let resp = dispatch_request("req-2", "kernel/proc/list", json!({}), ph).await;
+        let resp = dispatch_request("req-2", "kernel/proc/list", json!({}), ph, root).await;
         assert!(resp.error.is_none());
         let list = resp.result.unwrap();
         assert_eq!(list.as_array().unwrap().len(), 1);
@@ -599,18 +627,20 @@ mod tests {
     async fn stat_returns_agent_info() {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
+        let root = make_avix_root(&dir);
 
         let spawn_resp = dispatch_request(
             "req-1",
             "kernel/proc/spawn",
             json!({ "name": "agent-x", "goal": "my-goal", "session_id": "s1", "caller": "gw" }),
             Arc::clone(&ph),
+            root.clone(),
         )
         .await;
         let pid = spawn_resp.result.unwrap()["pid"].as_u64().unwrap();
 
         let stat_resp =
-            dispatch_request("req-2", "kernel/proc/stat", json!({ "id": pid }), ph).await;
+            dispatch_request("req-2", "kernel/proc/stat", json!({ "id": pid }), ph, root).await;
         assert!(stat_resp.error.is_none());
         let body = stat_resp.result.unwrap();
         assert_eq!(body["name"], "agent-x");
@@ -622,12 +652,14 @@ mod tests {
     async fn kill_stops_agent() {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
+        let root = make_avix_root(&dir);
 
         let spawn_resp = dispatch_request(
             "req-1",
             "kernel/proc/spawn",
             json!({ "name": "doomed", "goal": "g", "session_id": "s", "caller": "gw" }),
             Arc::clone(&ph),
+            root.clone(),
         )
         .await;
         let pid = spawn_resp.result.unwrap()["pid"].as_u64().unwrap();
@@ -637,13 +669,14 @@ mod tests {
             "kernel/proc/kill",
             json!({ "id": pid }),
             Arc::clone(&ph),
+            root.clone(),
         )
         .await;
         assert!(kill_resp.error.is_none());
 
         // Verify status is now stopped
         let stat_resp =
-            dispatch_request("req-3", "kernel/proc/stat", json!({ "id": pid }), ph).await;
+            dispatch_request("req-3", "kernel/proc/stat", json!({ "id": pid }), ph, root).await;
         assert_eq!(stat_resp.result.unwrap()["status"], "stopped");
     }
 
@@ -651,7 +684,8 @@ mod tests {
     async fn unknown_method_returns_error() {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
-        let resp = dispatch_request("req-1", "kernel/bogus/method", json!({}), ph).await;
+        let root = make_avix_root(&dir);
+        let resp = dispatch_request("req-1", "kernel/bogus/method", json!({}), ph, root).await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
     }
@@ -661,11 +695,13 @@ mod tests {
     async fn list_installed_returns_ok() {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
+        let root = make_avix_root(&dir);
         let resp = dispatch_request(
             "req-1",
             "kernel/proc/list-installed",
             json!({ "username": "alice" }),
             ph,
+            root,
         )
         .await;
         // No scanner configured → empty array, still OK
@@ -678,11 +714,13 @@ mod tests {
     async fn invocation_list_returns_ok() {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
+        let root = make_avix_root(&dir);
         let resp = dispatch_request(
             "req-1",
             "kernel/proc/invocation-list",
             json!({ "username": "alice" }),
             ph,
+            root,
         )
         .await;
         // No store configured → empty array, still OK
@@ -695,11 +733,13 @@ mod tests {
     async fn invocation_get_returns_not_found_for_unknown_id() {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
+        let root = make_avix_root(&dir);
         let resp = dispatch_request(
             "req-1",
             "kernel/proc/invocation-get",
             json!({ "id": "does-not-exist" }),
             ph,
+            root,
         )
         .await;
         // No store configured → Ok(None) → 404-style error
@@ -712,7 +752,8 @@ mod tests {
     async fn unknown_method_still_returns_eparse_after_new_ops() {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
-        let resp = dispatch_request("req-1", "kernel/proc/bogus-new-op", json!({}), ph).await;
+        let root = make_avix_root(&dir);
+        let resp = dispatch_request("req-1", "kernel/proc/bogus-new-op", json!({}), ph, root).await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
     }

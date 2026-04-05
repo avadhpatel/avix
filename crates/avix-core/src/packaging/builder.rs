@@ -1,8 +1,8 @@
-use std::path::{Path, PathBuf};
-use sha2::{Digest, Sha256};
-use crate::error::AvixError;
 use super::PackageType;
+use crate::error::AvixError;
 use crate::packaging::validator::PackageValidator;
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 
 pub struct BuildRequest {
     pub source_dir: PathBuf,
@@ -26,13 +26,16 @@ impl PackageBuilder {
         let pkg_type = if req.skip_validation {
             PackageType::detect(&req.source_dir)?
         } else {
-            PackageValidator::validate(&req.source_dir).map_err(|errs: Vec<crate::packaging::validator::ValidationError>| {
-                let msg = errs.iter()
-                    .map(|e| format!("  {}: {}", e.path, e.message))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                AvixError::ConfigParse(format!("validation failed:\n{msg}"))
-            })?
+            PackageValidator::validate(&req.source_dir).map_err(
+                |errs: Vec<crate::packaging::validator::ValidationError>| {
+                    let msg = errs
+                        .iter()
+                        .map(|e| format!("  {}: {}", e.path, e.message))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    AvixError::ConfigParse(format!("validation failed:\n{msg}"))
+                },
+            )?
         };
 
         let name = Self::read_name(&req.source_dir, &pkg_type)?;
@@ -52,10 +55,10 @@ impl PackageBuilder {
         std::fs::create_dir_all(&req.output_dir)
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 
-        Self::create_xz_archive(&req.source_dir, &archive_path)?;
+        Self::create_xz_archive(&req.source_dir, &archive_path, &name, &req.version)?;
 
-        let bytes = std::fs::read(&archive_path)
-            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let bytes =
+            std::fs::read(&archive_path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         let digest = hex::encode(Sha256::digest(&bytes));
         let checksum_entry = format!("{}  {}\n", digest, filename);
 
@@ -86,16 +89,24 @@ impl PackageBuilder {
         })
     }
 
-    fn create_xz_archive(source_dir: &Path, dest: &Path) -> Result<(), AvixError> {
+    fn create_xz_archive(
+        source_dir: &Path,
+        dest: &Path,
+        name: &str,
+        version: &str,
+    ) -> Result<(), AvixError> {
         let file = std::fs::File::create(dest)
             .map_err(|e| AvixError::ConfigParse(format!("create archive: {e}")))?;
         let xz = xz2::write::XzEncoder::new(file, 6);
         let mut archive = tar::Builder::new(xz);
         archive.follow_symlinks(false);
 
-        Self::add_dir_to_archive(&mut archive, source_dir, source_dir)?;
+        // Wrap contents in versioned folder: agent-name-1.0.0/manifest.yaml
+        let folder = format!("{}-{}", name, version);
+        Self::add_dir_to_archive(&mut archive, source_dir, source_dir, &folder)?;
 
-        archive.finish()
+        archive
+            .finish()
             .map_err(|e| AvixError::ConfigParse(format!("finalize archive: {e}")))?;
         Ok(())
     }
@@ -104,26 +115,32 @@ impl PackageBuilder {
         archive: &mut tar::Builder<impl std::io::Write>,
         base: &Path,
         dir: &Path,
+        folder: &str,
     ) -> Result<(), AvixError> {
-        for entry in std::fs::read_dir(dir)
-            .map_err(|e| AvixError::ConfigParse(e.to_string()))?
-        {
+        for entry in std::fs::read_dir(dir).map_err(|e| AvixError::ConfigParse(e.to_string()))? {
             let entry = entry.map_err(|e| AvixError::ConfigParse(e.to_string()))?;
             let path = entry.path();
             let rel = path.strip_prefix(base).unwrap();
 
-            let name = rel.components().next()
+            let name = rel
+                .components()
+                .next()
                 .map(|c| c.as_os_str().to_string_lossy().to_string())
                 .unwrap_or_default();
             if matches!(name.as_str(), ".git" | "target" | "Cargo.lock") {
                 continue;
             }
 
+            // Archive as folder/relative-path e.g., agent-1.0.0/manifest.yaml
+            let archive_path = PathBuf::from(format!("{}/{}", folder, rel.display()));
             if path.is_dir() {
-                Self::add_dir_to_archive(archive, base, &path)?;
+                Self::add_dir_to_archive(archive, base, &path, folder)?;
             } else {
-                archive.append_path_with_name(&path, rel)
-                    .map_err(|e| AvixError::ConfigParse(format!("add {}: {e}", rel.display())))?;
+                archive
+                    .append_path_with_name(&path, &archive_path)
+                    .map_err(|e| {
+                        AvixError::ConfigParse(format!("add {}: {e}", archive_path.display()))
+                    })?;
             }
         }
         Ok(())
@@ -136,16 +153,18 @@ impl PackageBuilder {
                     .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
                 let m: serde_yaml::Value = serde_yaml::from_str(&content)
                     .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-                m["name"].as_str()
+                m["name"]
+                    .as_str()
                     .map(|s| s.to_owned())
                     .ok_or_else(|| AvixError::ConfigParse("manifest.yaml missing name".into()))
             }
             PackageType::Service => {
                 let content = std::fs::read_to_string(dir.join("service.unit"))
                     .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-                let u: toml::Value = toml::from_str(&content)
-                    .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-                u["name"].as_str()
+                let u: toml::Value =
+                    toml::from_str(&content).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+                u["name"]
+                    .as_str()
                     .map(|s| s.to_owned())
                     .ok_or_else(|| AvixError::ConfigParse("service.unit missing name".into()))
             }
@@ -161,9 +180,13 @@ mod tests {
     #[test]
     fn build_agent_creates_tar_xz() {
         let src = TempDir::new().unwrap();
-        std::fs::write(src.path().join("manifest.yaml"), "name: test-agent\nversion: \"0.1.0\"\nsystem_prompt_path: system-prompt.md\n").unwrap();
+        std::fs::write(
+            src.path().join("manifest.yaml"),
+            "name: test-agent\nversion: \"0.1.0\"\nsystem_prompt_path: system-prompt.md\n",
+        )
+        .unwrap();
         std::fs::write(src.path().join("system-prompt.md"), "# Test\n").unwrap();
-        
+
         let out = TempDir::new().unwrap();
         let req = BuildRequest {
             source_dir: src.path().to_path_buf(),
@@ -171,11 +194,11 @@ mod tests {
             version: "v0.1.0".into(),
             skip_validation: false,
         };
-        
+
         let result = PackageBuilder::build(req).unwrap();
         assert!(result.archive_path.to_string_lossy().ends_with(".tar.xz"));
         assert!(result.archive_path.exists());
-        
+
         let bytes = std::fs::read(&result.archive_path).unwrap();
         assert!(!bytes.is_empty());
     }
@@ -187,7 +210,7 @@ mod tests {
         std::fs::write(src.path().join("service.yaml"), "name: test-svc\nversion: \"0.1.0\"\n\nunit:\n  description: \"\"\n\nservice:\n  binary: \"/bin/test-svc\"\n  language: \"rust\"\n\ntools:\n  namespace: \"/tools/test-svc/\"\n  provides: []\n").unwrap();
         std::fs::create_dir_all(src.path().join("bin")).unwrap();
         std::fs::write(src.path().join("bin/test-svc"), "").unwrap();
-        
+
         let out = TempDir::new().unwrap();
         let req = BuildRequest {
             source_dir: src.path().to_path_buf(),
@@ -195,19 +218,26 @@ mod tests {
             version: "v1.0.0".into(),
             skip_validation: true,
         };
-        
+
         let result = PackageBuilder::build(req).unwrap();
         let os = std::env::consts::OS;
         let arch = std::env::consts::ARCH;
-        assert!(result.archive_path.to_string_lossy().contains(&format!("-{}-{}.tar.xz", os, arch)));
+        assert!(result
+            .archive_path
+            .to_string_lossy()
+            .contains(&format!("-{}-{}.tar.xz", os, arch)));
     }
 
     #[test]
     fn build_writes_checksums_file() {
         let src = TempDir::new().unwrap();
-        std::fs::write(src.path().join("manifest.yaml"), "name: test\nversion: \"0.1.0\"\nsystem_prompt_path: system-prompt.md\n").unwrap();
+        std::fs::write(
+            src.path().join("manifest.yaml"),
+            "name: test\nversion: \"0.1.0\"\nsystem_prompt_path: system-prompt.md\n",
+        )
+        .unwrap();
         std::fs::write(src.path().join("system-prompt.md"), "# Test\n").unwrap();
-        
+
         let out = TempDir::new().unwrap();
         let req = BuildRequest {
             source_dir: src.path().to_path_buf(),
@@ -215,11 +245,11 @@ mod tests {
             version: "v0.1.0".into(),
             skip_validation: false,
         };
-        
+
         let _ = PackageBuilder::build(req).unwrap();
         let checksums = out.path().join("checksums.sha256");
         assert!(checksums.exists());
-        
+
         let content = std::fs::read_to_string(&checksums).unwrap();
         assert!(content.contains("test-v0.1.0.tar.xz"));
     }
@@ -227,15 +257,23 @@ mod tests {
     #[test]
     fn build_accumulates_checksums() {
         let src1 = TempDir::new().unwrap();
-        std::fs::write(src1.path().join("manifest.yaml"), "name: test1\nversion: \"0.1.0\"\nsystem_prompt_path: system-prompt.md\n").unwrap();
+        std::fs::write(
+            src1.path().join("manifest.yaml"),
+            "name: test1\nversion: \"0.1.0\"\nsystem_prompt_path: system-prompt.md\n",
+        )
+        .unwrap();
         std::fs::write(src1.path().join("system-prompt.md"), "# Test\n").unwrap();
-        
+
         let src2 = TempDir::new().unwrap();
-        std::fs::write(src2.path().join("manifest.yaml"), "name: test2\nversion: \"0.1.0\"\nsystem_prompt_path: system-prompt.md\n").unwrap();
+        std::fs::write(
+            src2.path().join("manifest.yaml"),
+            "name: test2\nversion: \"0.1.0\"\nsystem_prompt_path: system-prompt.md\n",
+        )
+        .unwrap();
         std::fs::write(src2.path().join("system-prompt.md"), "# Test\n").unwrap();
-        
+
         let out = TempDir::new().unwrap();
-        
+
         let req1 = BuildRequest {
             source_dir: src1.path().to_path_buf(),
             output_dir: out.path().to_path_buf(),
@@ -243,7 +281,7 @@ mod tests {
             skip_validation: false,
         };
         let _ = PackageBuilder::build(req1).unwrap();
-        
+
         let req2 = BuildRequest {
             source_dir: src2.path().to_path_buf(),
             output_dir: out.path().to_path_buf(),
@@ -251,7 +289,7 @@ mod tests {
             skip_validation: false,
         };
         let _ = PackageBuilder::build(req2).unwrap();
-        
+
         let checksums = out.path().join("checksums.sha256");
         let content = std::fs::read_to_string(&checksums).unwrap();
         assert!(content.contains("test1-v0.1.0.tar.xz"));
@@ -261,7 +299,7 @@ mod tests {
     #[test]
     fn build_validates_before_build() {
         let src = TempDir::new().unwrap();
-        
+
         let out = TempDir::new().unwrap();
         let req = BuildRequest {
             source_dir: src.path().to_path_buf(),
@@ -269,7 +307,7 @@ mod tests {
             version: "v0.1.0".into(),
             skip_validation: false,
         };
-        
+
         let result = PackageBuilder::build(req);
         assert!(result.is_err());
     }
@@ -277,8 +315,12 @@ mod tests {
     #[test]
     fn build_skip_validation_bypasses_check() {
         let src = TempDir::new().unwrap();
-        std::fs::write(src.path().join("manifest.yaml"), "name: test\nversion: \"0.1.0\"\n").unwrap();
-        
+        std::fs::write(
+            src.path().join("manifest.yaml"),
+            "name: test\nversion: \"0.1.0\"\n",
+        )
+        .unwrap();
+
         let out = TempDir::new().unwrap();
         let req = BuildRequest {
             source_dir: src.path().to_path_buf(),
@@ -286,7 +328,7 @@ mod tests {
             version: "v0.1.0".into(),
             skip_validation: true,
         };
-        
+
         let result = PackageBuilder::build(req);
         assert!(result.is_ok());
     }

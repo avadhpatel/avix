@@ -1,6 +1,6 @@
 # pkg-gap-F — Third-Party Trust Keyring
 
-> **Status:** Done
+> **Status:** Done (incorporated into docs/architecture/15-packaging.md)
 > **Priority:** Medium
 > **Depends on:** pkg-gap-D (GPG verification infrastructure)
 > **Blocks:** nothing

@@ -1,6 +1,6 @@
 # pkg-gap-A — Kernel Package Handlers
 
-> **Status:** Pending
+> **Status:** Done (incorporated into docs/architecture/15-packaging.md)
 > **Priority:** Critical — all other packaging gaps depend on this
 > **Depends on:** nothing (xz2 crate addition required)
 > **Blocks:** pkg-gap-B, pkg-gap-C

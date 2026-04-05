@@ -1130,6 +1130,17 @@ async fn main() -> Result<()> {
                         return Ok(());
                     }
 
+                    // Resolve local paths to absolute paths so the server can access them
+                    let source = if source.starts_with("file://") {
+                        source.clone()
+                    } else if std::path::Path::new(&source).exists() {
+                        let abs = std::fs::canonicalize(&source)
+                            .context("failed to resolve absolute path")?;
+                        format!("file://{}", abs.display())
+                    } else {
+                        source
+                    };
+
                     let body = serde_json::json!({
                         "source":     source,
                         "scope":      scope,
@@ -1383,6 +1394,17 @@ async fn main() -> Result<()> {
                         println!("Resolved source: {:?}", resolved);
                         return Ok(());
                     }
+
+                    // Resolve local paths to absolute paths so the server can access them
+                    let source = if source.starts_with("file://") {
+                        source.clone()
+                    } else if std::path::Path::new(&source).exists() {
+                        let abs = std::fs::canonicalize(&source)
+                            .context("failed to resolve absolute path")?;
+                        format!("file://{}", abs.display())
+                    } else {
+                        source
+                    };
 
                     let body = serde_json::json!({
                         "source":     source,

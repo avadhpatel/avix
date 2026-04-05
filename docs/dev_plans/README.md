@@ -10,10 +10,10 @@ Consider files in this folder temporary and can be deleted as per dev's needs.
 
 ## Active Plans
 
-### Packaging & Installation System (spec: `docs/spec/packaging-and-installation.md`)
+### Packaging & Installation System (spec: `docs/architecture/15-packaging.md`)
 
 Standardized `.tar.xz` packaging, ATP-first install flow, and user-facing CLI/TUI/Web-UI surfaces.
-Implemented in order A → E. All gaps completed.
+Implemented in order A → F. All gaps completed.
 
 | File | Status | What it builds |
 |------|--------|----------------|
@@ -24,7 +24,7 @@ Implemented in order A → E. All gaps completed.
 | `pkg-gap-E-authoring-tooling.md` | ✅ Done | `PackageValidator`, `PackageBuilder`, `PackageScaffold`, `avix package` CLI |
 | `pkg-gap-F-third-party-trust-keyring.md` | ✅ Done | TrustStore, TrustedKey, GPG verification, `avix package trust` CLI |
 
-**Status:** Complete — pkg-gaps A–F done
+**Status:** Complete — pkg-gaps A–F done, incorporated into `docs/architecture/15-packaging.md`
 
 ---
 

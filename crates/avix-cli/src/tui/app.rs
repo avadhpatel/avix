@@ -365,8 +365,19 @@ async fn dispatch_parsed_command(
                 let action_tx_c = action_tx.clone();
                 let source_c = source.clone();
                 tokio::spawn(async move {
+                    // Resolve local paths to absolute paths so the server can access them
+                    let source = if source_c.starts_with("file://") {
+                        source_c.clone()
+                    } else if std::path::Path::new(&source_c).exists() {
+                        let abs = std::fs::canonicalize(&source_c)
+                            .expect("failed to resolve absolute path");
+                        format!("file://{}", abs.display())
+                    } else {
+                        source_c.clone()
+                    };
+
                     let body = serde_json::json!({
-                        "source": source_c,
+                        "source": source,
                         "scope": "user",
                         "version": "latest",
                     });

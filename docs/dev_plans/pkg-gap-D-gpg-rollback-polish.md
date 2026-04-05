@@ -1,6 +1,6 @@
 # pkg-gap-D — GPG Signing, Rollback & Polish
 
-> **Status:** Completed
+> **Status:** Done (incorporated into docs/architecture/15-packaging.md)
 > **Priority:** Low (polish phase)
 > **Depends on:** pkg-gap-A, pkg-gap-B, pkg-gap-C
 > **Blocks:** nothing

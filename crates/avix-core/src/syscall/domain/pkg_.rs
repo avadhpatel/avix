@@ -81,7 +81,7 @@ fn parse_scope(params: &Value, username: &str) -> Result<InstallScope, SyscallEr
     }
 }
 
-pub fn install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
+pub async fn install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
     check_capability(ctx, "proc/package/install-agent")?;
     let username = "default";
     INSTALL_QUOTA.check(username)?;
@@ -116,20 +116,17 @@ pub fn install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> S
         .and_then(|v| v.as_str())
         .and_then(|s| uuid::Uuid::parse_str(s).ok());
 
-    let runtime = tokio::runtime::Handle::current();
-    let result = runtime.block_on(async {
-        let installer = AgentInstaller::new(avix_root.to_path_buf());
-        installer
-            .install(AgentInstallRequest {
-                source: source.to_owned(),
-                version,
-                scope,
-                checksum,
-                session_id,
-                no_verify,
-            })
-            .await
-    });
+    let installer = AgentInstaller::new(avix_root.to_path_buf());
+    let result = installer
+        .install(AgentInstallRequest {
+            source: source.to_owned(),
+            version,
+            scope,
+            checksum,
+            session_id,
+            no_verify,
+        })
+        .await;
 
     match result {
         Ok(r) => Ok(json!({
@@ -141,7 +138,7 @@ pub fn install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> S
     }
 }
 
-pub fn install_service(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
+pub async fn install_service(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
     check_capability(ctx, "proc/package/install-service")?;
     let username = "default";
     INSTALL_QUOTA.check(username)?;
@@ -174,30 +171,27 @@ pub fn install_service(ctx: &SyscallContext, params: Value, avix_root: &Path) ->
         .and_then(|v| v.as_str())
         .and_then(|s| uuid::Uuid::parse_str(s).ok());
 
-    let runtime = tokio::runtime::Handle::current();
-    let result = runtime.block_on(async {
-        let pkg_source = PackageSource::resolve(source, version.as_deref())
-            .await
-            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        let bytes = fetch_source_bytes(&pkg_source)
-            .await
-            .map_err(|e| AvixError::Io(e.to_string()))?;
+    let pkg_source = PackageSource::resolve(source, version.as_deref())
+        .await
+        .map_err(|e| SyscallError::Einval(e.to_string()))?;
+    let bytes = fetch_source_bytes(&pkg_source)
+        .await
+        .map_err(|e| SyscallError::Eio(e.to_string()))?;
 
-        if !no_verify {
-            if let Some(ck) = &checksum {
-                ServiceInstaller::static_verify_checksum(&bytes, ck)
-                    .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-            }
+    if !no_verify {
+        if let Some(ck) = &checksum {
+            ServiceInstaller::static_verify_checksum(&bytes, ck)
+                .map_err(|e| SyscallError::Einval(e.to_string()))?;
         }
+    }
 
-        let req = InstallRequest {
-            source: source.to_owned(),
-            checksum,
-            autostart: false,
-        };
-        let installer = ServiceInstaller::new(avix_root.to_path_buf());
-        installer.install(req).await
-    });
+    let req = InstallRequest {
+        source: source.to_owned(),
+        checksum,
+        autostart: false,
+    };
+    let installer = ServiceInstaller::new(avix_root.to_path_buf());
+    let result = installer.install(req).await;
 
     match result {
         Ok(r) => Ok(json!({
@@ -207,6 +201,16 @@ pub fn install_service(ctx: &SyscallContext, params: Value, avix_root: &Path) ->
         })),
         Err(e) => Err(SyscallError::Eio(e.to_string())),
     }
+}
+
+pub fn install_agent_sync(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
+    let rt = tokio::runtime::Handle::current();
+    rt.block_on(install_agent(ctx, params, avix_root))
+}
+
+pub fn install_service_sync(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
+    let rt = tokio::runtime::Handle::current();
+    rt.block_on(install_service(ctx, params, avix_root))
 }
 
 pub fn uninstall_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {

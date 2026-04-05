@@ -245,7 +245,7 @@ impl Runtime {
         );
         // Retain a reference so phase3 can wire in service_manager and tool_registry.
         self.proc_handler = Some(Arc::clone(&proc_handler));
-        let kernel_server = KernelIpcServer::new(self.kernel_sock.clone(), proc_handler);
+        let kernel_server = KernelIpcServer::new(self.kernel_sock.clone(), proc_handler, self.root.clone());
         kernel_server.start().await?;
         tracing::info!(sock = %self.kernel_sock.display(), "kernel IPC server started");
         Ok(())

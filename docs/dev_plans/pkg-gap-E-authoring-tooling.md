@@ -1,6 +1,6 @@
 # pkg-gap-E — Package Authoring Tooling
 
-> **Status:** Completed
+> **Status:** Done (incorporated into docs/architecture/15-packaging.md)
 > **Priority:** High — needed before any agent/service packages can be published
 > **Depends on:** nothing (pure local tooling, no ATP required)
 > **Blocks:** nothing (but pkg-gap-A install depends on well-formed packages existing)

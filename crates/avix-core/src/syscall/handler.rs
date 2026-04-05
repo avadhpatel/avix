@@ -41,10 +41,10 @@ impl SyscallHandler {
             "kernel/snap/list" => snap_::list(ctx, params),
             "kernel/snap/delete" => snap_::delete(ctx, params),
             "proc/package/install-agent" => {
-                pkg_::install_agent(ctx, params, std::path::Path::new("/tmp"))
+                pkg_::install_agent_sync(ctx, params, std::path::Path::new("/tmp"))
             }
             "proc/package/install-service" => {
-                pkg_::install_service(ctx, params, std::path::Path::new("/tmp"))
+                pkg_::install_service_sync(ctx, params, std::path::Path::new("/tmp"))
             }
             "proc/package/uninstall-agent" => {
                 pkg_::uninstall_agent(ctx, params, std::path::Path::new("/tmp"))
