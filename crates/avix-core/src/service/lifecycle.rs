@@ -500,7 +500,12 @@ mod tests {
             .unwrap();
 
         // Write a tool descriptor for the service
-        let tools_dir = dir.path().join("data").join("services").join("my-svc").join("tools");
+        let tools_dir = dir
+            .path()
+            .join("data")
+            .join("services")
+            .join("my-svc")
+            .join("tools");
         std::fs::create_dir_all(&tools_dir).unwrap();
         std::fs::write(
             tools_dir.join("echo.tool.yaml"),

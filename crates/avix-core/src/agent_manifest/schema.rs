@@ -353,7 +353,10 @@ spec:
         assert_eq!(m.spec.entrypoint.entrypoint_type, EntrypointType::LlmLoop);
         assert_eq!(m.spec.entrypoint.max_tool_chain, 5);
         assert_eq!(m.spec.entrypoint.max_turns_per_goal, 20);
-        assert_eq!(m.spec.system_prompt_path.as_deref(), Some("system-prompt.md"));
+        assert_eq!(
+            m.spec.system_prompt_path.as_deref(),
+            Some("system-prompt.md")
+        );
     }
 
     // T-MGA-02
@@ -375,10 +378,7 @@ spec:
         assert!(reparsed.spec.snapshot.restore_on_crash);
         assert_eq!(reparsed.spec.visibility.as_deref(), Some("public"));
         assert_eq!(reparsed.spec.scope.as_deref(), Some("system"));
-        assert_eq!(
-            reparsed.spec.requested_capabilities,
-            vec!["fs:*", "web:*"]
-        );
+        assert_eq!(reparsed.spec.requested_capabilities, vec!["fs:*", "web:*"]);
         assert_eq!(
             reparsed.packaging.source.as_deref(),
             Some("github:avix/agents")

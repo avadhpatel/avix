@@ -89,8 +89,10 @@ impl AgentInstaller {
                 let extractor = ServiceInstaller::new(self.root.clone());
                 extractor.extract_tarball(&bytes, tmp.path())?;
 
-                let content = std::fs::read_to_string(&tmp.path().join("manifest.yaml"))
-                    .map_err(|e| AvixError::ConfigParse(format!("cannot read manifest.yaml: {e}")))?;
+                let content =
+                    std::fs::read_to_string(tmp.path().join("manifest.yaml")).map_err(|e| {
+                        AvixError::ConfigParse(format!("cannot read manifest.yaml: {e}"))
+                    })?;
                 let manifest = AgentManifest::from_yaml(&content)?;
                 (Some(tmp), manifest)
             }

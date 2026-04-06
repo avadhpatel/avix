@@ -80,17 +80,20 @@ pub struct SessionRecord {
     pub username: String,
     pub spawned_at: DateTime<Utc>,
     pub last_updated: DateTime<Utc>,
-    pub status: SessionStatus,         // Running | Idle | Completed | Failed | Archived
+    pub status: SessionStatus,        // Running | Idle | Paused | Completed | Failed | Archived
     pub summary: Option<String>,      // high-level summary (updated on Idle)
     pub tokens_total: u64,
     pub origin_agent: String,         // agent_name that started the session
-    pub primary_agent: String,       // agent_name currently in control
+    pub primary_agent: String,        // agent_name currently in control
     pub participants: Vec<String>,    // all agent_names involved
+    pub owner_pid: u32,               // PID that created the session — required, always non-zero
+    pub pids: Vec<u32>,               // all currently active PIDs in this session
 }
 
 pub enum SessionStatus {
     Running,
     Idle,        // waiting for input
+    Paused,      // all invocations suspended; can be resumed via kernel/proc/session/resume
     Completed,
     Failed,
     Archived,
@@ -161,7 +164,8 @@ pub struct InvocationRecord {
 
 pub enum InvocationStatus {
     Running,
-    Idle,        // NEW — waiting for input (agent can be resumed)
+    Idle,        // waiting for input (agent can be resumed)
+    Paused,      // suspended by SIGPAUSE — HIL wait or manual pause; non-terminal
     Completed,
     Failed,
     Killed,
@@ -182,13 +186,19 @@ From `Idle`, a new invocation can be spawned in the same session (continuation) 
 ### Lifecycle
 
 ```
-ProcHandler::spawn(name, goal, session_id?)
-  1. If session_id provided → attach to existing session (add participant)
-  2. If no session_id → create new session (origin = name, primary = name)
-  3. Generate invocation_id = Uuid::new_v4()
-  4. store.create(&InvocationRecord { status: Running, session_id, ... })
-  5. active_invocations.insert(pid, invocation_id)
-  6. Pass invocation_id in SpawnParams → RuntimeExecutor
+ProcHandler::spawn(name, goal, session_id?, parent_pid?)
+  1. Allocate PID (must happen first — used as owner_pid at session creation)
+  2. Session resolution:
+     - If parent_pid provided → inherit parent's session (attach as participant; add_pid(pid))
+     - Else if session_id provided → attach to that session (add_pid(pid))
+     - Else → create new session via SessionRecord::new(..., owner_pid=pid)
+               SessionRecord::new() initialises pids: vec![owner_pid] automatically
+  3. active_sessions.insert(pid, session_id)
+  4. Generate invocation_id = Uuid::new_v4()
+  5. store.create(&InvocationRecord { status: Running, session_id, ... })
+  6. active_invocations.insert(pid, invocation_id)
+  7. Set ProcessEntry.parent = parent_pid.map(Pid::new)
+  8. Pass invocation_id in SpawnParams → RuntimeExecutor
 
 RuntimeExecutor::shutdown_with_status(status, exit_reason)
   1. Deregister Category 2 tools
@@ -203,7 +213,44 @@ RuntimeExecutor::shutdown_with_status(status, exit_reason)
 
 ProcHandler::abort_agent(pid)
   → finalize_invocation(pid, Killed, "killed")
+  → finalize_session_for_pid(pid, Killed)
+
+ProcHandler::finalize_session_for_pid(pid, status)
+  → session.remove_pid(pid)
+  → If pid == session.owner_pid:
+      Completed → session.mark_completed()
+      Failed | Killed → session.mark_failed()
+  → session_store.update(session)
+
+ProcHandler::pause_agent(pid)
+  → process_table.set_status(pid, Paused)
+  → invocation_store.update_status(inv_id, Paused)
+  → SignalDelivery.deliver(SIGPAUSE, pid)
+  → If pid == session.owner_pid:
+      broadcast SIGPAUSE to all other session PIDs
+      update each sibling invocation to Paused
+      session.mark_paused()
+      session_store.update(session)
+
+ProcHandler::resume_agent(pid)
+  → process_table.set_status(pid, Running)
+  → invocation_store.update_status(inv_id, Running)
+  → SignalDelivery.deliver(SIGRESUME, pid)
+  → If session.status == Paused:
+      broadcast SIGRESUME to all other session PIDs
+      update each sibling invocation to Running
+      session.mark_running()
+      session_store.update(session)
 ```
+
+### Session pause / resume via IPC
+
+| IPC method | Behavior |
+|---|---|
+| `kernel/proc/pause` (pid) | `pause_agent(pid)` — cascades to whole session if pid is owner |
+| `kernel/proc/resume` (pid) | `resume_agent(pid)` — cascades to whole session if session is Paused |
+| `kernel/proc/session/pause` | Calls `pause_agent(session.owner_pid)` — full cascade guaranteed |
+| `kernel/proc/session/resume` | If session is Paused + has active PIDs → SIGRESUME all PIDs; else spawn new invocation |
 
 ---
 
@@ -217,11 +264,13 @@ ProcHandler::abort_agent(pid)
 | `proc/invocation-list` | `kernel/proc/invocation-list` | `{ "username": "alice", "agent_name": "researcher" }` |
 | `proc/invocation-get` | `kernel/proc/invocation-get` | `{ "id": "<uuid>" }` |
 
-### Session ops (Phase 1)
+### Session ops
+
+Sessions are **created exclusively by the kernel** during `kernel/proc/spawn` — there is no
+create endpoint. External callers can only observe and resume sessions.
 
 | ATP op | IPC method | Body |
 |--------|------------|------|
-| `proc/session-create` | `kernel/proc/session/create` | `{ "title": "...", "goal": "...", "origin_agent": "..." }` |
 | `proc/session-list` | `kernel/proc/session/list` | `{ "username": "alice" }` |
 | `proc/session-get` | `kernel/proc/session/get` | `{ "id": "<uuid>" }` |
 | `proc/session-resume` | `kernel/proc/session/resume` | `{ "session_id": "<uuid>", "input": "..." }` |
@@ -238,8 +287,6 @@ All ops forward via `ipc_forward()` in the gateway proc handler.
 pub async fn list_installed(dispatcher, username) -> Result<Vec<Value>>
 pub async fn list_invocations(dispatcher, username, agent_name: Option<&str>) -> Result<Vec<Value>>
 pub async fn get_invocation(dispatcher, invocation_id) -> Result<Option<Value>>
-// NEW
-pub async fn create_session(dispatcher, title, goal, origin_agent) -> Result<SessionRecord>
 pub async fn list_sessions(dispatcher, username) -> Result<Vec<SessionRecord>>
 pub async fn get_session(dispatcher, session_id) -> Result<Option<SessionRecord>>
 pub async fn resume_session(dispatcher, session_id, input) -> Result<InvocationRecord>
@@ -255,12 +302,14 @@ avix agent catalog [--username alice]
 avix agent history [--agent researcher] [--username alice]
 avix agent show <invocation-id>
 
-# Session commands (NEW)
-avix session create --title "Fix bug 123" --goal "Debug and fix the login crash"
+# Session commands
 avix session list [--username alice] [--status idle|running|completed]
 avix session show <session-id>
 avix session resume <session-id> --input "Continue from where we left off"
 ```
+
+Sessions cannot be created directly from the CLI — they are created automatically by the kernel
+when an agent is spawned without a `parent_pid`.
 
 Output formats:
 - Default: human-readable table / YAML
@@ -303,9 +352,10 @@ Output formats:
 ## Invariants
 
 - **Session ↔ Invocation**: Every invocation belongs to exactly one session (`session_id` is required).
+- **Session creation is kernel-only**: Sessions are created during `ProcHandler::spawn()`. There is no IPC or ATP endpoint to create a session. `owner_pid` is always a valid non-zero PID — it is set from the newly-allocated PID at session construction and is immutable thereafter.
 - **Idle state**: An `Idle` invocation can be resumed; a `Completed`/`Failed`/`Killed` invocation cannot.
 - **Multi-agent tracking**: `origin_agent` never changes; `primary_agent` tracks current focus.
 - Invocation records survive daemon restart (redb is disk-backed).
 - `/users/<username>/agents/` and `/users/<username>/sessions/` are written by the kernel via `LocalProvider` directly — they do not go through the VFS ACL layer (kernel is trusted).
 - A `Killed` status is always written when `abort_agent()` is called, even if the executor already exited.
-- Backward compatibility: spawning without `session_id` auto-creates a new session (origin = agent name).
+- Spawning without `session_id` or `parent_pid` auto-creates a new session (origin = agent name).

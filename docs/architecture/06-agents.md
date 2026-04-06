@@ -40,6 +40,22 @@ An agent is spawned via the `kernel/proc/spawn` syscall. The kernel:
 5. **Writes `/proc/<pid>/resolved.yaml` to VFS**
 6. Sends `SIGSTART` to the agent
 
+**Session resolution** (in `ProcHandler::spawn`):
+
+The PID is **allocated before session resolution** so it can be recorded as `owner_pid` at
+session creation time.
+
+| Spawn params | Behavior |
+|---|---|
+| `parent_pid = Some(ppid)` | Inherit `ppid`'s session (child added as participant); `entry.parent` is set |
+| `parent_pid = None`, `session_id` non-empty | Attach to the provided session |
+| `parent_pid = None`, `session_id` empty | Create a new session with the newly-allocated PID as `owner_pid` |
+
+`SessionRecord::new()` initialises `pids: vec![owner_pid]`, so the owner PID is already in the
+active set when the session is first persisted. When `owner_pid` exits, the session transitions
+to `Completed` or `Failed` accordingly. Sessions are **only created by the kernel** — there is
+no IPC or ATP endpoint to create a session directly.
+
 ### `/proc/<pid>/status.yaml`
 
 Serialized `AgentStatus`. Written at spawn and updated on every lifecycle event.
@@ -78,8 +94,8 @@ status:
     wallTimeSec: 330
 ```
 
-**Process states:** `pending` (allocated, not yet started) | `running` | `paused` (SIGPAUSE received)
-| `waiting` (blocked on pipe or signal) | `stopped` (SIGKILL received) | `crashed` (runtime error)
+**Process states:** `pending` (allocated, not yet started) | `running` | `paused` (SIGPAUSE received;
+invocation transitions to `Paused`) | `waiting` (blocked on pipe or signal) | `stopped` (SIGKILL received) | `crashed` (runtime error)
 
 ### `/proc/<pid>/resolved.yaml`
 
@@ -513,6 +529,7 @@ Every `kernel/proc/spawn` creates a persistent `InvocationRecord` that survives 
 kernel/proc/spawn
   → InvocationRecord { status: Running } written to InvocationStore
   → invocation_id threaded through SpawnParams → RuntimeExecutor
+  → PID registered in SessionRecord.pids
 
 RuntimeExecutor::shutdown_with_status(status, exit_reason)
   → conversation flushed to JSONL
@@ -520,7 +537,28 @@ RuntimeExecutor::shutdown_with_status(status, exit_reason)
 
 kernel/proc/kill (abort_agent)
   → InvocationRecord finalized with status: Killed
+  → ProcHandler::finalize_session_for_pid removes PID from session
+  → If PID == session.owner_pid: session transitions to Completed/Failed
+
+SIGPAUSE received by RuntimeExecutor
+  → InvocationRecord status updated to Paused (non-terminal)
+  → If PID == session.owner_pid: all other session PIDs also paused, session marked Paused
+
+SIGRESUME received by RuntimeExecutor
+  → InvocationRecord status updated back to Running
+  → If session was Paused: all PIDs resumed, session marked Running
 ```
+
+**`InvocationStatus` states:**
+
+| Status | Terminal | Description |
+|--------|----------|-------------|
+| `Running` | No | Agent is executing |
+| `Idle` | No | Waiting for input (can resume) |
+| `Paused` | No | Suspended by SIGPAUSE — HIL wait or manual pause |
+| `Completed` | Yes | Task finished successfully |
+| `Failed` | Yes | Agent encountered an error |
+| `Killed` | Yes | Forcibly terminated via SIGKILL |
 
 Disk artefacts (written by kernel via `LocalProvider` to `AVIX_ROOT/users/`):
 

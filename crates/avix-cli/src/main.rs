@@ -673,33 +673,6 @@ mod tests {
     // ── Session command tests ──────────────────────────────────────────────────
 
     #[test]
-    fn session_create_parses() {
-        let cli = Cli::try_parse_from([
-            "avix",
-            "client",
-            "session",
-            "create",
-            "--title",
-            "My Session",
-            "--goal",
-            "Do something",
-        ])
-        .unwrap();
-        match cli.command {
-            Cmd::Client {
-                sub:
-                    ClientCmd::Session {
-                        sub: SessionCmd::Create { title, goal, .. },
-                    },
-            } => {
-                assert_eq!(title, "My Session");
-                assert_eq!(goal, "Do something");
-            }
-            _ => panic!("wrong variant"),
-        }
-    }
-
-    #[test]
     fn session_list_parses() {
         let cli = Cli::try_parse_from(["avix", "client", "session", "list"]).unwrap();
         assert!(matches!(

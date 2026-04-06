@@ -91,8 +91,12 @@ async fn dispatch_request(
             let goal = params["goal"].as_str().unwrap_or("");
             let session_id = params["session_id"].as_str().unwrap_or("unknown");
             let caller = params["caller"].as_str().unwrap_or("gateway");
+            let parent_pid = params["parent_pid"].as_u64().map(|v| v as u32);
 
-            match proc_handler.spawn(name, goal, session_id, caller).await {
+            match proc_handler
+                .spawn(name, goal, session_id, caller, parent_pid)
+                .await
+            {
                 Ok(pid) => {
                     info!(pid, name, "agent spawned via IPC");
                     JsonRpcResponse::ok(id, json!({ "pid": pid, "status": "running" }))
@@ -139,24 +143,14 @@ async fn dispatch_request(
                     kill_proc(id, pid_val, proc_handler.process_table()).await
                 }
                 "kernel/proc/stat" => stat_proc(id, pid_val, proc_handler.process_table()).await,
-                "kernel/proc/pause" => {
-                    set_status(
-                        id,
-                        pid_val,
-                        ProcessStatus::Paused,
-                        proc_handler.process_table(),
-                    )
-                    .await
-                }
-                "kernel/proc/resume" => {
-                    set_status(
-                        id,
-                        pid_val,
-                        ProcessStatus::Running,
-                        proc_handler.process_table(),
-                    )
-                    .await
-                }
+                "kernel/proc/pause" => match proc_handler.pause_agent(pid_val).await {
+                    Ok(()) => JsonRpcResponse::ok(id, json!({ "ok": true })),
+                    Err(e) => JsonRpcResponse::err(id, -32000, &e.to_string(), None),
+                },
+                "kernel/proc/resume" => match proc_handler.resume_agent(pid_val).await {
+                    Ok(()) => JsonRpcResponse::ok(id, json!({ "ok": true })),
+                    Err(e) => JsonRpcResponse::err(id, -32000, &e.to_string(), None),
+                },
                 // wait and setcap are stubs for now
                 _ => JsonRpcResponse::ok(id, json!({ "ok": true })),
             }
@@ -330,25 +324,6 @@ async fn dispatch_request(
         }
 
         // Session operations
-        "kernel/proc/session/create" => {
-            let username = params["username"].as_str().unwrap_or("");
-            let origin_agent = params["origin_agent"].as_str().unwrap_or("agent");
-            let title = params["title"].as_str().unwrap_or("New Session");
-            let goal = params["goal"].as_str().unwrap_or("");
-            match proc_handler
-                .create_session(username, origin_agent, title, goal)
-                .await
-            {
-                Ok(record) => {
-                    JsonRpcResponse::ok(id, json!({ "session_id": record.id.to_string() }))
-                }
-                Err(e) => {
-                    warn!(error = %e, "kernel/proc/session/create failed");
-                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
-                }
-            }
-        }
-
         "kernel/proc/session/list" => {
             let username = params["username"].as_str().unwrap_or("");
             match proc_handler.list_sessions(username).await {
@@ -381,6 +356,40 @@ async fn dispatch_request(
             }
         }
 
+        "kernel/proc/session/pause" => {
+            let session_id = params["session_id"].as_str().unwrap_or("");
+            let uuid = match uuid::Uuid::parse_str(session_id) {
+                Ok(u) => u,
+                Err(_) => return JsonRpcResponse::err(id, -32002, "invalid session ID", None),
+            };
+            match proc_handler.get_session(&uuid).await {
+                Ok(Some(session)) if session.owner_pid != 0 => {
+                    // Pause via the session owner — this cascades to all other PIDs automatically.
+                    match proc_handler.pause_agent(session.owner_pid).await {
+                        Ok(()) => JsonRpcResponse::ok(id, json!({ "ok": true })),
+                        Err(e) => {
+                            warn!(error = %e, "kernel/proc/session/pause failed");
+                            JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                        }
+                    }
+                }
+                Ok(Some(_)) => {
+                    // Session has no owner PID (no active agents).
+                    JsonRpcResponse::err(id, -32001, "session has no active owner pid", None)
+                }
+                Ok(None) => JsonRpcResponse::err(
+                    id,
+                    -32003,
+                    &format!("session {session_id} not found"),
+                    None,
+                ),
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/session/pause failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+
         "kernel/proc/session/resume" => {
             let session_id = params["session_id"].as_str().unwrap_or("");
             let input = params["input"].as_str();
@@ -388,11 +397,28 @@ async fn dispatch_request(
                 Ok(u) => u,
                 Err(_) => return JsonRpcResponse::err(id, -32002, "invalid session ID", None),
             };
-            match proc_handler.resume_session(&uuid, input).await {
-                Ok(pid) => JsonRpcResponse::ok(id, json!({ "pid": pid })),
-                Err(e) => {
-                    warn!(error = %e, "kernel/proc/session/resume failed");
-                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+            // If the session is Paused with active PIDs, send SIGRESUME to all PIDs rather
+            // than spawning a new invocation.
+            match proc_handler.get_session(&uuid).await {
+                Ok(Some(session))
+                    if matches!(session.status, crate::session::SessionStatus::Paused)
+                        && !session.pids.is_empty() =>
+                {
+                    let pids = session.pids.clone();
+                    for pid in pids {
+                        let _ = proc_handler.resume_agent(pid).await;
+                    }
+                    JsonRpcResponse::ok(id, json!({ "ok": true }))
+                }
+                _ => {
+                    // Idle/Running session — spawn a new invocation (existing path).
+                    match proc_handler.resume_session(&uuid, input).await {
+                        Ok(pid) => JsonRpcResponse::ok(id, json!({ "pid": pid })),
+                        Err(e) => {
+                            warn!(error = %e, "kernel/proc/session/resume failed");
+                            JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                        }
+                    }
                 }
             }
         }
@@ -540,18 +566,6 @@ async fn stat_proc(id: &str, pid: u32, table: &Arc<ProcessTable>) -> JsonRpcResp
             )
         }
         None => JsonRpcResponse::err(id, -32003, &format!("pid {pid} not found"), None),
-    }
-}
-
-async fn set_status(
-    id: &str,
-    pid: u32,
-    status: ProcessStatus,
-    table: &Arc<ProcessTable>,
-) -> JsonRpcResponse {
-    match table.set_status(Pid::new(pid), status).await {
-        Ok(_) => JsonRpcResponse::ok(id, json!({ "ok": true })),
-        Err(e) => JsonRpcResponse::err(id, -32003, &e.to_string(), None),
     }
 }
 

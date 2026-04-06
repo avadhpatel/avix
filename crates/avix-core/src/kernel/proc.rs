@@ -18,8 +18,9 @@ use crate::process::entry::{ProcessEntry, ProcessKind, ProcessStatus};
 use crate::process::table::ProcessTable;
 use crate::service::lifecycle::ServiceManager;
 use crate::service::ServiceSummary;
-use crate::session::PersistentSessionStore;
 use crate::session::SessionRecord;
+use crate::session::{PersistentSessionStore, SessionStatus};
+use crate::signal::{Signal, SignalDelivery, SignalKind};
 use crate::tool_registry::{ToolRegistry, ToolSummary};
 use crate::trace::Tracer;
 use crate::types::token::{CapabilityToken, IssuedTo};
@@ -89,6 +90,8 @@ pub struct ProcHandler {
     manifest_scanner: Option<Arc<ManifestScanner>>,
     /// Maps running PID → invocation UUID, for finalization on kill.
     active_invocations: Arc<Mutex<HashMap<u32, String>>>,
+    /// Maps running PID → session UUID string, for session lookup on pause/finalize.
+    active_sessions: Arc<Mutex<HashMap<u32, String>>>,
     /// Service manager — set in phase3 after services start.
     service_manager: Arc<Mutex<Option<Arc<ServiceManager>>>>,
     /// Tool registry — set in phase3 after services start.
@@ -119,6 +122,7 @@ impl ProcHandler {
             session_store: None,
             manifest_scanner: None,
             active_invocations: Arc::new(Mutex::new(HashMap::new())),
+            active_sessions: Arc::new(Mutex::new(HashMap::new())),
             service_manager: Arc::new(Mutex::new(None)),
             tool_registry: Arc::new(Mutex::new(None)),
             tracer: Tracer::noop(),
@@ -146,6 +150,7 @@ impl ProcHandler {
             session_store: None,
             manifest_scanner: None,
             active_invocations: Arc::new(Mutex::new(HashMap::new())),
+            active_sessions: Arc::new(Mutex::new(HashMap::new())),
             service_manager: Arc::new(Mutex::new(None)),
             tool_registry: Arc::new(Mutex::new(None)),
             tracer: Tracer::noop(),
@@ -263,6 +268,8 @@ impl ProcHandler {
     }
 
     /// Finalize the invocation record for a PID (called on kill or normal exit).
+    /// Also removes the PID from the session and transitions session status if the
+    /// owner PID is the one exiting.
     async fn finalize_invocation(
         &self,
         pid: u32,
@@ -275,11 +282,18 @@ impl ProcHandler {
         };
         let inv_id = match inv_id {
             Some(id) => id,
-            None => return,
+            None => {
+                // Still clean up session tracking even without an invocation record.
+                self.finalize_session_for_pid(pid, &status).await;
+                return;
+            }
         };
         let store = match &self.invocation_store {
             Some(s) => s,
-            None => return,
+            None => {
+                self.finalize_session_for_pid(pid, &status).await;
+                return;
+            }
         };
         // Read final metrics from the process table (best-effort).
         let (tokens, tool_calls) = match self.process_table.get(Pid::new(pid)).await {
@@ -289,62 +303,93 @@ impl ProcHandler {
         let _ = store
             .finalize(
                 &inv_id,
-                status,
+                status.clone(),
                 chrono::Utc::now(),
                 tokens,
                 tool_calls,
                 exit_reason,
             )
             .await;
+        self.finalize_session_for_pid(pid, &status).await;
+    }
+
+    /// Remove `pid` from its session's active PID set. If the pid is the session
+    /// owner, transition the session to a terminal state based on the invocation status.
+    pub async fn finalize_session_for_pid(&self, pid: u32, status: &InvocationStatus) {
+        let session_id_str = self.active_sessions.lock().await.remove(&pid);
+        let sid = match session_id_str {
+            Some(s) => s,
+            None => return,
+        };
+        let sstore = match &self.session_store {
+            Some(s) => s,
+            None => return,
+        };
+        let uuid = match Uuid::parse_str(&sid) {
+            Ok(u) => u,
+            Err(_) => return,
+        };
+        if let Ok(Some(mut session)) = sstore.get(&uuid).await {
+            session.remove_pid(pid);
+            if pid == session.owner_pid {
+                match status {
+                    InvocationStatus::Completed => session.mark_completed(),
+                    InvocationStatus::Failed | InvocationStatus::Killed => session.mark_failed(),
+                    _ => {} // Idle/Paused/Running do not finalize the session
+                }
+            }
+            let _ = sstore.update(&session).await;
+        }
     }
 
     /// Spawn a new agent: allocate PID, mint CapToken, write /proc/ files, persist to agents.yaml, fork/exec RuntimeExecutor.
     /// Returns the allocated PID.
-    /// Links: docs/dev_plans/PROJECT-SPAWN-001-dev-plan.md#detailed-implementation-guidance
+    ///
+    /// If `parent_pid` is `Some`, the new agent inherits the parent's session. Otherwise
+    /// a new session is created (or the provided `session_id` is used).
+    /// Links: docs/architecture/06-agents.md, docs/architecture/14-agent-persistence.md
     pub async fn spawn(
         &self,
         name: &str,
         goal: &str,
         session_id: &str,
         caller_identity: &str,
+        parent_pid: Option<u32>,
     ) -> Result<u32, AvixError> {
-        info!(name, goal, session_id, "spawning agent");
+        info!(name, goal, session_id, ?parent_pid, "spawning agent");
 
-        // Resolve session: attach to existing OR create new
-        let effective_session_id = if session_id.is_empty() {
-            if let Some(store) = &self.session_store {
-                let record = SessionRecord::new(
-                    Uuid::new_v4(),
-                    caller_identity.to_string(),
-                    name.to_string(),
-                    name.to_string(),
-                    goal.to_string(),
-                );
-                if let Err(e) = store.create(&record).await {
-                    warn!(error = %e, "failed to create session record");
-                }
-                info!(session_id = %record.id, "created new session");
-                record.id.to_string()
-            } else {
-                Uuid::new_v4().to_string()
-            }
-        } else {
-            // Session ID provided - attach to existing session
-            if let Some(store) = &self.session_store {
-                if let Ok(Some(mut session)) = store.get(&Uuid::parse_str(session_id)?).await {
-                    session.add_participant(name, true);
-                    if let Err(e) = store.update(&session).await {
-                        warn!(error = %e, "failed to update session with participant");
-                    }
-                    info!(session_id = %session.id, participant = name, "added participant to session");
-                }
-            }
-            session_id.to_string()
-        };
-
-        // Allocate PID (simple increment for now)
+        // Allocate PID first so it can be recorded as session owner_pid.
         let pid = self.allocate_pid().await?;
         info!(pid, "allocated PID");
+
+        // Resolve session: inherit from parent, attach to existing, or create new.
+        let effective_session_id = if let Some(ppid) = parent_pid {
+            // Try to inherit the parent's session.
+            let inherited = self.active_sessions.lock().await.get(&ppid).cloned();
+            if let Some(sid) = inherited {
+                // Attach new agent as participant in the inherited session.
+                if let Some(store) = &self.session_store {
+                    if let Ok(Some(mut session)) = store.get(&Uuid::parse_str(&sid)?).await {
+                        session.add_participant(name, true);
+                        if let Err(e) = store.update(&session).await {
+                            warn!(error = %e, "failed to update session with child participant");
+                        }
+                    }
+                }
+                info!(session_id = %sid, parent_pid = ppid, "child agent inheriting parent session");
+                sid
+            } else {
+                warn!(
+                    parent_pid = ppid,
+                    "parent pid not found in active_sessions; creating new session"
+                );
+                self.resolve_session_from_id(name, goal, session_id, caller_identity, pid)
+                    .await?
+            }
+        } else {
+            self.resolve_session_from_id(name, goal, session_id, caller_identity, pid)
+                .await?
+        };
 
         // Create process entry
         let entry = ProcessEntry {
@@ -352,8 +397,8 @@ impl ProcHandler {
             name: name.to_string(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Pending,
-            parent: None,                          // kernel spawn
-            spawned_by_user: "kernel".to_string(), // TODO: get from context
+            parent: parent_pid.map(Pid::new),
+            spawned_by_user: caller_identity.to_string(),
             goal: goal.to_string(),
             spawned_at: chrono::Utc::now(),
             ..Default::default()
@@ -369,6 +414,22 @@ impl ProcHandler {
 
         // Write /proc/<pid>/status.yaml and resolved.yaml
         // TODO: Implement init_proc_files here
+
+        // Register PID in the session's active PID list.
+        if let Some(store) = &self.session_store {
+            if let Ok(uuid) = Uuid::parse_str(&effective_session_id) {
+                if let Ok(Some(mut session)) = store.get(&uuid).await {
+                    session.add_pid(pid);
+                    if let Err(e) = store.update(&session).await {
+                        warn!(pid, error = %e, "failed to add pid to session");
+                    }
+                }
+            }
+        }
+        self.active_sessions
+            .lock()
+            .await
+            .insert(pid, effective_session_id.clone());
 
         // Create invocation record (before minting token / launching executor)
         let invocation_id = Uuid::new_v4().to_string();
@@ -514,7 +575,14 @@ impl ProcHandler {
         } else {
             Ok(records
                 .into_iter()
-                .filter(|r| !matches!(r.status, InvocationStatus::Running | InvocationStatus::Idle))
+                .filter(|r| {
+                    !matches!(
+                        r.status,
+                        InvocationStatus::Running
+                            | InvocationStatus::Idle
+                            | InvocationStatus::Paused
+                    )
+                })
                 .collect())
         }
     }
@@ -553,7 +621,7 @@ impl ProcHandler {
 
         if !matches!(
             record.status,
-            InvocationStatus::Running | InvocationStatus::Idle
+            InvocationStatus::Running | InvocationStatus::Idle | InvocationStatus::Paused
         ) {
             return Err(AvixError::InvalidInput(
                 "cannot snapshot a finalized invocation".into(),
@@ -623,12 +691,16 @@ impl ProcHandler {
     // ── Session operations ─────────────────────────────────────────────────────
 
     /// Create a new session.
+    ///
+    /// `owner_pid` must be a valid PID. Pass the PID that will own this session;
+    /// if the session is pre-created before any spawn, use the PID that will be spawned into it.
     pub async fn create_session(
         &self,
         username: &str,
         origin_agent: &str,
         title: &str,
         goal: &str,
+        owner_pid: u32,
     ) -> Result<SessionRecord, AvixError> {
         let store = match &self.session_store {
             Some(s) => s,
@@ -640,6 +712,7 @@ impl ProcHandler {
             origin_agent.to_string(),
             title.to_string(),
             goal.to_string(),
+            owner_pid,
         );
         store.create(&record).await?;
         info!(session_id = %record.id, "created session");
@@ -678,11 +751,13 @@ impl ProcHandler {
             .await?
             .ok_or_else(|| AvixError::NotFound(format!("session {} not found", session_id)))?;
 
-        // Only allow resuming Idle or Running sessions
-        use crate::session::SessionStatus;
-        if !matches!(session.status, SessionStatus::Idle | SessionStatus::Running) {
+        // Only allow resuming Idle, Running, or Paused sessions
+        if !matches!(
+            session.status,
+            SessionStatus::Idle | SessionStatus::Running | SessionStatus::Paused
+        ) {
             return Err(AvixError::InvalidInput(format!(
-                "session {} is not Idle or Running (status: {:?})",
+                "session {} is not Idle, Running, or Paused (status: {:?})",
                 session_id, session.status
             )));
         }
@@ -699,11 +774,198 @@ impl ProcHandler {
                 &goal,
                 &session_id.to_string(),
                 &session.username,
+                None,
             )
             .await?;
 
         info!(session_id = %session_id, pid, "resumed session");
         Ok(pid)
+    }
+
+    /// Resolve a session for spawn when there is no `parent_pid`.
+    /// - If `session_id` is non-empty → attach to that session.
+    /// - Otherwise → create a new session with `owner_pid` set to the spawning PID.
+    async fn resolve_session_from_id(
+        &self,
+        name: &str,
+        goal: &str,
+        session_id: &str,
+        caller_identity: &str,
+        owner_pid: u32,
+    ) -> Result<String, AvixError> {
+        if session_id.is_empty() {
+            if let Some(store) = &self.session_store {
+                let record = SessionRecord::new(
+                    Uuid::new_v4(),
+                    caller_identity.to_string(),
+                    name.to_string(),
+                    name.to_string(),
+                    goal.to_string(),
+                    owner_pid,
+                );
+                if let Err(e) = store.create(&record).await {
+                    warn!(error = %e, "failed to create session record");
+                }
+                info!(session_id = %record.id, owner_pid, "created new session");
+                Ok(record.id.to_string())
+            } else {
+                Ok(Uuid::new_v4().to_string())
+            }
+        } else {
+            // Attach to existing session.
+            if let Some(store) = &self.session_store {
+                if let Ok(Some(mut session)) = store.get(&Uuid::parse_str(session_id)?).await {
+                    session.add_participant(name, true);
+                    if let Err(e) = store.update(&session).await {
+                        warn!(error = %e, "failed to update session with participant");
+                    }
+                    info!(session_id = %session.id, participant = name, "added participant to session");
+                }
+            }
+            Ok(session_id.to_string())
+        }
+    }
+
+    /// Pause a running agent: update process table, mark invocation `Paused`,
+    /// deliver SIGPAUSE, and — if this is the session owner — cascade to all
+    /// other PIDs in the session and mark the session `Paused`.
+    pub async fn pause_agent(&self, pid: u32) -> Result<(), AvixError> {
+        // 1. Process table → Paused.
+        let _ = self
+            .process_table
+            .set_status(Pid::new(pid), ProcessStatus::Paused)
+            .await;
+
+        // 2. Invocation → Paused (look up inv_id first, drop lock before session work).
+        let inv_id = self.active_invocations.lock().await.get(&pid).cloned();
+        if let (Some(id), Some(istore)) = (inv_id, &self.invocation_store) {
+            let _ = istore.update_status(&id, InvocationStatus::Paused).await;
+        }
+
+        // 3. Deliver SIGPAUSE to the agent socket.
+        let delivery = SignalDelivery::new(self.runtime_dir.clone());
+        let signal = Signal {
+            target: Pid::new(pid),
+            kind: SignalKind::Pause,
+            payload: serde_json::Value::Null,
+        };
+        // Best-effort: socket may not exist if agent hasn't started yet.
+        let _ = delivery.deliver(signal).await;
+
+        // 4. Check if this is the session owner → cascade to all other PIDs.
+        let session_id_str = self.active_sessions.lock().await.get(&pid).cloned();
+        if let (Some(sid), Some(sstore)) = (session_id_str, &self.session_store) {
+            if let Ok(uuid) = Uuid::parse_str(&sid) {
+                if let Ok(Some(mut session)) = sstore.get(&uuid).await {
+                    if pid == session.owner_pid {
+                        // Collect other PIDs before any async work (avoid holding lock).
+                        let other_pids: Vec<Pid> = session
+                            .pids
+                            .iter()
+                            .filter(|&&p| p != pid)
+                            .map(|&p| Pid::new(p))
+                            .collect();
+                        // Broadcast SIGPAUSE to all sibling PIDs concurrently.
+                        if !other_pids.is_empty() {
+                            delivery
+                                .broadcast(&other_pids, SignalKind::Pause, serde_json::Value::Null)
+                                .await;
+                            // Update process table and invocations for each cascaded PID.
+                            for &sibling in &other_pids {
+                                let _ = self
+                                    .process_table
+                                    .set_status(sibling, ProcessStatus::Paused)
+                                    .await;
+                                let sibling_inv = self
+                                    .active_invocations
+                                    .lock()
+                                    .await
+                                    .get(&sibling.as_u32())
+                                    .cloned();
+                                if let (Some(iid), Some(istore)) =
+                                    (sibling_inv, &self.invocation_store)
+                                {
+                                    let _ =
+                                        istore.update_status(&iid, InvocationStatus::Paused).await;
+                                }
+                            }
+                        }
+                        session.mark_paused();
+                        let _ = sstore.update(&session).await;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Resume a paused agent: update process table, mark invocation `Running`,
+    /// deliver SIGRESUME, and — if the session is `Paused` — cascade to all
+    /// other PIDs and mark the session `Running`.
+    pub async fn resume_agent(&self, pid: u32) -> Result<(), AvixError> {
+        // 1. Process table → Running.
+        let _ = self
+            .process_table
+            .set_status(Pid::new(pid), ProcessStatus::Running)
+            .await;
+
+        // 2. Invocation → Running.
+        let inv_id = self.active_invocations.lock().await.get(&pid).cloned();
+        if let (Some(id), Some(istore)) = (inv_id, &self.invocation_store) {
+            let _ = istore.update_status(&id, InvocationStatus::Running).await;
+        }
+
+        // 3. Deliver SIGRESUME.
+        let delivery = SignalDelivery::new(self.runtime_dir.clone());
+        let signal = Signal {
+            target: Pid::new(pid),
+            kind: SignalKind::Resume,
+            payload: serde_json::Value::Null,
+        };
+        let _ = delivery.deliver(signal).await;
+
+        // 4. If session is Paused, cascade SIGRESUME to all other PIDs and mark Running.
+        let session_id_str = self.active_sessions.lock().await.get(&pid).cloned();
+        if let (Some(sid), Some(sstore)) = (session_id_str, &self.session_store) {
+            if let Ok(uuid) = Uuid::parse_str(&sid) {
+                if let Ok(Some(mut session)) = sstore.get(&uuid).await {
+                    if matches!(session.status, SessionStatus::Paused) {
+                        let other_pids: Vec<Pid> = session
+                            .pids
+                            .iter()
+                            .filter(|&&p| p != pid)
+                            .map(|&p| Pid::new(p))
+                            .collect();
+                        if !other_pids.is_empty() {
+                            delivery
+                                .broadcast(&other_pids, SignalKind::Resume, serde_json::Value::Null)
+                                .await;
+                            for &sibling in &other_pids {
+                                let _ = self
+                                    .process_table
+                                    .set_status(sibling, ProcessStatus::Running)
+                                    .await;
+                                let sibling_inv = self
+                                    .active_invocations
+                                    .lock()
+                                    .await
+                                    .get(&sibling.as_u32())
+                                    .cloned();
+                                if let (Some(iid), Some(istore)) =
+                                    (sibling_inv, &self.invocation_store)
+                                {
+                                    let _ =
+                                        istore.update_status(&iid, InvocationStatus::Running).await;
+                                }
+                            }
+                        }
+                        session.mark_running();
+                        let _ = sstore.update(&session).await;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Allocate a new unique PID.
@@ -817,11 +1079,11 @@ mod tests {
         );
 
         let pid1 = handler
-            .spawn("agent-a", "goal-a", "sess-1", "kernel")
+            .spawn("agent-a", "goal-a", "sess-1", "kernel", None)
             .await
             .unwrap();
         let pid2 = handler
-            .spawn("agent-b", "goal-b", "sess-1", "kernel")
+            .spawn("agent-b", "goal-b", "sess-1", "kernel", None)
             .await
             .unwrap();
 
@@ -861,7 +1123,7 @@ mod tests {
         let handler = ProcHandler::new(table.clone(), dir.path().join("agents.yaml"), master_key);
 
         let pid = handler
-            .spawn("agent", "goal", "sess", "kernel")
+            .spawn("agent", "goal", "sess", "kernel", None)
             .await
             .unwrap();
         let entry = table.get(Pid::new(pid)).await.unwrap();
@@ -879,7 +1141,7 @@ mod tests {
         let handler = ProcHandler::new(table.clone(), yaml_path.clone(), master_key);
 
         let pid = handler
-            .spawn("test_agent", "test_goal", "sess-1", "kernel")
+            .spawn("test_agent", "test_goal", "sess-1", "kernel", None)
             .await
             .unwrap();
 
@@ -909,11 +1171,11 @@ mod tests {
 
         // Spawn two agents
         let pid1 = handler
-            .spawn("agent1", "goal1", "sess-1", "kernel")
+            .spawn("agent1", "goal1", "sess-1", "kernel", None)
             .await
             .unwrap();
         let pid2 = handler
-            .spawn("agent2", "goal2", "sess-1", "kernel")
+            .spawn("agent2", "goal2", "sess-1", "kernel", None)
             .await
             .unwrap();
 
@@ -940,7 +1202,7 @@ mod tests {
         let handler = ProcHandler::new(table, yaml_path.clone(), master_key);
 
         let pid = handler
-            .spawn("test", "goal", "sess", "kernel")
+            .spawn("test", "goal", "sess", "kernel", None)
             .await
             .unwrap();
         assert_eq!(handler.load_agents_yaml().await.unwrap().agents.len(), 1);
@@ -1039,5 +1301,250 @@ mod tests {
         assert_eq!(response.unavailable, 1);
         assert_eq!(response.tools.len(), 1);
         assert_eq!(response.tools[0].name, "test/tool");
+    }
+
+    // ── Session / parent_pid tests ────────────────────────────────────────────
+
+    async fn make_handler_with_stores(
+        dir: &TempDir,
+    ) -> (
+        ProcHandler,
+        Arc<PersistentSessionStore>,
+        Arc<InvocationStore>,
+    ) {
+        let yaml_path = dir.path().join("agents.yaml");
+        let table = Arc::new(ProcessTable::new());
+        let master_key = b"test-master-key-32-bytes-padded!".to_vec();
+        let sstore = Arc::new(
+            PersistentSessionStore::open(dir.path().join("sessions.redb"))
+                .await
+                .unwrap(),
+        );
+        let istore = Arc::new(
+            InvocationStore::open(dir.path().join("inv.redb"))
+                .await
+                .unwrap(),
+        );
+        let handler = ProcHandler::new(table, yaml_path, master_key)
+            .with_session_store(Arc::clone(&sstore))
+            .with_invocation_store(Arc::clone(&istore));
+        (handler, sstore, istore)
+    }
+
+    #[tokio::test]
+    async fn spawn_without_parent_pid_creates_new_session() {
+        let dir = TempDir::new().unwrap();
+        let (handler, sstore, _) = make_handler_with_stores(&dir).await;
+
+        let pid = handler
+            .spawn("agent-a", "goal", "", "alice", None)
+            .await
+            .unwrap();
+
+        // Session should be created and PID registered in it.
+        let sessions = sstore.list_for_user("alice").await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].pids.contains(&pid));
+        assert_eq!(sessions[0].owner_pid, pid);
+    }
+
+    #[tokio::test]
+    async fn spawn_with_parent_pid_inherits_session() {
+        let dir = TempDir::new().unwrap();
+        let (handler, sstore, _) = make_handler_with_stores(&dir).await;
+
+        // Spawn parent — creates new session.
+        let parent_pid = handler
+            .spawn("parent-agent", "parent goal", "", "alice", None)
+            .await
+            .unwrap();
+        let sessions = sstore.list_for_user("alice").await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        let parent_session_id = sessions[0].id;
+
+        // Spawn child with parent_pid — should inherit parent session.
+        let child_pid = handler
+            .spawn("child-agent", "child goal", "", "alice", Some(parent_pid))
+            .await
+            .unwrap();
+
+        let session = sstore.get(&parent_session_id).await.unwrap().unwrap();
+        assert!(session.pids.contains(&parent_pid));
+        assert!(session.pids.contains(&child_pid));
+        // Only one session should exist.
+        assert_eq!(sstore.list_for_user("alice").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn finalize_invocation_removes_pid_from_session() {
+        let dir = TempDir::new().unwrap();
+        let (handler, sstore, _) = make_handler_with_stores(&dir).await;
+
+        let pid = handler
+            .spawn("agent", "goal", "", "alice", None)
+            .await
+            .unwrap();
+        let sessions = sstore.list_for_user("alice").await.unwrap();
+        let session_id = sessions[0].id;
+
+        // Verify pid is in session before finalization.
+        let session = sstore.get(&session_id).await.unwrap().unwrap();
+        assert!(session.pids.contains(&pid));
+
+        // Finalize (simulate kill).
+        handler.abort_agent(pid).await;
+
+        // PID should be removed from session.
+        let session = sstore.get(&session_id).await.unwrap().unwrap();
+        assert!(!session.pids.contains(&pid));
+    }
+
+    #[tokio::test]
+    async fn finalize_invocation_marks_session_completed_on_owner_exit() {
+        let dir = TempDir::new().unwrap();
+        let (handler, sstore, istore) = make_handler_with_stores(&dir).await;
+
+        let pid = handler
+            .spawn("agent", "goal", "", "alice", None)
+            .await
+            .unwrap();
+        let sessions = sstore.list_for_user("alice").await.unwrap();
+        let session_id = sessions[0].id;
+
+        // Finalize as Completed (simulate normal exit).
+        let inv_id = handler
+            .active_invocations
+            .lock()
+            .await
+            .get(&pid)
+            .cloned()
+            .unwrap();
+        let _ = istore
+            .finalize(
+                &inv_id,
+                InvocationStatus::Completed,
+                chrono::Utc::now(),
+                0,
+                0,
+                None,
+            )
+            .await;
+        handler
+            .finalize_session_for_pid(pid, &InvocationStatus::Completed)
+            .await;
+
+        let session = sstore.get(&session_id).await.unwrap().unwrap();
+        assert_eq!(session.status, crate::session::SessionStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn finalize_invocation_marks_session_failed_on_owner_kill() {
+        let dir = TempDir::new().unwrap();
+        let (handler, sstore, _) = make_handler_with_stores(&dir).await;
+
+        let pid = handler
+            .spawn("agent", "goal", "", "alice", None)
+            .await
+            .unwrap();
+        let sessions = sstore.list_for_user("alice").await.unwrap();
+        let session_id = sessions[0].id;
+
+        // abort_agent calls finalize_invocation with Killed.
+        handler.abort_agent(pid).await;
+
+        let session = sstore.get(&session_id).await.unwrap().unwrap();
+        assert_eq!(session.status, crate::session::SessionStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn finalize_invocation_does_not_transition_session_on_non_owner_exit() {
+        let dir = TempDir::new().unwrap();
+        let (handler, sstore, _) = make_handler_with_stores(&dir).await;
+
+        // Spawn owner.
+        let owner_pid = handler
+            .spawn("owner", "goal", "", "alice", None)
+            .await
+            .unwrap();
+        let sessions = sstore.list_for_user("alice").await.unwrap();
+        let session_id = sessions[0].id;
+
+        // Spawn child in same session.
+        let child_pid = handler
+            .spawn("child", "subgoal", "", "alice", Some(owner_pid))
+            .await
+            .unwrap();
+
+        // Child completes — session should still be Running (owner hasn't exited).
+        handler
+            .finalize_session_for_pid(child_pid, &InvocationStatus::Completed)
+            .await;
+
+        let session = sstore.get(&session_id).await.unwrap().unwrap();
+        assert_eq!(session.status, crate::session::SessionStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn list_invocations_excludes_paused_when_live_false() {
+        let dir = TempDir::new().unwrap();
+        let (handler, _, istore) = make_handler_with_stores(&dir).await;
+
+        let pid = handler
+            .spawn("agent", "goal", "", "alice", None)
+            .await
+            .unwrap();
+        let inv_id = handler
+            .active_invocations
+            .lock()
+            .await
+            .get(&pid)
+            .cloned()
+            .unwrap();
+
+        // Mark invocation as Paused.
+        istore
+            .update_status(&inv_id, InvocationStatus::Paused)
+            .await
+            .unwrap();
+
+        // live=false should exclude Paused.
+        let records = handler
+            .list_invocations("alice", None, false)
+            .await
+            .unwrap();
+        assert!(records.is_empty());
+
+        // live=true should include Paused.
+        let records = handler.list_invocations("alice", None, true).await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, InvocationStatus::Paused);
+    }
+
+    #[tokio::test]
+    async fn snapshot_invocation_allows_paused() {
+        let dir = TempDir::new().unwrap();
+        let (handler, _, istore) = make_handler_with_stores(&dir).await;
+
+        let pid = handler
+            .spawn("agent", "goal", "", "alice", None)
+            .await
+            .unwrap();
+        let inv_id = handler
+            .active_invocations
+            .lock()
+            .await
+            .get(&pid)
+            .cloned()
+            .unwrap();
+
+        // Mark as Paused.
+        istore
+            .update_status(&inv_id, InvocationStatus::Paused)
+            .await
+            .unwrap();
+
+        // snapshot_invocation should succeed for Paused.
+        let result = handler.snapshot_invocation(&inv_id).await;
+        assert!(result.is_ok());
     }
 }

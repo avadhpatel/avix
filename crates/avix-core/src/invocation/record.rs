@@ -9,6 +9,8 @@ pub enum InvocationStatus {
     #[default]
     Running,
     Idle,
+    /// Non-terminal — HIL wait or manual pause via SIGPAUSE. Can be resumed.
+    Paused,
     Completed,
     Failed,
     Killed,
@@ -131,5 +133,26 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         let r2: InvocationRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(r2.status, InvocationStatus::Idle);
+    }
+
+    #[test]
+    fn paused_status_serialises_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&InvocationStatus::Paused)
+                .unwrap()
+                .trim(),
+            "\"paused\""
+        );
+    }
+
+    #[test]
+    fn paused_roundtrip_json() {
+        let r = InvocationRecord {
+            status: InvocationStatus::Paused,
+            ..make_record()
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let r2: InvocationRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(r2.status, InvocationStatus::Paused);
     }
 }

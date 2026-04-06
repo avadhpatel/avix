@@ -10,6 +10,8 @@ pub enum SessionStatus {
     #[default]
     Running,
     Idle,
+    /// Non-terminal — all invocations in this session are paused. Can be resumed.
+    Paused,
     Completed,
     Failed,
     Archived,
@@ -34,6 +36,11 @@ pub struct SessionRecord {
     pub origin_agent: String,
     pub primary_agent: String,
     pub participants: Vec<String>,
+    /// PID that created this session. Always set to a valid (non-zero) PID at creation.
+    pub owner_pid: u32,
+    /// All currently active PIDs contributing to this session.
+    #[serde(default)]
+    pub pids: Vec<u32>,
 }
 
 impl SessionRecord {
@@ -43,6 +50,7 @@ impl SessionRecord {
         origin_agent: String,
         title: String,
         goal: String,
+        owner_pid: u32,
     ) -> Self {
         let now = Utc::now();
         Self {
@@ -60,6 +68,8 @@ impl SessionRecord {
             origin_agent: origin_agent.clone(),
             primary_agent: origin_agent,
             participants: vec![],
+            owner_pid,
+            pids: vec![owner_pid],
         }
     }
 
@@ -80,6 +90,26 @@ impl SessionRecord {
 
     pub fn mark_failed(&mut self) {
         self.status = SessionStatus::Failed;
+        self.last_updated = Utc::now();
+    }
+
+    pub fn mark_paused(&mut self) {
+        self.status = SessionStatus::Paused;
+        self.last_updated = Utc::now();
+    }
+
+    /// Register an additional PID as active in this session (e.g. a child agent).
+    /// `owner_pid` is immutable after construction.
+    pub fn add_pid(&mut self, pid: u32) {
+        if !self.pids.contains(&pid) {
+            self.pids.push(pid);
+        }
+        self.last_updated = Utc::now();
+    }
+
+    /// Remove a PID from the active set (called on agent exit).
+    pub fn remove_pid(&mut self, pid: u32) {
+        self.pids.retain(|&p| p != pid);
         self.last_updated = Utc::now();
     }
 
@@ -120,6 +150,7 @@ mod tests {
             "researcher".to_string(),
             "Research Q4".to_string(),
             "Analyze market trends".to_string(),
+            42,
         )
     }
 
@@ -130,6 +161,8 @@ mod tests {
         assert!(r.participants.is_empty());
         assert_eq!(r.origin_agent, "researcher");
         assert_eq!(r.primary_agent, "researcher");
+        assert_eq!(r.owner_pid, 42);
+        assert_eq!(r.pids, vec![42]);
     }
 
     #[test]
@@ -190,6 +223,7 @@ mod tests {
         for (status, expected) in [
             (SessionStatus::Running, "running"),
             (SessionStatus::Idle, "idle"),
+            (SessionStatus::Paused, "paused"),
             (SessionStatus::Completed, "completed"),
             (SessionStatus::Failed, "failed"),
             (SessionStatus::Archived, "archived"),
@@ -209,5 +243,59 @@ mod tests {
         assert_eq!(r2.username, r.username);
         assert_eq!(r2.origin_agent, r.origin_agent);
         assert_eq!(r2.status, r.status);
+    }
+
+    #[test]
+    fn new_initialises_owner_pid_and_pids() {
+        let r = SessionRecord::new(
+            Uuid::new_v4(),
+            "alice".to_string(),
+            "agent".to_string(),
+            "title".to_string(),
+            "goal".to_string(),
+            7,
+        );
+        assert_eq!(r.owner_pid, 7);
+        assert_eq!(r.pids, vec![7]);
+    }
+
+    #[test]
+    fn add_pid_appends_child_pid_without_changing_owner() {
+        let mut r = make_record(); // owner_pid = 42
+        r.add_pid(99);
+        assert_eq!(r.owner_pid, 42);
+        assert_eq!(r.pids, vec![42, 99]);
+    }
+
+    #[test]
+    fn add_pid_avoids_duplicates() {
+        let mut r = make_record();
+        r.add_pid(42); // already in pids from new()
+        assert_eq!(r.pids.len(), 1);
+    }
+
+    #[test]
+    fn remove_pid_removes_correctly() {
+        let mut r = make_record(); // owner_pid = 42, pids = [42]
+        r.add_pid(99);
+        r.remove_pid(99);
+        assert_eq!(r.pids, vec![42]);
+        assert_eq!(r.owner_pid, 42); // owner_pid is immutable
+    }
+
+    #[test]
+    fn mark_paused_sets_status() {
+        let mut r = make_record();
+        r.mark_paused();
+        assert_eq!(r.status, SessionStatus::Paused);
+    }
+
+    #[test]
+    fn owner_pid_required_in_serialised_form() {
+        // ownerPid must be present in the JSON output.
+        let r = make_record();
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains("\"ownerPid\":42"));
+        assert!(json.contains("\"pids\":[42]"));
     }
 }

@@ -481,12 +481,34 @@ impl RuntimeExecutor {
             }
             "SIGPAUSE" => {
                 self.paused.store(true, Ordering::Release);
+                // Update invocation record to Paused so it's reflected in persistence.
+                if let (Some(store), false) =
+                    (&self.invocation_store, self.invocation_id.is_empty())
+                {
+                    let _ = store
+                        .update_status(
+                            &self.invocation_id,
+                            crate::invocation::InvocationStatus::Paused,
+                        )
+                        .await;
+                }
                 if let Some(vfs) = &self.vfs {
                     self.write_status_yaml(vfs).await;
                 }
             }
             "SIGRESUME" => {
                 self.paused.store(false, Ordering::Release);
+                // Restore invocation to Running on resume.
+                if let (Some(store), false) =
+                    (&self.invocation_store, self.invocation_id.is_empty())
+                {
+                    let _ = store
+                        .update_status(
+                            &self.invocation_id,
+                            crate::invocation::InvocationStatus::Running,
+                        )
+                        .await;
+                }
                 if let Some(vfs) = &self.vfs {
                     self.write_status_yaml(vfs).await;
                 }
@@ -2714,5 +2736,79 @@ mod tests {
             .join("kernel/agents/test-agent/invocations/inv-rex-24/conversation.jsonl");
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         assert_eq!(content.lines().count(), 3);
+    }
+
+    // T-REX-30: SIGPAUSE updates invocation store to Paused
+    #[tokio::test]
+    async fn sigpause_updates_invocation_store_to_paused() {
+        use crate::invocation::{InvocationRecord, InvocationStatus, InvocationStore};
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let store = Arc::new(
+            InvocationStore::open(dir.path().join("inv.redb"))
+                .await
+                .unwrap(),
+        );
+        let record = InvocationRecord::new(
+            "inv-rex-30".into(),
+            "test-agent".into(),
+            "kernel".into(),
+            230,
+            "goal".into(),
+            "sess-1".into(),
+        );
+        store.create(&record).await.unwrap();
+
+        let mut executor = make_executor(230, &[]).await;
+        executor.invocation_store = Some(Arc::clone(&store));
+        executor.invocation_id = "inv-rex-30".into();
+
+        executor.deliver_signal("SIGPAUSE").await;
+
+        let loaded = store.get("inv-rex-30").await.unwrap().unwrap();
+        assert_eq!(loaded.status, InvocationStatus::Paused);
+    }
+
+    // T-REX-31: SIGRESUME updates invocation store back to Running
+    #[tokio::test]
+    async fn sigresume_updates_invocation_store_to_running() {
+        use crate::invocation::{InvocationRecord, InvocationStatus, InvocationStore};
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let store = Arc::new(
+            InvocationStore::open(dir.path().join("inv.redb"))
+                .await
+                .unwrap(),
+        );
+        let record = InvocationRecord::new(
+            "inv-rex-31".into(),
+            "test-agent".into(),
+            "kernel".into(),
+            231,
+            "goal".into(),
+            "sess-1".into(),
+        );
+        store.create(&record).await.unwrap();
+
+        let mut executor = make_executor(231, &[]).await;
+        executor.invocation_store = Some(Arc::clone(&store));
+        executor.invocation_id = "inv-rex-31".into();
+
+        // Pause first, then resume.
+        executor.deliver_signal("SIGPAUSE").await;
+        executor.deliver_signal("SIGRESUME").await;
+
+        let loaded = store.get("inv-rex-31").await.unwrap().unwrap();
+        assert_eq!(loaded.status, InvocationStatus::Running);
+    }
+
+    // T-REX-32: SIGPAUSE without invocation store does not panic
+    #[tokio::test]
+    async fn sigpause_without_invocation_store_does_not_panic() {
+        let executor = make_executor(232, &[]).await;
+        // No invocation_store set — should not panic.
+        executor.deliver_signal("SIGPAUSE").await;
     }
 }

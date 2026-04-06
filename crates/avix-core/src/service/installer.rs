@@ -389,7 +389,13 @@ mod tests {
     fn check_conflicts_errors_if_already_installed() {
         let dir = TempDir::new().unwrap();
         let installer = ServiceInstaller::new(dir.path().to_path_buf());
-        std::fs::create_dir_all(dir.path().join("data").join("services").join("echo-svc@1.0.0")).unwrap();
+        std::fs::create_dir_all(
+            dir.path()
+                .join("data")
+                .join("services")
+                .join("echo-svc@1.0.0"),
+        )
+        .unwrap();
         let unit = make_test_unit("echo-svc");
         assert!(installer.check_conflicts(&unit).is_err());
     }
@@ -422,8 +428,14 @@ mod tests {
 
         assert_eq!(result.name, "test-svc");
         assert_eq!(result.version, "1.0.0");
-        assert!(root.path().join("data/services/test-svc@1.0.0/manifest.yaml").exists());
-        assert!(root.path().join("data/services/test-svc@1.0.0/.install.json").exists());
+        assert!(root
+            .path()
+            .join("data/services/test-svc@1.0.0/manifest.yaml")
+            .exists());
+        assert!(root
+            .path()
+            .join("data/services/test-svc@1.0.0/.install.json")
+            .exists());
     }
 
     #[tokio::test]
@@ -446,7 +458,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.name, "cs-svc");
-        assert!(root.path().join("data/services/cs-svc@2.0.0/.install.json").exists());
+        assert!(root
+            .path()
+            .join("data/services/cs-svc@2.0.0/.install.json")
+            .exists());
     }
 
     #[tokio::test]

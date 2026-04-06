@@ -7,18 +7,6 @@ use crate::util::{connect_config, emit};
 
 #[derive(Subcommand)]
 pub enum SessionCmd {
-    /// Create a new session
-    Create {
-        /// Session title
-        #[arg(long)]
-        title: String,
-        /// Session goal
-        #[arg(long)]
-        goal: String,
-        /// Username (defaults to current user)
-        #[arg(long)]
-        username: Option<String>,
-    },
     /// List sessions for a user
     List {
         /// Username to query (defaults to current user)
@@ -45,43 +33,6 @@ pub enum SessionCmd {
 
 pub async fn run(sub: SessionCmd, json: bool) -> Result<()> {
     match sub {
-        SessionCmd::Create {
-            title,
-            goal,
-            username,
-        } => {
-            let dispatcher = connect_config(None, None).await?;
-            let username = username.as_deref().unwrap_or("");
-            let reply = dispatcher
-                .call(&AtpCmd_::new(
-                    "proc",
-                    "session-create",
-                    "",
-                    serde_json::json!({
-                        "username": username,
-                        "title": title,
-                        "goal": goal,
-                    }),
-                ))
-                .await?;
-            if !reply.ok {
-                anyhow::bail!(reply
-                    .message
-                    .unwrap_or_else(|| "create session failed".into()));
-            }
-            let body = reply.body.unwrap_or(serde_json::json!({}));
-            emit(
-                json,
-                |b: &&serde_json::Value| {
-                    format!(
-                        "Created session: {}",
-                        b["session_id"].as_str().unwrap_or("unknown")
-                    )
-                },
-                &body,
-            );
-        }
-
         SessionCmd::List { username, status } => {
             let dispatcher = connect_config(None, None).await?;
             let username = username.as_deref().unwrap_or("");

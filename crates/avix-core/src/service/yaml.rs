@@ -20,9 +20,8 @@ pub struct ServiceManifest {
 
 impl ServiceManifest {
     pub fn load(path: &Path) -> Result<Self, AvixError> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            AvixError::ConfigParse(format!("cannot read {}: {e}", path.display()))
-        })?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| AvixError::ConfigParse(format!("cannot read {}: {e}", path.display())))?;
         serde_yaml::from_str(&content)
             .map_err(|e| AvixError::ConfigParse(format!("manifest.yaml parse error: {e}")))
     }
@@ -274,7 +273,6 @@ pub struct ToolsSection {
     pub provides: Vec<String>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct JobsSection {
@@ -445,9 +443,17 @@ spec:
     #[test]
     fn load_for_service_constructs_correct_path() {
         let dir = TempDir::new().unwrap();
-        let svc_dir = dir.path().join("data").join("services").join("my-svc@1.0.0");
+        let svc_dir = dir
+            .path()
+            .join("data")
+            .join("services")
+            .join("my-svc@1.0.0");
         std::fs::create_dir_all(&svc_dir).unwrap();
-        std::fs::write(svc_dir.join("manifest.yaml"), MINIMAL_MANIFEST.replace("github-svc", "my-svc")).unwrap();
+        std::fs::write(
+            svc_dir.join("manifest.yaml"),
+            MINIMAL_MANIFEST.replace("github-svc", "my-svc"),
+        )
+        .unwrap();
         let unit = ServiceUnit::load_for_service(dir.path(), "my-svc").unwrap();
         assert_eq!(unit.name, "my-svc");
     }

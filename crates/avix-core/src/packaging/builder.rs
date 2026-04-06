@@ -149,8 +149,8 @@ impl PackageBuilder {
     fn read_name(dir: &Path, _pkg_type: &PackageType) -> Result<String, AvixError> {
         let content = std::fs::read_to_string(dir.join("manifest.yaml"))
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        let m: serde_yaml::Value = serde_yaml::from_str(&content)
-            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let m: serde_yaml::Value =
+            serde_yaml::from_str(&content).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         m["metadata"]["name"]
             .as_str()
             .map(|s| s.to_owned())

@@ -224,6 +224,7 @@ mod tests {
             "researcher".to_string(),
             "Test Session".to_string(),
             "Analyze data".to_string(),
+            1,
         );
         store.create(&record).await.unwrap();
         let loaded = store.get(&record.id).await.unwrap();
@@ -247,6 +248,7 @@ mod tests {
             "researcher".to_string(),
             "Test Session".to_string(),
             "Analyze data".to_string(),
+            1,
         );
         store.create(&record).await.unwrap();
 
@@ -269,6 +271,7 @@ mod tests {
             "a1".to_string(),
             "s1".to_string(),
             "g1".to_string(),
+            2,
         );
         let r2 = SessionRecord::new(
             Uuid::new_v4(),
@@ -276,6 +279,7 @@ mod tests {
             "a2".to_string(),
             "s2".to_string(),
             "g2".to_string(),
+            3,
         );
         let r3 = SessionRecord::new(
             Uuid::new_v4(),
@@ -283,6 +287,7 @@ mod tests {
             "b1".to_string(),
             "s3".to_string(),
             "g3".to_string(),
+            4,
         );
 
         store.create(&r1).await.unwrap();
@@ -306,6 +311,7 @@ mod tests {
             "a1".to_string(),
             "s1".to_string(),
             "g1".to_string(),
+            5,
         );
         store.create(&record).await.unwrap();
 
