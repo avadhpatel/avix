@@ -140,7 +140,7 @@ impl ManifestScanner {
                     continue;
                 }
             };
-            if manifest.kind != "AgentManifest" {
+            if manifest.kind != "Agent" {
                 warn!(path = %manifest_path, kind = %manifest.kind, "unexpected manifest kind, skipping");
                 continue;
             }
@@ -165,7 +165,7 @@ mod tests {
 
     const MANIFEST_YAML: &str = r#"
 apiVersion: avix/v1
-kind: AgentManifest
+kind: Agent
 metadata:
   name: researcher
   version: 1.0.0
@@ -180,7 +180,7 @@ spec:
 
     const CODER_YAML: &str = r#"
 apiVersion: avix/v1
-kind: AgentManifest
+kind: Agent
 metadata:
   name: coder
   version: 2.0.0
