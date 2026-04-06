@@ -7,6 +7,7 @@ use crate::executor::runtime_executor::MockToolRegistry;
 use crate::executor::runtime_executor::RuntimeExecutor;
 use crate::executor::spawn::SpawnParams;
 use crate::gateway::event_bus::AtpEventBus;
+use crate::invocation::InvocationStatus;
 use crate::llm_client::IpcLlmClient;
 use crate::process::entry::ProcessStatus;
 use crate::process::table::ProcessTable;
@@ -93,15 +94,26 @@ impl AgentExecutorFactory for IpcExecutorFactory {
 
             match executor.run_with_client(&goal, &llm_client).await {
                 Ok(result) => {
-                    info!(pid = pid.as_u32(), "executor finished");
-                    tracer.agent_exit(pid.as_u32(), "completed", None);
+                    info!(pid = pid.as_u32(), "executor turn finished; transitioning to waiting");
+                    // Mark invocation Idle and session Idle — agent is waiting for next message.
+                    executor
+                        .shutdown_with_status(
+                            InvocationStatus::Idle,
+                            Some("waiting_for_input".into()),
+                        )
+                        .await;
                     event_bus.agent_output(&session_id, pid.as_u32(), &result.text);
-                    event_bus.agent_status(&session_id, pid.as_u32(), "stopped");
-                    event_bus.agent_exit(&session_id, pid.as_u32(), 0);
-                    let _ = process_table.set_status(pid, ProcessStatus::Stopped).await;
+                    event_bus.agent_status(&session_id, pid.as_u32(), "waiting");
+                    let _ = process_table.set_status(pid, ProcessStatus::Waiting).await;
                 }
                 Err(err) => {
                     warn!(pid = pid.as_u32(), error = %err, "executor crashed");
+                    executor
+                        .shutdown_with_status(
+                            InvocationStatus::Failed,
+                            Some(err.to_string()),
+                        )
+                        .await;
                     tracer.agent_exit(pid.as_u32(), "crashed", Some(&err.to_string()));
                     event_bus.agent_status(&session_id, pid.as_u32(), "crashed");
                     event_bus.agent_exit(&session_id, pid.as_u32(), 1);
