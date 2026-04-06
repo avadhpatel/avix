@@ -132,10 +132,11 @@ async fn handle_send(id: String, body: serde_json::Value, ctx: &HandlerCtx) -> A
             return AtpReply::err(id, AtpError::new(AtpErrorCode::Eparse, e));
         }
 
+        let pid_val = if body["pid"].is_number() { &body["pid"] } else { &body["target"] };
         let params = match serde_json::to_value(&pipe_payload) {
             Ok(pv) => json!({
                 "signal": "SIGPIPE",
-                "target": body["target"],
+                "pid": pid_val,
                 "payload": pv,
             }),
             Err(e) => {
