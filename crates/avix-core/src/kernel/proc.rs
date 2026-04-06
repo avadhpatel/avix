@@ -263,6 +263,10 @@ impl ProcHandler {
             );
         }
         drop(handles);
+        let _ = self
+            .process_table
+            .set_status(Pid::new(pid), ProcessStatus::Stopped)
+            .await;
         self.finalize_invocation(pid, InvocationStatus::Killed, Some("killed".into()))
             .await;
     }
