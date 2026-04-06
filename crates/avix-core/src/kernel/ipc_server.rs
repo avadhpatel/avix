@@ -524,6 +524,26 @@ async fn dispatch_request(
             JsonRpcResponse::ok(id, serde_json::json!(response))
         }
 
+        "kernel/signal/send" => {
+            // Accept both "pid" (client field) and "target" (internal field).
+            let pid_val = params["pid"]
+                .as_u64()
+                .or_else(|| params["target"].as_u64())
+                .unwrap_or(0) as u32;
+            let signal = params["signal"].as_str().unwrap_or("").to_string();
+            let payload = params["payload"].clone();
+            if pid_val == 0 || signal.is_empty() {
+                return JsonRpcResponse::err(id, -32602, "missing pid or signal", None);
+            }
+            match proc_handler.send_signal(pid_val, &signal, payload).await {
+                Ok(()) => JsonRpcResponse::ok(id, json!({ "ok": true })),
+                Err(e) => {
+                    warn!(pid = pid_val, signal, error = %e, "kernel/signal/send failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+
         other => {
             warn!(method = other, "kernel IPC: unknown method");
             JsonRpcResponse::err(id, -32601, &format!("unknown kernel method: {other}"), None)

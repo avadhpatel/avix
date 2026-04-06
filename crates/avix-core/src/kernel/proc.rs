@@ -968,6 +968,45 @@ impl ProcHandler {
         Ok(())
     }
 
+    /// Deliver an arbitrary signal to a PID.
+    ///
+    /// SIGPAUSE and SIGRESUME are routed through `pause_agent` / `resume_agent` so that
+    /// process-table, invocation-store, and session-cascade side-effects are applied.
+    /// All other signals are delivered directly via `SignalDelivery`.
+    pub async fn send_signal(
+        &self,
+        pid: u32,
+        signal: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), AvixError> {
+        match signal {
+            "SIGPAUSE" => return self.pause_agent(pid).await,
+            "SIGRESUME" => return self.resume_agent(pid).await,
+            _ => {}
+        }
+        let kind = match signal {
+            "SIGSTART" => SignalKind::Start,
+            "SIGKILL" => SignalKind::Kill,
+            "SIGSTOP" => SignalKind::Stop,
+            "SIGSAVE" => SignalKind::Save,
+            "SIGPIPE" => SignalKind::Pipe,
+            "SIGESCALATE" => SignalKind::Escalate,
+            other => {
+                return Err(AvixError::ConfigParse(format!(
+                    "unknown signal: {other}"
+                )))
+            }
+        };
+        let delivery = SignalDelivery::new(self.runtime_dir.clone());
+        let sig = Signal {
+            target: Pid::new(pid),
+            kind,
+            payload,
+        };
+        let _ = delivery.deliver(sig).await;
+        Ok(())
+    }
+
     /// Allocate a new unique PID.
     /// PID 1 is reserved for the kernel agent; user agents start from 2.
     async fn allocate_pid(&self) -> Result<u32, AvixError> {
