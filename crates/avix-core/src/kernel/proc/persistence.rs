@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::error::AvixError;
 
-use super::types::{AgentRecord, AgentsYaml};
+use super::types::AgentsYaml;
 
 pub async fn load_agents_yaml(path: &PathBuf) -> Result<AgentsYaml, AvixError> {
     if !path.exists() {

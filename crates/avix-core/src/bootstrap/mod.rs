@@ -234,7 +234,7 @@ impl Runtime {
                 .await
                 .map_err(|e| AvixError::ConfigParse(format!("open invocation store: {e}")))?
                 .with_local(crate::memfs::local_provider::LocalProvider::new(
-                    &self.root.join("data/users"),
+                    self.root.join("data/users"),
                 )?),
         );
         let session_store = Arc::new(

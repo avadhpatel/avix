@@ -3,23 +3,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::agent_manifest::{AgentManifestSummary, ManifestScanner};
 use crate::error::AvixError;
-use crate::executor::{AgentExecutorFactory, SpawnParams};
+use crate::executor::AgentExecutorFactory;
 use crate::history::record::{MessageRecord, PartRecord};
 use crate::history::HistoryStore;
 use crate::invocation::{InvocationRecord, InvocationStatus, InvocationStore};
-use crate::process::entry::{ProcessEntry, ProcessKind, ProcessStatus};
+use crate::process::entry::ProcessStatus;
 use crate::process::table::ProcessTable;
 use crate::service::lifecycle::ServiceManager;
 use crate::session::SessionRecord;
 use crate::session::{PersistentSessionStore, SessionStatus};
 use crate::tool_registry::ToolRegistry;
 use crate::trace::Tracer;
-use crate::types::token::{CapabilityToken, IssuedTo};
 use crate::types::Pid;
 
 pub mod agent;
