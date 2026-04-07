@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use uuid::Uuid;
 
+use tracing::{debug, info, warn};
 use crate::error::AvixError;
 use crate::session::{PersistentSessionStore, SessionRecord};
 
@@ -37,19 +38,34 @@ impl SessionManager {
             owner_pid,
         );
         store.create(&record).await?;
+        info!(session_id = %record.id, owner_pid, "created session");
         Ok(record)
     }
 
     pub async fn list_sessions(&self, username: &str) -> Result<Vec<SessionRecord>, AvixError> {
+        debug!(username, "listing sessions for user");
         match &self.store {
-            Some(s) => s.list_for_user(username).await,
+            Some(s) => {
+                let sessions = s.list_for_user(username).await?;
+                debug!(username, count = sessions.len(), "listed sessions");
+                Ok(sessions)
+            }
             None => Ok(vec![]),
         }
     }
 
     pub async fn get_session(&self, session_id: &Uuid) -> Result<Option<SessionRecord>, AvixError> {
+        debug!(session_id = %session_id, "getting session");
         match &self.store {
-            Some(s) => s.get(session_id).await,
+            Some(s) => {
+                let session = s.get(session_id).await?;
+                if session.is_some() {
+                    debug!(session_id = %session_id, "found session");
+                } else {
+                    debug!(session_id = %session_id, "session not found");
+                }
+                Ok(session)
+            }
             None => Ok(None),
         }
     }
@@ -57,7 +73,12 @@ impl SessionManager {
     pub async fn update_session(&self, session: &SessionRecord) -> Result<(), AvixError> {
         let store = self.store.as_ref()
             .ok_or_else(|| AvixError::NotFound("session store not configured".into()))?;
-        store.update(session).await
+        if let Err(e) = store.update(session).await {
+            warn!(session_id = %session.id, error = %e, "failed to update session");
+            return Err(e);
+        }
+        debug!(session_id = %session.id, "updated session");
+        Ok(())
     }
 
     pub fn store(&self) -> Option<&Arc<PersistentSessionStore>> {

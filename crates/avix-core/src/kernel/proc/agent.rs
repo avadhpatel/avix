@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use tokio::sync::Mutex;
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::agent_manifest::{AgentManifestSummary, ManifestScanner};
@@ -68,7 +69,10 @@ impl AgentManager {
         caller_identity: &str,
         parent_pid: Option<u32>,
     ) -> Result<u32, AvixError> {
+        info!(name, goal, session_id, ?parent_pid, "spawning agent");
+
         let pid = self.allocate_pid().await?;
+        debug!(pid, "allocated PID");
 
         let effective_session_id = if let Some(ppid) = parent_pid {
             let inherited = self.active_sessions.lock().await.get(&ppid).cloned();
@@ -76,11 +80,15 @@ impl AgentManager {
                 if let Some(store) = &self.session_store {
                     if let Ok(Some(mut session)) = store.get(&Uuid::parse_str(&sid)?).await {
                         session.add_participant(name, true);
-                        let _ = store.update(&session).await;
+                        if let Err(e) = store.update(&session).await {
+                            warn!(error = %e, "failed to update session with participant");
+                        }
                     }
                 }
+                info!(session_id = %sid, parent_pid = ppid, "child inheriting parent session");
                 sid
             } else {
+                warn!(parent_pid = ppid, "parent not in active sessions, creating new session");
                 self.resolve_session_from_id(name, goal, session_id, caller_identity, pid).await?
             }
         } else {
@@ -100,12 +108,15 @@ impl AgentManager {
         };
 
         self.process_table.insert(entry).await;
+        debug!(pid, "inserted process entry");
 
         if let Some(store) = &self.session_store {
             if let Ok(uuid) = Uuid::parse_str(&effective_session_id) {
                 if let Ok(Some(mut session)) = store.get(&uuid).await {
                     session.add_pid(pid);
-                    let _ = store.update(&session).await;
+                    if let Err(e) = store.update(&session).await {
+                        warn!(pid, error = %e, "failed to add pid to session");
+                    }
                 }
             }
         }
@@ -121,9 +132,12 @@ impl AgentManager {
                 goal.to_string(),
                 effective_session_id.clone(),
             );
-            let _ = store.create(&record).await;
+            if let Err(e) = store.create(&record).await {
+                warn!(pid, invocation_id = %invocation_id, error = %e, "failed to create invocation");
+            }
         }
         self.active_invocations.lock().await.insert(pid, invocation_id.clone());
+        debug!(pid, invocation_id = %invocation_id, "created invocation record");
 
         let issued_to = IssuedTo {
             pid,
@@ -159,13 +173,18 @@ impl AgentManager {
             };
             let abort_handle = factory.launch(spawn_params);
             self.task_handles.lock().await.insert(pid, abort_handle);
+            info!(pid, "executor task launched");
         }
 
         self.process_table.set_status(Pid::new(pid), ProcessStatus::Running).await?;
+        info!(pid, name, "agent spawned successfully");
+
         Ok(pid)
     }
 
     pub async fn list(&self) -> Result<Vec<super::types::ActiveAgent>, AvixError> {
+        debug!("listing active agents");
+
         let running = self.process_table.list_by_kind(ProcessKind::Agent).await;
         let mut active = Vec::new();
         for entry in running {
@@ -188,12 +207,20 @@ impl AgentManager {
     }
 
     pub async fn abort_agent(&self, pid: u32) {
+        info!(pid, "aborting agent");
+
         let mut handles = self.task_handles.lock().await;
         if let Some(handle) = handles.remove(&pid) {
             handle.abort();
+            debug!(pid, "aborted executor task");
+        } else {
+            warn!(pid, "no executor task found for agent");
         }
         drop(handles);
+
         let _ = self.process_table.set_status(Pid::new(pid), ProcessStatus::Stopped).await;
+        debug!(pid, "set process status to Stopped");
+
         self.finalize_invocation(pid, InvocationStatus::Killed, Some("killed".into())).await;
     }
 
