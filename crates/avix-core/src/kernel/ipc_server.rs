@@ -525,16 +525,19 @@ async fn dispatch_request(
         }
 
         "kernel/signal/send" => {
-            // Accept both "pid" (client field) and "target" (internal field).
             let pid_val = params["pid"]
                 .as_u64()
-                .or_else(|| params["target"].as_u64())
                 .unwrap_or(0) as u32;
-            let signal = params["signal"].as_str().unwrap_or("").to_string();
-            let payload = params["payload"].clone();
-            if pid_val == 0 || signal.is_empty() {
-                return JsonRpcResponse::err(id, -32602, "missing pid or signal", None);
+            if pid_val == 0 {
+                return JsonRpcResponse::err(id, -32602, "missing pid", None);
             }
+
+            let signal = params["signal"].as_str().unwrap_or("").to_string();
+            if signal.is_empty() {
+                return JsonRpcResponse::err(id, -32602, "missing signal", None);
+            }
+
+            let payload = params["payload"].clone();
             match proc_handler.send_signal(pid_val, &signal, payload).await {
                 Ok(()) => JsonRpcResponse::ok(id, json!({ "ok": true })),
                 Err(e) => {

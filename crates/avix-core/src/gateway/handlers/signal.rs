@@ -132,7 +132,7 @@ async fn handle_send(id: String, body: serde_json::Value, ctx: &HandlerCtx) -> A
             return AtpReply::err(id, AtpError::new(AtpErrorCode::Eparse, e));
         }
 
-        let pid_val = if body["pid"].is_number() { &body["pid"] } else { &body["target"] };
+        let pid_val = if body["pid"].is_number() { &body["pid"] } else { &json!(0) };
         let params = match serde_json::to_value(&pipe_payload) {
             Ok(pv) => json!({
                 "signal": "SIGPIPE",
@@ -188,7 +188,7 @@ mod tests {
     #[tokio::test]
     async fn send_unknown_signal_returns_eparse() {
         let ctx = make_ctx("kernel/signal/send", json!({})).await;
-        let cmd = make_cmd("send", json!({ "signal": "SIGFAKE", "target": 42 }));
+        let cmd = make_cmd("send", json!({ "signal": "SIGFAKE", "pid": 42 }));
         let reply = handle(cmd, &ctx).await;
         assert!(!reply.ok);
         assert_eq!(reply.error.unwrap().code, AtpErrorCode::Eparse);
@@ -197,7 +197,7 @@ mod tests {
     #[tokio::test]
     async fn send_valid_signal_translates_correctly() {
         let ctx = make_ctx("kernel/signal/send", json!({"ok": true})).await;
-        let cmd = make_cmd("send", json!({ "signal": "SIGKILL", "target": 42 }));
+        let cmd = make_cmd("send", json!({ "signal": "SIGKILL", "pid": 42 }));
         let reply = handle(cmd, &ctx).await;
         assert!(reply.ok);
     }
@@ -209,7 +209,7 @@ mod tests {
             "send",
             json!({
                 "signal": "SIGPIPE",
-                "target": 42,
+                "pid": 42,
                 "payload": { "text": "hello agent" }
             }),
         );
@@ -222,7 +222,7 @@ mod tests {
         let ctx = make_ctx("kernel/signal/send", json!({})).await;
         let cmd = make_cmd(
             "send",
-            json!({ "signal": "SIGPIPE", "target": 42, "payload": {} }),
+            json!({ "signal": "SIGPIPE", "pid": 42, "payload": {} }),
         );
         let reply = handle(cmd, &ctx).await;
         assert!(!reply.ok);
@@ -236,7 +236,7 @@ mod tests {
             "send",
             json!({
                 "signal": "SIGPIPE",
-                "target": 42,
+                "pid": 42,
                 "payload": {
                     "attachments": [{
                         "type": "inline",
@@ -255,7 +255,7 @@ mod tests {
     #[tokio::test]
     async fn send_missing_signal_field_returns_eparse() {
         let ctx = make_ctx("kernel/signal/send", json!({})).await;
-        let cmd = make_cmd("send", json!({ "target": 42 }));
+        let cmd = make_cmd("send", json!({ "pid": 42 }));
         let reply = handle(cmd, &ctx).await;
         assert!(!reply.ok);
         assert_eq!(reply.error.unwrap().code, AtpErrorCode::Eparse);
@@ -265,7 +265,7 @@ mod tests {
     async fn send_sigresume_without_approval_token_forwards_to_ipc() {
         // SIGRESUME without approvalToken is a plain signal → goes to IPC
         let ctx = make_ctx("kernel/signal/send", json!({"ok": true})).await;
-        let cmd = make_cmd("send", json!({ "signal": "SIGRESUME", "target": 42 }));
+        let cmd = make_cmd("send", json!({ "signal": "SIGRESUME", "pid": 42 }));
         let reply = handle(cmd, &ctx).await;
         assert!(reply.ok);
     }
@@ -277,7 +277,7 @@ mod tests {
             "send",
             json!({
                 "signal": "SIGRESUME",
-                "target": 42,
+                "pid": 42,
                 "payload": { "approvalToken": "tok-123", "decision": "approved" }
             }),
         );
@@ -293,7 +293,7 @@ mod tests {
             "send",
             json!({
                 "signal": "SIGRESUME",
-                "target": 42,
+                "pid": 42,
                 "payload": {
                     "approvalToken": "tok-123",
                     "hilId": "hil-001",
@@ -371,7 +371,7 @@ mod tests {
             "send",
             json!({
                 "signal": "SIGRESUME",
-                "target": 99,
+                "pid": 99,
                 "payload": {
                     "approvalToken": token,
                     "hilId": "hil-test",
@@ -447,7 +447,7 @@ mod tests {
                 "send",
                 json!({
                     "signal": "SIGRESUME",
-                    "target": 100,
+                    "pid": 100,
                     "payload": {
                         "approvalToken": tok,
                         "hilId": "hil-double",
@@ -473,7 +473,7 @@ mod tests {
             "send",
             json!({
                 "signal": "SIGPIPE",
-                "target": 42,
+                "pid": 42,
                 "payload": {
                     "text": "see attachment",
                     "attachments": [{
