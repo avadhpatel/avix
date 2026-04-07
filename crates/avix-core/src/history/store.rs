@@ -231,7 +231,7 @@ mod tests {
 
     async fn open_store() -> HistoryStore {
         let dir = tempdir().unwrap();
-        HistoryStore::open(dir.into_path().join("history.redb"))
+        HistoryStore::open(dir.path().join("history.redb"))
             .await
             .unwrap()
     }

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::error::AvixError;
 
-use super::types::AgentsYaml;
+use super::types::{AgentRecord, AgentsYaml};
 
 pub async fn load_agents_yaml(path: &PathBuf) -> Result<AgentsYaml, AvixError> {
     if !path.exists() {
@@ -29,7 +29,7 @@ pub async fn persist_agent_record(
 ) -> Result<(), AvixError> {
     let mut agents = load_agents_yaml(path).await.unwrap_or_default();
 
-    let record = super::types::AgentRecord {
+    let record = AgentRecord {
         pid,
         name: name.to_string(),
         goal: goal.to_string(),

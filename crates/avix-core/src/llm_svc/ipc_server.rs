@@ -212,7 +212,7 @@ spec:
 
         // First binding
         let config = make_minimal_config();
-        let routing = Arc::new(RoutingEngine::from_config(&config));
+        let _routing = Arc::new(RoutingEngine::from_config(&config));
         let handle1 = LlmIpcServer::new(
             sock.clone(),
             config.clone(),

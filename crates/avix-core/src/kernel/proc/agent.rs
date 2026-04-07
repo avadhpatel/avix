@@ -16,8 +16,6 @@ use crate::session::PersistentSessionStore;
 use crate::types::token::{CapabilityToken, IssuedTo};
 use crate::types::Pid;
 
-use super::signals::SignalHandler;
-
 pub struct AgentManager {
     process_table: Arc<ProcessTable>,
     runtime_dir: PathBuf,
@@ -29,7 +27,6 @@ pub struct AgentManager {
     manifest_scanner: Option<Arc<ManifestScanner>>,
     active_invocations: Arc<Mutex<HashMap<u32, String>>>,
     active_sessions: Arc<Mutex<HashMap<u32, String>>>,
-    signal_handler: Arc<SignalHandler>,
 }
 
 impl AgentManager {
@@ -43,7 +40,6 @@ impl AgentManager {
         manifest_scanner: Option<Arc<ManifestScanner>>,
         active_invocations: Arc<Mutex<HashMap<u32, String>>>,
         active_sessions: Arc<Mutex<HashMap<u32, String>>>,
-        signal_handler: Arc<SignalHandler>,
     ) -> Self {
         Self {
             process_table,
@@ -56,7 +52,6 @@ impl AgentManager {
             manifest_scanner,
             active_invocations,
             active_sessions,
-            signal_handler,
         }
     }
 
@@ -321,6 +316,7 @@ impl AgentManager {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     struct CountingFactory {
         count: Arc<AtomicU32>,
@@ -341,14 +337,6 @@ mod tests {
         let runtime_dir = PathBuf::from("/run/avix");
         let active_invocations = Arc::new(Mutex::new(HashMap::new()));
         let active_sessions = Arc::new(Mutex::new(HashMap::new()));
-        let signal_handler = Arc::new(SignalHandler::new(
-            runtime_dir.clone(),
-            Arc::clone(&table),
-            None,
-            None,
-            Arc::clone(&active_invocations),
-            Arc::clone(&active_sessions),
-        ));
 
         let factory = Arc::new(CountingFactory {
             count: Arc::clone(&count),
@@ -363,7 +351,6 @@ mod tests {
             None,
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
-            signal_handler,
         );
 
         let pid1 = manager.spawn("agent-a", "goal-a", "sess-1", "kernel", None).await.unwrap();
@@ -386,14 +373,6 @@ mod tests {
         let runtime_dir = PathBuf::from("/run/avix");
         let active_invocations = Arc::new(Mutex::new(HashMap::new()));
         let active_sessions = Arc::new(Mutex::new(HashMap::new()));
-        let signal_handler = Arc::new(SignalHandler::new(
-            runtime_dir.clone(),
-            Arc::clone(&table),
-            None,
-            None,
-            Arc::clone(&active_invocations),
-            Arc::clone(&active_sessions),
-        ));
 
         let manager = AgentManager::new(
             table.clone(),
@@ -405,7 +384,6 @@ mod tests {
             None,
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
-            signal_handler,
         );
 
         let pid = manager.spawn("agent", "goal", "sess", "kernel", None).await.unwrap();
@@ -421,14 +399,6 @@ mod tests {
         let runtime_dir = PathBuf::from("/run/avix");
         let active_invocations = Arc::new(Mutex::new(HashMap::new()));
         let active_sessions = Arc::new(Mutex::new(HashMap::new()));
-        let signal_handler = Arc::new(SignalHandler::new(
-            runtime_dir.clone(),
-            Arc::clone(&table),
-            None,
-            None,
-            Arc::clone(&active_invocations),
-            Arc::clone(&active_sessions),
-        ));
 
         let manager = AgentManager::new(
             table,
@@ -440,7 +410,6 @@ mod tests {
             None,
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
-            signal_handler,
         );
 
         let pid1 = manager.spawn("agent1", "goal1", "sess-1", "kernel", None).await.unwrap();
@@ -470,14 +439,6 @@ mod tests {
         );
         let active_invocations = Arc::new(Mutex::new(HashMap::new()));
         let active_sessions = Arc::new(Mutex::new(HashMap::new()));
-        let signal_handler = Arc::new(SignalHandler::new(
-            runtime_dir.clone(),
-            Arc::clone(&table),
-            None,
-            Some(Arc::clone(&sstore)),
-            Arc::clone(&active_invocations),
-            Arc::clone(&active_sessions),
-        ));
 
         let manager = AgentManager::new(
             table,
@@ -489,7 +450,6 @@ mod tests {
             None,
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
-            signal_handler,
         );
 
         let pid = manager.spawn("agent-a", "goal", "", "alice", None).await.unwrap();
@@ -512,14 +472,6 @@ mod tests {
         );
         let active_invocations = Arc::new(Mutex::new(HashMap::new()));
         let active_sessions = Arc::new(Mutex::new(HashMap::new()));
-        let signal_handler = Arc::new(SignalHandler::new(
-            runtime_dir.clone(),
-            Arc::clone(&table),
-            None,
-            Some(Arc::clone(&sstore)),
-            Arc::clone(&active_invocations),
-            Arc::clone(&active_sessions),
-        ));
 
         let manager = AgentManager::new(
             table,
@@ -531,7 +483,6 @@ mod tests {
             None,
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
-            signal_handler,
         );
 
         let parent_pid = manager.spawn("parent-agent", "parent goal", "", "alice", None).await.unwrap();

@@ -92,7 +92,6 @@ impl ProcHandler {
             None,
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
-            Arc::clone(&signal_handler),
         );
         Self {
             process_table,
@@ -142,7 +141,6 @@ impl ProcHandler {
             None,
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
-            Arc::clone(&signal_handler),
         );
         Self {
             process_table,
@@ -192,7 +190,6 @@ impl ProcHandler {
             self.manifest_scanner.clone(),
             Arc::clone(&self.active_invocations),
             Arc::clone(&self.active_sessions),
-            Arc::clone(&self.signal_handler),
         );
 
         self
@@ -211,7 +208,6 @@ impl ProcHandler {
             Some(scanner),
             Arc::clone(&self.active_invocations),
             Arc::clone(&self.active_sessions),
-            Arc::clone(&self.signal_handler),
         );
 
         self
@@ -239,7 +235,6 @@ impl ProcHandler {
             self.manifest_scanner.clone(),
             Arc::clone(&self.active_invocations),
             Arc::clone(&self.active_sessions),
-            Arc::clone(&self.signal_handler),
         );
 
         self
@@ -600,46 +595,6 @@ impl ProcHandler {
         Ok(pid)
     }
 
-    async fn resolve_session_from_id(
-        &self,
-        name: &str,
-        goal: &str,
-        session_id: &str,
-        caller_identity: &str,
-        owner_pid: u32,
-    ) -> Result<String, AvixError> {
-        if session_id.is_empty() {
-            if let Some(store) = &self.session_store {
-                let record = SessionRecord::new(
-                    Uuid::new_v4(),
-                    caller_identity.to_string(),
-                    name.to_string(),
-                    name.to_string(),
-                    goal.to_string(),
-                    owner_pid,
-                );
-                if let Err(e) = store.create(&record).await {
-                    warn!(error = %e, "failed to create session record");
-                }
-                info!(session_id = %record.id, owner_pid, "created new session");
-                Ok(record.id.to_string())
-            } else {
-                Ok(Uuid::new_v4().to_string())
-            }
-        } else {
-            if let Some(store) = &self.session_store {
-                if let Ok(Some(mut session)) = store.get(&Uuid::parse_str(session_id)?).await {
-                    session.add_participant(name, true);
-                    if let Err(e) = store.update(&session).await {
-                        warn!(error = %e, "failed to update session with participant");
-                    }
-                    info!(session_id = %session.id, participant = name, "added participant to session");
-                }
-            }
-            Ok(session_id.to_string())
-        }
-    }
-
     pub async fn pause_agent(&self, pid: u32) -> Result<(), AvixError> {
         self.signal_handler.pause_agent(pid).await
     }
@@ -655,12 +610,6 @@ impl ProcHandler {
         payload: serde_json::Value,
     ) -> Result<(), AvixError> {
         self.signal_handler.send_signal(pid, signal, payload).await
-    }
-
-    async fn allocate_pid(&self) -> Result<u32, AvixError> {
-        let entries = self.process_table.list_all().await;
-        let max_pid = entries.iter().map(|e| e.pid.as_u32()).max().unwrap_or(1);
-        Ok(max_pid + 1)
     }
 
     pub async fn load_agents_yaml(&self) -> Result<AgentsYaml, AvixError> {
@@ -682,6 +631,8 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    use crate::executor::spawn::SpawnParams;
 
     struct CountingFactory {
         count: Arc<AtomicU32>,

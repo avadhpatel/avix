@@ -249,7 +249,7 @@ mod tests {
     ) -> McpServerConnection {
         // Build a fake connected connection directly without spawning a process.
         let transport = MockTransport::new(vec![]);
-        let client: McpClient<MockTransport> = McpClient::new(transport);
+        let _client: McpClient<MockTransport> = McpClient::new(transport);
 
         // We need a StdioTransport-based state, but for tests we bypass connect()
         // by constructing directly.

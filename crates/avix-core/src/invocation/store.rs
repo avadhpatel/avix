@@ -409,7 +409,7 @@ mod tests {
 
     async fn open_store() -> InvocationStore {
         let dir = tempdir().unwrap();
-        InvocationStore::open(dir.into_path().join("inv.redb"))
+        InvocationStore::open(dir.path().join("inv.redb"))
             .await
             .unwrap()
     }
