@@ -11,7 +11,10 @@ pub use boot::phase3_re_adopt;
 pub use hil::{HilOption, HilRequest, HilState, HilType, HilUrgency};
 pub use hil_manager::HilManager;
 pub use ipc_server::KernelIpcServer;
-pub use proc::{ActiveAgent, AgentRecord, AgentsYaml, ProcHandler};
+pub use proc::{
+    ActiveAgent, AgentManager, AgentRecord, AgentsYaml, HistoryManager, InvocationManager,
+    ProcHandler, SessionManager, ServiceListResponse, SignalHandler, ToolListResponse,
+};
 pub use resource_request::{
     KernelResourceHandler, PipeDirection, ResourceGrant, ResourceItem, ResourceRequest,
     ResourceResponse, Urgency,
