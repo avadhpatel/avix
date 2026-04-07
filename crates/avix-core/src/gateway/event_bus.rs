@@ -127,20 +127,21 @@ impl AtpEventBus {
 
     // ── Convenience publish helpers ─────────────────────────────────────────
 
-    pub fn agent_output(&self, session_id: &str, pid: u32, text: &str) {
+    pub fn agent_output(&self, atp_session_id: &str, pid: u32, text: &str) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentOutput);
         let ev = AtpEvent::new(
             AtpEventKind::AgentOutput,
-            session_id,
+            atp_session_id,
             serde_json::json!({ "pid": pid, "text": text }),
         );
-        self.publish(ev, owner_scoped.then(|| session_id.to_string()), min_role);
+        self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 
     /// Publish an incremental token delta from a streaming LLM turn.
+    /// `atp_session_id` routes the event to the originating client connection.
     pub fn agent_output_chunk(
         &self,
-        session_id: &str,
+        atp_session_id: &str,
         pid: u32,
         turn_id: &str,
         text_delta: &str,
@@ -150,7 +151,7 @@ impl AtpEventBus {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentOutputChunk);
         let ev = AtpEvent::new(
             AtpEventKind::AgentOutputChunk,
-            session_id,
+            atp_session_id,
             serde_json::json!({
                 "pid": pid,
                 "turn_id": turn_id,
@@ -159,27 +160,29 @@ impl AtpEventBus {
                 "is_final": is_final,
             }),
         );
-        self.publish(ev, owner_scoped.then(|| session_id.to_string()), min_role);
+        self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 
-    pub fn agent_exit(&self, session_id: &str, pid: u32, exit_code: i32) {
+    /// `atp_session_id` routes the event to the originating client connection.
+    pub fn agent_exit(&self, atp_session_id: &str, pid: u32, exit_code: i32) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentExit);
         let ev = AtpEvent::new(
             AtpEventKind::AgentExit,
-            session_id,
+            atp_session_id,
             serde_json::json!({ "pid": pid, "exitCode": exit_code }),
         );
-        self.publish(ev, owner_scoped.then(|| session_id.to_string()), min_role);
+        self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 
-    pub fn agent_status(&self, session_id: &str, pid: u32, status: &str) {
+    /// `atp_session_id` routes the event to the originating client connection.
+    pub fn agent_status(&self, atp_session_id: &str, pid: u32, status: &str) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentStatus);
         let ev = AtpEvent::new(
             AtpEventKind::AgentStatus,
-            session_id,
+            atp_session_id,
             serde_json::json!({ "pid": pid, "status": status }),
         );
-        self.publish(ev, owner_scoped.then(|| session_id.to_string()), min_role);
+        self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 
     pub fn tool_changed(&self, tool_name: &str, change: &str) {
@@ -212,39 +215,39 @@ impl AtpEventBus {
         self.publish(ev, None, min_role);
     }
 
-    pub fn fs_changed(&self, session_id: &str, path: &str) {
+    pub fn fs_changed(&self, atp_session_id: &str, path: &str) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::FsChanged);
         let ev = AtpEvent::new(
             AtpEventKind::FsChanged,
-            session_id,
+            atp_session_id,
             serde_json::json!({ "path": path }),
         );
-        self.publish(ev, owner_scoped.then(|| session_id.to_string()), min_role);
+        self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 
-    pub fn hil_request(&self, session_id: &str, hil_id: &str, kind: &str) {
+    pub fn hil_request(&self, atp_session_id: &str, hil_id: &str, kind: &str) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::HilRequest);
         let ev = AtpEvent::new(
             AtpEventKind::HilRequest,
-            session_id,
+            atp_session_id,
             serde_json::json!({ "hilId": hil_id, "kind": kind }),
         );
-        self.publish(ev, owner_scoped.then(|| session_id.to_string()), min_role);
+        self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 
-    pub fn hil_resolved(&self, session_id: &str, hil_id: &str, outcome: &str) {
+    pub fn hil_resolved(&self, atp_session_id: &str, hil_id: &str, outcome: &str) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::HilResolved);
         let ev = AtpEvent::new(
             AtpEventKind::HilResolved,
-            session_id,
+            atp_session_id,
             serde_json::json!({ "hilId": hil_id, "outcome": outcome }),
         );
-        self.publish(ev, owner_scoped.then(|| session_id.to_string()), min_role);
+        self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 
     pub fn agent_tool_call(
         &self,
-        session_id: &str,
+        atp_session_id: &str,
         pid: u32,
         call_id: &str,
         tool_name: &str,
@@ -253,15 +256,15 @@ impl AtpEventBus {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentToolCall);
         let ev = AtpEvent::new(
             AtpEventKind::AgentToolCall,
-            session_id,
+            atp_session_id,
             serde_json::json!({ "pid": pid, "callId": call_id, "tool": tool_name, "args": args }),
         );
-        self.publish(ev, owner_scoped.then(|| session_id.to_string()), min_role);
+        self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 
     pub fn agent_tool_result(
         &self,
-        session_id: &str,
+        atp_session_id: &str,
         pid: u32,
         call_id: &str,
         tool_name: &str,
@@ -270,10 +273,10 @@ impl AtpEventBus {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentToolResult);
         let ev = AtpEvent::new(
             AtpEventKind::AgentToolResult,
-            session_id,
+            atp_session_id,
             serde_json::json!({ "pid": pid, "callId": call_id, "tool": tool_name, "result": result }),
         );
-        self.publish(ev, owner_scoped.then(|| session_id.to_string()), min_role);
+        self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 }
 

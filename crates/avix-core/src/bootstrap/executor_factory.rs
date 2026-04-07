@@ -7,10 +7,11 @@ use crate::executor::runtime_executor::MockToolRegistry;
 use crate::executor::runtime_executor::RuntimeExecutor;
 use crate::executor::spawn::SpawnParams;
 use crate::gateway::event_bus::AtpEventBus;
-use crate::invocation::InvocationStatus;
+use crate::invocation::{InvocationStatus, InvocationStore};
 use crate::llm_client::IpcLlmClient;
 use crate::process::entry::ProcessStatus;
 use crate::process::table::ProcessTable;
+use crate::session::PersistentSessionStore;
 use crate::trace::Tracer;
 use crate::types::Pid;
 
@@ -32,14 +33,25 @@ pub struct IpcExecutorFactory {
     event_bus: Arc<AtpEventBus>,
     /// Tracer — records agent spawn, LLM calls, tool calls, and exit.
     tracer: Arc<Tracer>,
+    /// Invocation store — persists `InvocationRecord` YAML + JSONL conversation to disk.
+    invocation_store: Arc<InvocationStore>,
+    /// Session store — persists `SessionRecord` state across turns.
+    session_store: Arc<PersistentSessionStore>,
 }
 
 impl IpcExecutorFactory {
-    pub fn new(process_table: Arc<ProcessTable>, event_bus: Arc<AtpEventBus>) -> Self {
+    pub fn new(
+        process_table: Arc<ProcessTable>,
+        event_bus: Arc<AtpEventBus>,
+        invocation_store: Arc<InvocationStore>,
+        session_store: Arc<PersistentSessionStore>,
+    ) -> Self {
         Self {
             process_table,
             event_bus,
             tracer: Tracer::noop(),
+            invocation_store,
+            session_store,
         }
     }
 
@@ -57,11 +69,14 @@ impl AgentExecutorFactory for IpcExecutorFactory {
         let process_table = Arc::clone(&self.process_table);
         let event_bus = Arc::clone(&self.event_bus);
         let tracer = Arc::clone(&self.tracer);
+        let invocation_store = Arc::clone(&self.invocation_store);
+        let session_store = Arc::clone(&self.session_store);
 
         let pid = params.pid;
         let agent_name = params.agent_name.clone();
         let goal = params.goal.clone();
         let session_id = params.session_id.clone();
+        let invocation_id = params.invocation_id.clone();
 
         let handle = tokio::spawn(async move {
             tracer.agent_spawn(pid.as_u32(), &agent_name, &goal, &session_id);
@@ -85,9 +100,11 @@ impl AgentExecutorFactory for IpcExecutorFactory {
                 }
             };
 
-            // Wire the event bus and tracer so events and trace are emitted mid-turn.
+            // Wire the event bus, tracer, and persistence stores.
             executor = executor.with_event_bus(Arc::clone(&event_bus));
             executor = executor.with_tracer(Arc::clone(&tracer));
+            executor = executor.with_invocation_store(invocation_store, invocation_id);
+            executor = executor.with_session_store(session_store);
 
             info!(pid = pid.as_u32(), "executor started");
             event_bus.agent_status(&session_id, pid.as_u32(), "running");

@@ -7,6 +7,8 @@ use crate::auth::atp_token::ATPTokenStore;
 use crate::auth::service::AuthService;
 use crate::config::LlmConfig;
 use crate::error::AvixError;
+use crate::invocation::InvocationStore;
+use crate::session::PersistentSessionStore;
 use crate::exec_svc::ExecIpcServer;
 use crate::gateway::config::GatewayConfig;
 use crate::gateway::event_bus::AtpEventBus;
@@ -226,10 +228,27 @@ impl Runtime {
         // VFS mounts /etc/avix → <root>/etc, so agents.yaml lives at <root>/etc/agents.yaml.
         let agents_yaml_path = self.root.join("etc/agents.yaml");
 
+        // Open persistent stores — files are created under <root>/data/ if they don't exist yet.
+        let invocation_store = Arc::new(
+            InvocationStore::open(self.root.join("data/invocations.redb"))
+                .await
+                .map_err(|e| AvixError::ConfigParse(format!("open invocation store: {e}")))?
+                .with_local(crate::memfs::local_provider::LocalProvider::new(
+                    &self.root.join("data/users"),
+                )?),
+        );
+        let session_store = Arc::new(
+            PersistentSessionStore::open(self.root.join("data/sessions.redb"))
+                .await
+                .map_err(|e| AvixError::ConfigParse(format!("open session store: {e}")))?,
+        );
+
         let factory = Arc::new(
             executor_factory::IpcExecutorFactory::new(
                 Arc::clone(&self.process_table),
                 Arc::clone(&self.event_bus),
+                Arc::clone(&invocation_store),
+                Arc::clone(&session_store),
             )
             .with_tracer(Arc::clone(&self.tracer)),
         );
@@ -245,7 +264,9 @@ impl Runtime {
                 factory,
             )
             .with_manifest_scanner(scanner)
-            .with_tracer(Arc::clone(&self.tracer)),
+            .with_tracer(Arc::clone(&self.tracer))
+            .with_invocation_store(Arc::clone(&invocation_store))
+            .with_session_store(Arc::clone(&session_store)),
         );
         // Retain a reference so phase3 can wire in service_manager and tool_registry.
         self.proc_handler = Some(Arc::clone(&proc_handler));
