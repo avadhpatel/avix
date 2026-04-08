@@ -55,3 +55,4 @@ tar                = { version = "0.4" }
 walkdir            = { version = "2" }
 xz2                = { version = "0.1" }
 lazy_static         = { version = "1.4" }
+tokio-util         = { version = "0.7", features = ["rt"] }

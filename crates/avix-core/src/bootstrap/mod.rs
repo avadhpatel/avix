@@ -23,6 +23,7 @@ use crate::router::{RouterDispatcher, RouterIpcServer, ServiceRegistry};
 use crate::service::lifecycle::{ServiceManager, ServiceSpawnRequest};
 use crate::service::process::ServiceProcess;
 use crate::service::watchdog::{ServiceWatchdog, WatchdogEntry};
+use crate::signal::SignalChannelRegistry;
 use crate::trace::{TraceFlags, Tracer};
 use crate::types::Pid;
 use std::collections::HashMap;
@@ -243,6 +244,9 @@ impl Runtime {
                 .map_err(|e| AvixError::ConfigParse(format!("open session store: {e}")))?,
         );
 
+        // Shared in-process signal channel registry — wires SignalHandler → executor tasks.
+        let signal_channels = SignalChannelRegistry::new();
+
         let factory = Arc::new(
             executor_factory::IpcExecutorFactory::new(
                 Arc::clone(&self.process_table),
@@ -250,7 +254,8 @@ impl Runtime {
                 Arc::clone(&invocation_store),
                 Arc::clone(&session_store),
             )
-            .with_tracer(Arc::clone(&self.tracer)),
+            .with_tracer(Arc::clone(&self.tracer))
+            .with_signal_channels(signal_channels.clone()),
         );
 
         let scanner = Arc::new(ManifestScanner::new(Arc::clone(&self.vfs)));
@@ -266,7 +271,8 @@ impl Runtime {
             .with_manifest_scanner(scanner)
             .with_tracer(Arc::clone(&self.tracer))
             .with_invocation_store(Arc::clone(&invocation_store))
-            .with_session_store(Arc::clone(&session_store)),
+            .with_session_store(Arc::clone(&session_store))
+            .with_signal_channels(signal_channels),
         );
         // Retain a reference so phase3 can wire in service_manager and tool_registry.
         self.proc_handler = Some(Arc::clone(&proc_handler));

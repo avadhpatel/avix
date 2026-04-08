@@ -298,7 +298,10 @@ premature half-close.
 ### `run_turn_streaming()`
 
 Called once per iteration of the `run_with_client` loop. Prefers streaming; falls back
-to `complete()` transparently if the client reports streaming is unsupported:
+to `complete()` transparently if the client reports streaming is unsupported.
+
+The function accepts a `CancellationToken` so an in-flight LLM stream can be aborted
+immediately when a signal (SIGKILL, SIGPAUSE, SIGSTOP) arrives via the signal channel:
 
 ```mermaid
 flowchart TD
@@ -308,7 +311,8 @@ flowchart TD
     TRY -->|Err streaming unsupported| FALLBACK["client.complete(req)"]
     FALLBACK --> RESP["LlmCompleteResponse"]
 
-    STREAM --> LOOP["for each StreamChunk"]
+    STREAM --> LOOP["tokio::select! biased\ncancel.cancelled() OR stream.next() OR flush_timer.tick()"]
+    LOOP -->|cancelled| ERR["Err(Cancelled)"]
     LOOP --> TD["TextDelta\n→ accumulate text\n→ agent_output_chunk ATP event\n→ seq++"]
     LOOP --> TCS["ToolCallStart\n→ pending_calls.insert"]
     LOOP --> TCAD["ToolCallArgsDelta\n→ pending_calls[id].args += delta"]
@@ -319,6 +323,34 @@ flowchart TD
 
     RESP --> INTERPRET["interpret_stop_reason()"]
 ```
+
+### `run_with_client` — signal-aware turn loop
+
+`run_with_client` owns the outer loop and races each LLM turn against the in-process
+signal receiver:
+
+```
+loop {
+  // 1. drain pending signals (between-turn)
+  while signal_rx.try_recv() → handle_signal_between_turns()
+  // 2. pause-wait if paused
+  if paused { loop { signal_rx.recv().await → until SIGRESUME } }
+
+  // 3. race LLM turn vs signal
+  tokio::select! {
+    res = run_turn_streaming(req, cancel.clone()) => { ... }
+    sig = signal_rx.recv() => {
+      cancel.cancel();
+      handle_signal_during_llm(sig);
+      if killed → return Err(Cancelled)
+      continue   // SIGPAUSE or SIGPIPE/SIGSAVE: re-enter loop
+    }
+  }
+}
+```
+
+`handle_signal_between_turns` and `handle_signal_during_llm` both update atomics
+(`paused`, `killed`, `snapshot_requested`) and respond to SIGPIPE/SIGSAVE inline.
 
 ### Accumulating a synthetic `LlmCompleteResponse`
 

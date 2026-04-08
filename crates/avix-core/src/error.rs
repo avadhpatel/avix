@@ -67,6 +67,10 @@ pub enum AvixError {
 
     #[error("MCP server unreachable: {0}")]
     McpUnreachable(String),
+
+    /// Returned when an in-flight operation is cancelled by a signal (e.g. SIGKILL).
+    #[error("cancelled: {0}")]
+    Cancelled(String),
 }
 
 impl From<serde_json::Error> for AvixError {

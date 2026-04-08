@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::agent_manifest::{AgentManifestSummary, ManifestScanner};
 use crate::error::AvixError;
 use crate::executor::AgentExecutorFactory;
+use crate::signal::SignalChannelRegistry;
 use crate::history::record::{MessageRecord, PartRecord};
 use crate::history::HistoryStore;
 use crate::invocation::{InvocationRecord, InvocationStatus, InvocationStore};
@@ -62,6 +63,7 @@ pub struct ProcHandler {
     tracer: Arc<Tracer>,
     history_store: Option<Arc<HistoryStore>>,
     signal_handler: Arc<SignalHandler>,
+    signal_channels: SignalChannelRegistry,
     agent_manager: AgentManager,
 }
 
@@ -74,8 +76,9 @@ impl ProcHandler {
         let runtime_dir = PathBuf::from("/run/avix");
         let active_invocations = Arc::new(Mutex::new(HashMap::new()));
         let active_sessions = Arc::new(Mutex::new(HashMap::new()));
+        let signal_channels = SignalChannelRegistry::new();
         let signal_handler = Arc::new(SignalHandler::new(
-            runtime_dir.clone(),
+            signal_channels.clone(),
             Arc::clone(&process_table),
             None,
             None,
@@ -110,6 +113,7 @@ impl ProcHandler {
             tracer: Tracer::noop(),
             history_store: None,
             signal_handler,
+            signal_channels,
             agent_manager,
         }
     }
@@ -123,8 +127,9 @@ impl ProcHandler {
     ) -> Self {
         let active_invocations = Arc::new(Mutex::new(HashMap::new()));
         let active_sessions = Arc::new(Mutex::new(HashMap::new()));
+        let signal_channels = SignalChannelRegistry::new();
         let signal_handler = Arc::new(SignalHandler::new(
-            runtime_dir.clone(),
+            signal_channels.clone(),
             Arc::clone(&process_table),
             None,
             None,
@@ -135,7 +140,7 @@ impl ProcHandler {
             Arc::clone(&process_table),
             runtime_dir.clone(),
             master_key.clone(),
-            Some(factory),
+            Some(factory.clone()),
             None,
             None,
             None,
@@ -147,7 +152,7 @@ impl ProcHandler {
             agents_yaml_path,
             master_key,
             runtime_dir,
-            executor_factory: None,
+            executor_factory: Some(factory),
             task_handles: Arc::new(Mutex::new(HashMap::new())),
             invocation_store: None,
             session_store: None,
@@ -159,8 +164,25 @@ impl ProcHandler {
             tracer: Tracer::noop(),
             history_store: None,
             signal_handler,
+            signal_channels,
             agent_manager,
         }
+    }
+
+    /// Override the signal channel registry (used by bootstrap to share it with
+    /// `IpcExecutorFactory` so both sides reference the same map).
+    pub fn with_signal_channels(mut self, channels: SignalChannelRegistry) -> Self {
+        // Rebuild signal_handler with the new registry.
+        self.signal_handler = Arc::new(SignalHandler::new(
+            channels.clone(),
+            Arc::clone(&self.process_table),
+            self.invocation_store.clone(),
+            self.session_store.clone(),
+            Arc::clone(&self.active_invocations),
+            Arc::clone(&self.active_sessions),
+        ));
+        self.signal_channels = channels;
+        self
     }
 
     pub fn with_tracer(mut self, tracer: Arc<Tracer>) -> Self {
@@ -170,9 +192,9 @@ impl ProcHandler {
 
     pub fn with_invocation_store(mut self, store: Arc<InvocationStore>) -> Self {
         self.invocation_store = Some(store.clone());
-        
+
         self.signal_handler = Arc::new(SignalHandler::new(
-            self.runtime_dir.clone(),
+            self.signal_channels.clone(),
             Arc::clone(&self.process_table),
             Some(store.clone()),
             self.session_store.clone(),
@@ -215,9 +237,9 @@ impl ProcHandler {
 
     pub fn with_session_store(mut self, store: Arc<PersistentSessionStore>) -> Self {
         self.session_store = Some(store.clone());
-        
+
         self.signal_handler = Arc::new(SignalHandler::new(
-            self.runtime_dir.clone(),
+            self.signal_channels.clone(),
             Arc::clone(&self.process_table),
             self.invocation_store.clone(),
             Some(store.clone()),

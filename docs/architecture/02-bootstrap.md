@@ -189,7 +189,9 @@ layer, no agent permissions. These are kernel-internal writes.
 - Read `AVIX_ROOT/etc/auth.conf` — replace bootstrap auth with full policy
 - Load `AVIX_MASTER_KEY` from configured source → held in memory only; **env var zeroed immediately**
 - Validate — halt with structured error on any failure
-- Create `IpcExecutorFactory` (with shared `AtpEventBus`)
+- Create `SignalChannelRegistry` (shared between `IpcExecutorFactory` and `ProcHandler`)
+- Create `IpcExecutorFactory` (with shared `AtpEventBus` and `SignalChannelRegistry`)
+- Create `ProcHandler` (with `SignalChannelRegistry` → wires `SignalHandler` to factory channels)
 - Start `KernelIpcServer` on `kernel.sock`
 
 ### Phase 3 — Service Boot

@@ -12,6 +12,7 @@ use crate::llm_client::IpcLlmClient;
 use crate::process::entry::ProcessStatus;
 use crate::process::table::ProcessTable;
 use crate::session::PersistentSessionStore;
+use crate::signal::SignalChannelRegistry;
 use crate::trace::Tracer;
 use crate::types::Pid;
 
@@ -37,6 +38,8 @@ pub struct IpcExecutorFactory {
     invocation_store: Arc<InvocationStore>,
     /// Session store — persists `SessionRecord` state across turns.
     session_store: Arc<PersistentSessionStore>,
+    /// In-process signal channel registry — used to wire signals to running executor tasks.
+    signal_channels: SignalChannelRegistry,
 }
 
 impl IpcExecutorFactory {
@@ -52,11 +55,17 @@ impl IpcExecutorFactory {
             tracer: Tracer::noop(),
             invocation_store,
             session_store,
+            signal_channels: SignalChannelRegistry::new(),
         }
     }
 
     pub fn with_tracer(mut self, tracer: Arc<Tracer>) -> Self {
         self.tracer = tracer;
+        self
+    }
+
+    pub fn with_signal_channels(mut self, channels: SignalChannelRegistry) -> Self {
+        self.signal_channels = channels;
         self
     }
 }
@@ -77,6 +86,7 @@ impl AgentExecutorFactory for IpcExecutorFactory {
         let goal = params.goal.clone();
         let session_id = params.session_id.clone();
         let invocation_id = params.invocation_id.clone();
+        let signal_channels = self.signal_channels.clone();
 
         let handle = tokio::spawn(async move {
             tracer.agent_spawn(pid.as_u32(), &agent_name, &goal, &session_id);
@@ -100,6 +110,9 @@ impl AgentExecutorFactory for IpcExecutorFactory {
                 }
             };
 
+            // Register the in-process signal channel so SignalHandler can reach this executor.
+            signal_channels.register(pid, executor.signal_sender()).await;
+
             // Wire the event bus, tracer, and persistence stores.
             executor = executor.with_event_bus(Arc::clone(&event_bus));
             executor = executor.with_tracer(Arc::clone(&tracer));
@@ -112,6 +125,7 @@ impl AgentExecutorFactory for IpcExecutorFactory {
             match executor.run_with_client(&goal, &llm_client).await {
                 Ok(result) => {
                     info!(pid = pid.as_u32(), "executor turn finished; transitioning to waiting");
+                    signal_channels.unregister(pid).await;
                     // Mark invocation Idle and session Idle — agent is waiting for next message.
                     executor
                         .shutdown_with_status(
@@ -125,6 +139,7 @@ impl AgentExecutorFactory for IpcExecutorFactory {
                 }
                 Err(err) => {
                     warn!(pid = pid.as_u32(), error = %err, "executor crashed");
+                    signal_channels.unregister(pid).await;
                     executor
                         .shutdown_with_status(
                             InvocationStatus::Failed,

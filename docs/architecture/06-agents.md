@@ -230,8 +230,7 @@ flowchart TD
 
 ## Signals
 
-Signals are delivered as JSON-RPC notifications on the agent's per-PID socket
-(`/run/avix/agents/<pid>.sock`). No response is sent or expected.
+### Signal kinds
 
 | Signal | Direction | Meaning |
 |--------|-----------|---------|
@@ -256,6 +255,60 @@ Signals are delivered as JSON-RPC notifications on the agent's per-PID socket
 ```
 
 `RuntimeExecutor` replaces its held token when `new_capability_token` is present.
+
+### In-process signal delivery (executor path)
+
+Signals to running executor tasks are delivered via an **in-process channel**, not sockets.
+
+**Why not sockets?** Each `RuntimeExecutor` runs as a Tokio task inside the kernel process.
+Routing signals through Unix sockets would require the executor to start a socket listener,
+adding round-trip latency and a race between executor startup and signal arrival. The
+in-process channel is zero-copy, instant, and has no setup cost.
+
+**`SignalChannelRegistry`** — a shared `Arc<Mutex<HashMap<u32, mpsc::Sender<Signal>>>>`:
+
+```
+SignalChannelRegistry (Arc-shared)
+      │
+      ├── IpcExecutorFactory  — registers sender at executor launch,
+      │                         deregisters on exit
+      │
+      └── SignalHandler       — calls registry.send(pid, signal) instead of
+                                writing to a socket
+```
+
+**Lifecycle:**
+1. Bootstrap creates one `SignalChannelRegistry` in Phase 2.
+2. Both `IpcExecutorFactory` and `ProcHandler` receive a clone of the same registry.
+3. When `IpcExecutorFactory::launch()` starts an executor task, it immediately calls
+   `signal_channels.register(pid, executor.signal_sender())`.
+4. `SignalHandler` (called by `ProcHandler`) calls `signal_channels.send(pid, sig)` — this
+   drops the signal into the executor's `mpsc::Receiver` with no IPC.
+5. On exit (success or error), the factory calls `signal_channels.unregister(pid)`.
+
+**Signal interruption of in-flight LLM calls:**
+
+`run_with_client` races the LLM turn future against the signal receiver using
+`tokio::select!`. When a signal arrives while the LLM is streaming, the select branch wins,
+cancels the streaming future via `CancellationToken`, then handles the signal:
+
+```
+tokio::select! {
+    res = run_turn_streaming(req, cancel.clone()) => { ... }
+    sig = signal_rx.recv()                        => {
+        cancel.cancel();           // abort the in-flight LLM stream
+        handle_signal_during_llm(sig);
+        if killed → return Err(Cancelled)
+        else      → continue (re-enters loop; pause-wait if SIGPAUSE)
+    }
+}
+```
+
+Between turns, pending signals are drained synchronously. If `paused` is set, the loop
+blocks in a `signal_rx.recv()` wait until `SIGRESUME` arrives.
+
+**SIGPIPE (pipe manager path):** `PipeManager::close` uses `SignalChannelRegistry` to
+deliver `SIGPIPE` to the partner agent in-process — the same registry, not sockets.
 
 ---
 
@@ -443,9 +496,9 @@ SIGSAVE / snap/save / auto-interval
 
 If no VFS is attached, the snapshot is silently skipped — the executor continues normally.
 
-For SIGSAVE arriving via the agent socket (production path), the socket handler sets
-`snapshot_requested: AtomicBool`. The main turn loop picks this up at the next
-tool boundary and calls `capture_and_write_snapshot`.
+For SIGSAVE arriving via the in-process signal channel, `handle_signal_between_turns`
+sets `snapshot_requested: AtomicBool`. The main turn loop picks this up at the next
+turn boundary and calls `capture_and_write_snapshot`.
 
 For `deliver_signal("SIGSAVE")` (test path), `capture_and_write_snapshot` is called
 directly in the same async context.

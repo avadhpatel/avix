@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -10,11 +9,11 @@ use crate::invocation::{InvocationStatus, InvocationStore};
 use crate::process::ProcessTable;
 use crate::process::entry::ProcessStatus;
 use crate::session::{PersistentSessionStore, SessionStatus};
-use crate::signal::{Signal, SignalDelivery, SignalKind};
+use crate::signal::{Signal, SignalChannelRegistry, SignalKind};
 use crate::types::Pid;
 
 pub struct SignalHandler {
-    runtime_dir: PathBuf,
+    channels: SignalChannelRegistry,
     process_table: Arc<ProcessTable>,
     invocation_store: Option<Arc<InvocationStore>>,
     session_store: Option<Arc<PersistentSessionStore>>,
@@ -24,7 +23,7 @@ pub struct SignalHandler {
 
 impl SignalHandler {
     pub fn new(
-        runtime_dir: PathBuf,
+        channels: SignalChannelRegistry,
         process_table: Arc<ProcessTable>,
         invocation_store: Option<Arc<InvocationStore>>,
         session_store: Option<Arc<PersistentSessionStore>>,
@@ -32,13 +31,38 @@ impl SignalHandler {
         active_sessions: Arc<Mutex<HashMap<u32, String>>>,
     ) -> Self {
         Self {
-            runtime_dir,
+            channels,
             process_table,
             invocation_store,
             session_store,
             active_invocations,
             active_sessions,
         }
+    }
+
+    /// Send a signal to one agent via its registered in-process channel.
+    async fn deliver_to(&self, pid: Pid, kind: SignalKind, payload: serde_json::Value) {
+        let sig = Signal { target: pid, kind, payload };
+        if !self.channels.send(pid, sig).await {
+            warn!(pid = pid.as_u32(), "no signal channel registered for agent (not running?)");
+        }
+    }
+
+    /// Send a signal to multiple agents concurrently.
+    async fn broadcast_to(&self, pids: &[Pid], kind: SignalKind, payload: serde_json::Value) {
+        let futs: Vec<_> = pids
+            .iter()
+            .map(|&p| {
+                let channels = self.channels.clone();
+                let k = kind.clone();
+                let v = payload.clone();
+                async move {
+                    let sig = Signal { target: p, kind: k, payload: v };
+                    channels.send(p, sig).await;
+                }
+            })
+            .collect();
+        futures::future::join_all(futs).await;
     }
 
     pub async fn pause_agent(&self, pid: u32) -> Result<(), AvixError> {
@@ -58,17 +82,8 @@ impl SignalHandler {
             debug!(pid, "updated invocation status to Paused");
         }
 
-        let delivery = SignalDelivery::new(self.runtime_dir.clone());
-        let signal = Signal {
-            target: Pid::new(pid),
-            kind: SignalKind::Pause,
-            payload: serde_json::Value::Null,
-        };
-        if let Err(e) = delivery.deliver(signal).await {
-            warn!(pid, error = %e, "failed to deliver SIGPAUSE");
-        } else {
-            debug!(pid, "delivered SIGPAUSE");
-        }
+        self.deliver_to(Pid::new(pid), SignalKind::Pause, serde_json::Value::Null).await;
+        debug!(pid, "delivered SIGPAUSE");
 
         let session_id_str = self.active_sessions.lock().await.get(&pid).cloned();
         if let (Some(sid), Some(sstore)) = (session_id_str, &self.session_store) {
@@ -83,9 +98,7 @@ impl SignalHandler {
                             .collect();
                         if !other_pids.is_empty() {
                             info!(pid, sibling_count = other_pids.len(), "cascading pause to session participants");
-                            delivery
-                                .broadcast(&other_pids, SignalKind::Pause, serde_json::Value::Null)
-                                .await;
+                            self.broadcast_to(&other_pids, SignalKind::Pause, serde_json::Value::Null).await;
                             for &sibling in &other_pids {
                                 let _ = self
                                     .process_table
@@ -133,17 +146,8 @@ impl SignalHandler {
             debug!(pid, "updated invocation status to Running");
         }
 
-        let delivery = SignalDelivery::new(self.runtime_dir.clone());
-        let signal = Signal {
-            target: Pid::new(pid),
-            kind: SignalKind::Resume,
-            payload: serde_json::Value::Null,
-        };
-        if let Err(e) = delivery.deliver(signal).await {
-            warn!(pid, error = %e, "failed to deliver SIGRESUME");
-        } else {
-            debug!(pid, "delivered SIGRESUME");
-        }
+        self.deliver_to(Pid::new(pid), SignalKind::Resume, serde_json::Value::Null).await;
+        debug!(pid, "delivered SIGRESUME");
 
         let session_id_str = self.active_sessions.lock().await.get(&pid).cloned();
         if let (Some(sid), Some(sstore)) = (session_id_str, &self.session_store) {
@@ -158,9 +162,7 @@ impl SignalHandler {
                             .collect();
                         if !other_pids.is_empty() {
                             info!(pid, sibling_count = other_pids.len(), "cascading resume to session participants");
-                            delivery
-                                .broadcast(&other_pids, SignalKind::Resume, serde_json::Value::Null)
-                                .await;
+                            self.broadcast_to(&other_pids, SignalKind::Resume, serde_json::Value::Null).await;
                             for &sibling in &other_pids {
                                 let _ = self
                                     .process_table
@@ -212,21 +214,10 @@ impl SignalHandler {
             "SIGESCALATE" => SignalKind::Escalate,
             other => {
                 warn!(signal = other, "unknown signal requested");
-                return Err(AvixError::ConfigParse(format!(
-                    "unknown signal: {other}"
-                )))
+                return Err(AvixError::ConfigParse(format!("unknown signal: {other}")));
             }
         };
-        let delivery = SignalDelivery::new(self.runtime_dir.clone());
-        let sig = Signal {
-            target: Pid::new(pid),
-            kind,
-            payload,
-        };
-        if let Err(e) = delivery.deliver(sig).await {
-            warn!(pid, signal, error = %e, "failed to deliver signal");
-            return Err(e);
-        }
+        self.deliver_to(Pid::new(pid), kind, payload).await;
         debug!(pid, signal, "signal delivered successfully");
         Ok(())
     }

@@ -16,9 +16,24 @@ schemas) and the Avix system. It is the stateful component that:
 - Enforces per-tool budgets and the maximum tool-chain length
 - Handles Human-in-the-Loop (HIL) escalation (3 scenarios)
 - Registers and deregisters Category 2 tools at spawn/exit
+- Receives and reacts to kernel signals via an in-process `mpsc` channel
 
 `RuntimeExecutor` never calls provider APIs directly — all AI calls go through
 `llm.svc` via IPC (ADR-02).
+
+### In-process signal channel
+
+Each `RuntimeExecutor` owns a `tokio::sync::mpsc` channel pair:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `signal_tx` | `mpsc::Sender<Signal>` | Exposed via `signal_sender()` — given to `IpcExecutorFactory` at spawn so `SignalHandler` can reach this executor |
+| `signal_rx` | `Option<mpsc::Receiver<Signal>>` | Taken once by `run_with_client` via `Option::take`; drives the `tokio::select!` signal arm |
+
+`deliver_signal(&str)` — a convenience method that both updates atomics immediately
+(for between-turn polling) AND sends on `signal_tx` (for mid-LLM interruption). Only
+`signal_rx` is consumed inside `run_with_client`; the atomics are the source of truth
+between turns.
 
 ---
 

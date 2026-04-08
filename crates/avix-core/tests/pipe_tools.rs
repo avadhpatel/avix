@@ -3,12 +3,11 @@ use avix_core::{
     error::AvixError,
     memfs::VfsRouter,
     pipe::{BackpressurePolicy, PipeConfig, PipeDirection, PipeEncoding, PipeManager, ReadResult},
-    signal::delivery::SignalDelivery,
+    signal::{SignalChannelRegistry, kind::SignalKind},
     types::Pid,
 };
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
-use tempfile::tempdir;
 
 fn pid(n: u32) -> Pid {
     Pid::new(n)
@@ -119,49 +118,26 @@ async fn pipe_read_returns_closed_after_close() {
 
 #[tokio::test]
 async fn pipe_close_delivers_sigpipe_to_partner() {
-    use avix_core::{
-        ipc::message::{IpcMessage, JsonRpcResponse},
-        signal::agent_socket::create_agent_socket,
-    };
+    use tokio::sync::mpsc;
 
-    let dir = tempdir().unwrap();
-
-    // pid=20 (target) has a signal socket — will receive SIGPIPE.
-    let received = Arc::new(tokio::sync::Mutex::new(None::<String>));
-    let received_clone = received.clone();
-
-    let (server, _handle) = create_agent_socket(dir.path(), pid(20)).await.unwrap();
-    tokio::spawn(async move {
-        server
-            .serve(move |msg| {
-                let flag = received_clone.clone();
-                Box::pin(async move {
-                    if let IpcMessage::Notification(n) = msg {
-                        *flag.lock().await =
-                            Some(n.params["signal"].as_str().unwrap_or("").to_string());
-                    }
-                    None
-                })
-                    as std::pin::Pin<
-                        Box<dyn std::future::Future<Output = Option<JsonRpcResponse>> + Send>,
-                    >
-            })
-            .await
-            .ok();
-    });
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    // Register pid=20 (target) in the channel registry.
+    let channels = SignalChannelRegistry::new();
+    let (tx, mut rx) = mpsc::channel(8);
+    channels.register(pid(20), tx).await;
 
     let mgr = PipeManager::new();
     let id = mgr.open(out_config(10, 20), None).await.unwrap();
 
-    let delivery = SignalDelivery::new(dir.path().to_path_buf());
     // pid=10 (source) closes the pipe → SIGPIPE to pid=20
-    mgr.close(&id, pid(10), Some(&delivery), None, "source_closed")
+    mgr.close(&id, pid(10), Some(&channels), None, "source_closed")
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_millis(30)).await;
-    assert_eq!(received.lock().await.as_deref(), Some("SIGPIPE"));
+    let sig = tokio::time::timeout(Duration::from_millis(100), rx.recv())
+        .await
+        .expect("timed out waiting for SIGPIPE")
+        .expect("channel closed unexpectedly");
+    assert_eq!(sig.kind, SignalKind::Pipe);
 }
 
 // ── T-E-09: pipe/open writes VFS manifest ────────────────────────────────────

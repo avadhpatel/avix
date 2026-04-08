@@ -16,8 +16,8 @@ use crate::error::AvixError;
 use crate::memfs::{VfsPath, VfsRouter};
 use crate::pipe::channel::{Pipe, PipeError};
 use crate::pipe::config::{BackpressurePolicy, PipeConfig, PipeEncoding};
-use crate::signal::delivery::SignalDelivery;
 use crate::signal::kind::{Signal, SignalKind};
+use crate::signal::SignalChannelRegistry;
 use crate::types::Pid;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(5);
@@ -149,7 +149,7 @@ impl PipeManager {
         &self,
         pipe_id: &str,
         caller_pid: Pid,
-        signal_delivery: Option<&SignalDelivery>,
+        signal_channels: Option<&SignalChannelRegistry>,
         vfs: Option<&VfsRouter>,
         close_reason: &str,
     ) -> Result<(), AvixError> {
@@ -169,17 +169,20 @@ impl PipeManager {
             update_pipe_manifest_closed(vfs, pipe_id, close_reason).await?;
         }
 
-        if let (Some(delivery), Some(partner_pid)) = (signal_delivery, partner) {
-            // Best-effort SIGPIPE delivery; ignore errors (partner may have already exited).
-            let _ = delivery
-                .deliver(Signal {
-                    target: partner_pid,
-                    kind: SignalKind::Pipe,
-                    payload: serde_json::json!({
-                        "pipeId": pipe_id,
-                        "reason": close_reason,
-                    }),
-                })
+        if let (Some(channels), Some(partner_pid)) = (signal_channels, partner) {
+            // Best-effort SIGPIPE delivery; no-op if partner has already exited.
+            channels
+                .send(
+                    partner_pid,
+                    Signal {
+                        target: partner_pid,
+                        kind: SignalKind::Pipe,
+                        payload: serde_json::json!({
+                            "pipeId": pipe_id,
+                            "reason": close_reason,
+                        }),
+                    },
+                )
                 .await;
         }
 
@@ -191,7 +194,7 @@ impl PipeManager {
     pub async fn close_pipes_for_pid(
         &self,
         pid: Pid,
-        signal_delivery: Option<&SignalDelivery>,
+        signal_channels: Option<&SignalChannelRegistry>,
         vfs: Option<&VfsRouter>,
     ) -> Result<(), AvixError> {
         let pipe_ids: Vec<String> = {
@@ -204,7 +207,7 @@ impl PipeManager {
         };
 
         for id in pipe_ids {
-            self.close(&id, pid, signal_delivery, vfs, "owner_exited")
+            self.close(&id, pid, signal_channels, vfs, "owner_exited")
                 .await
                 .ok(); // ignore errors; pipe may have already been closed
         }
