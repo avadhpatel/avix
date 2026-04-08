@@ -89,7 +89,7 @@ async fn dispatch_request(
         "kernel/proc/spawn" => {
             let name = params["name"].as_str().unwrap_or("unnamed");
             let goal = params["goal"].as_str().unwrap_or("");
-            let session_id = params["session_id"].as_str().unwrap_or("unknown");
+            let session_id = params["session_id"].as_str().unwrap_or("");
             let caller = params["caller"].as_str().unwrap_or("gateway");
             let parent_pid = params["parent_pid"].as_u64().map(|v| v as u32);
 

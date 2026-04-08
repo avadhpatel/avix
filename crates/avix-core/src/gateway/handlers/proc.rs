@@ -24,8 +24,22 @@ pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
             }
             ipc_forward(&id, &ipc_method, body, ctx.ipc.as_ref()).await
         }
-        "spawn"
-        | "kill"
+        "spawn" => {
+            let ipc_method = "kernel/proc/spawn";
+            tracing::info!(op, ipc_method, "forwarding to kernel IPC");
+            let mut body = cmd.cmd.body;
+            // Inject caller identity so the kernel records the correct user on the
+            // invocation record. Also ensure session_id is present (empty = new session).
+            if body["caller"].as_str().unwrap_or("").is_empty() {
+                body["caller"] = serde_json::json!(cmd.caller_identity);
+            }
+            body.as_object_mut()
+                .unwrap()
+                .entry("session_id")
+                .or_insert(serde_json::json!(""));
+            ipc_forward(&id, ipc_method, body, ctx.ipc.as_ref()).await
+        }
+        "kill"
         | "list"
         | "stat"
         | "pause"
@@ -42,13 +56,6 @@ pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
         | "part-list" => {
             let ipc_method = format!("kernel/proc/{op}");
             tracing::info!(op, ipc_method = %ipc_method, "forwarding to kernel IPC");
-            let span = if op == "spawn" {
-                Some(tracing::trace_span!("atp.proc.spawn"))
-            } else {
-                None
-            };
-            let _enter = span.as_ref().map(|s| s.enter());
-            drop(_enter); // drop before await
             ipc_forward(&id, &ipc_method, cmd.cmd.body, ctx.ipc.as_ref()).await
         }
         "session-list" | "session-get" | "session-resume" => {
@@ -178,6 +185,31 @@ mod tests {
             auth_svc: base.auth_svc,
             hil_manager: base.hil_manager,
         }
+    }
+
+    #[tokio::test]
+    async fn spawn_injects_caller_and_empty_session_id() {
+        let spy = CapturingIpcRouter::new(json!({"pid": 5}));
+        let ctx = make_capturing_ctx(Arc::clone(&spy)).await;
+        let reply = handle(make_cmd("spawn"), &ctx).await;
+        assert!(reply.ok);
+        let params = spy.last_params().await;
+        assert_eq!(params["caller"].as_str(), Some("alice"), "caller must be injected");
+        assert_eq!(params["session_id"].as_str(), Some(""), "session_id must default to empty string");
+    }
+
+    #[tokio::test]
+    async fn spawn_preserves_explicit_session_id() {
+        let spy = CapturingIpcRouter::new(json!({"pid": 6}));
+        let ctx = make_capturing_ctx(Arc::clone(&spy)).await;
+        let mut cmd = make_cmd("spawn");
+        cmd.cmd.body = json!({ "session_id": "550e8400-e29b-41d4-a716-446655440000" });
+        let reply = handle(cmd, &ctx).await;
+        assert!(reply.ok);
+        assert_eq!(
+            spy.last_params().await["session_id"].as_str(),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
     }
 
     #[tokio::test]
