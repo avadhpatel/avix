@@ -136,6 +136,8 @@ points only — they parse CLI args, call `avix-core`, and exit.
 
 ## Development Workflow
 
+NEVER USE grep or read commands, ONLY USE Serena LSP tools for all code reading.
+
 Claude **operates in exactly one of two modes at any time**. It must never mix modes or perform actions from both modes in a single response. The user will explicitly indicate which mode to use (or the context will make it clear). Follow the chosen mode strictly and do not deviate.
 
 ### Mode 1: Feature Planning & Dev Plan Creation
