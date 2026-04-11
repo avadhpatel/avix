@@ -347,7 +347,7 @@ fn tool_budget_decrements_to_zero_then_rejects() {
 async fn tool_list_excludes_removed_tool_after_changed_event() {
     let mut executor = {
         let (mut ex, _) = spawn_with_caps(30, &[]).await;
-        ex.tool_list = vec![
+        ex.tools.tool_list = vec![
             json!({"name": "fs__read", "description": "Read a file"}),
             json!({"name": "fs__write", "description": "Write a file"}),
         ];

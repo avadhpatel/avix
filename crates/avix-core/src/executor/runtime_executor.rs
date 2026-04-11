@@ -1,35 +1,32 @@
-use std::collections::{HashMap, HashSet};
+// Child modules — declared here so they share this module's privacy scope
+// and can access private RuntimeExecutor fields.
+mod dispatch_manager;
+mod proc_manager;
+
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
-use tokio_util::sync::CancellationToken;
 
 use crate::error::AvixError;
 use crate::gateway::event_bus::AtpEventBus;
-use crate::kernel::resource_request::{
-    KernelResourceHandler, ResourceGrant, ResourceItem, ResourceRequest, Urgency,
-};
-use crate::llm_client::StreamChunk;
-use crate::llm_client::{LlmCompleteResponse, StopReason};
-use crate::llm_svc::adapter::AvixToolCall;
-use crate::memfs::{VfsPath, VfsRouter};
-use crate::memory_svc::{
-    service::{CallerContext, MemoryService},
-    vfs_layout::init_user_memory_tree,
-};
-use crate::snapshot::{capture, CaptureParams, CapturedBy, SnapshotMemory, SnapshotTrigger};
-use crate::signal::kind::{Signal, SignalKind};
+use crate::kernel::resource_request::KernelResourceHandler;
+use crate::llm_client::LlmCompleteResponse;
+use crate::memfs::VfsRouter;
+use crate::memory_svc::vfs_layout::init_user_memory_tree;
+use crate::signal::kind::Signal;
 use crate::trace::Tracer;
 use crate::types::{token::CapabilityToken, tool::ToolVisibility, Pid};
 
+use super::memory::MemoryManager;
 use super::mock_kernel::MockKernelHandle;
 use super::prompt::build_system_prompt;
 use super::spawn::SpawnParams;
-use super::stop_reason::{interpret_stop_reason, TurnAction};
-use super::tool_registration::{cat2_tool_descriptor, compute_cat2_tools};
-use super::validation::{validate_tool_call, ToolBudgets};
+use super::tool_manager::ToolManager;
+use super::tool_registration::compute_cat2_tools;
 
 /// Minimal trait that MockToolRegistry satisfies
 pub trait ToolRegistryHandle: Send + Sync {
@@ -124,78 +121,47 @@ pub struct RuntimeExecutor {
     pub session_id: String,
     pub token: CapabilityToken,
     pub pending_messages: Vec<String>,
-    pub registered_cat2: Vec<String>,
-    removed_tools: Vec<String>,
-    pub tool_list: Vec<serde_json::Value>,
-    pub tool_budgets: ToolBudgets,
-    hil_required_tools: Vec<String>,
+    /// Tool management sub-struct (tool_list, budgets, HIL, registered_cat2).
+    pub tools: ToolManager,
     #[allow(dead_code)]
     runtime_dir: PathBuf,
-    // Day 18 fields
-    llm_queue: Arc<std::sync::Mutex<Vec<LlmCompleteResponse>>>,
-    call_log: Arc<std::sync::Mutex<Vec<Vec<serde_json::Value>>>>,
-    fs_data: Arc<std::sync::Mutex<HashMap<String, Vec<u8>>>>,
+    // Mock LLM infrastructure (used by run_until_complete in tests)
+    pub(self) llm_queue: Arc<std::sync::Mutex<Vec<LlmCompleteResponse>>>,
+    pub(self) call_log: Arc<std::sync::Mutex<Vec<Vec<serde_json::Value>>>>,
+    pub(self) fs_data: Arc<std::sync::Mutex<HashMap<String, Vec<u8>>>>,
     pub max_tool_chain_length: usize,
-    // kernel handle for dispatch (optional)
-    kernel: Option<Arc<MockKernelHandle>>,
-    /// Real kernel resource handler — used for cap/request-tool and token renewal.
-    /// When set, takes precedence over the `MockKernelHandle` auto-approve flag.
-    resource_handler: Option<Arc<KernelResourceHandler>>,
-    /// VFS handle — when set, pipe/open writes a /proc/<pid>/pipes/<pipeId>.yaml record.
-    vfs: Option<Arc<VfsRouter>>,
+    // Optional kernel handles
+    pub(self) kernel: Option<Arc<MockKernelHandle>>,
+    pub(self) resource_handler: Option<Arc<KernelResourceHandler>>,
+    pub(self) vfs: Option<Arc<VfsRouter>>,
     registry_ref: RegistryRef,
     /// Set to `true` by the signal listener when SIGPAUSE is received.
-    /// The LLM loop should check this at each tool boundary and wait until cleared.
     pub paused: Arc<AtomicBool>,
     /// Set to `true` by the signal listener when SIGKILL or SIGSTOP is received.
-    /// The LLM loop should check this and exit cleanly.
     pub killed: Arc<AtomicBool>,
-    /// Set to `true` by the socket signal listener when SIGSAVE is received.
-    /// The main loop checks this each turn and calls `capture_and_write_snapshot`.
+    /// Set to `true` when SIGSAVE is received; checked at turn start.
     pub snapshot_requested: Arc<AtomicBool>,
-    /// Memory service — when set, enables memory/log-event dispatch at SIGSTOP.
-    memory_svc: Option<Arc<MemoryService>>,
-    /// Pre-built memory context block injected into the system prompt at spawn.
-    memory_context: Option<String>,
-    /// Conversation history: list of (role, content) pairs, stored for session auto-log.
-    pub conversation_history: Vec<(String, String)>,
-    /// Event bus — when set, agent_tool_call / agent_tool_result events are published live.
-    event_bus: Option<Arc<AtpEventBus>>,
-    /// Tracer — when set, LLM calls, tool calls, and exits are written to trace files.
-    tracer: Option<Arc<Tracer>>,
-    /// Invocation store — when set, conversation is flushed on shutdown.
-    invocation_store: Option<Arc<crate::invocation::InvocationStore>>,
-    /// Invocation UUID assigned at spawn by ProcHandler (empty string if not tracked).
-    invocation_id: String,
-    /// Session store — when set, session status is updated on Idle transitions.
-    session_store: Option<Arc<crate::session::PersistentSessionStore>>,
-    /// Snapshot interval — if set, persist_interim is called after every N tool calls.
-    snapshot_interval: Option<u32>,
-    /// Tool call counter for snapshot tracking.
-    tool_calls_since_last_snapshot: u32,
+    /// Memory management sub-struct (memory_svc, memory_context, conversation_history).
+    pub memory: MemoryManager,
+    pub(self) event_bus: Option<Arc<AtpEventBus>>,
+    pub(self) tracer: Option<Arc<Tracer>>,
+    pub(self) invocation_store: Option<Arc<crate::invocation::InvocationStore>>,
+    pub(self) invocation_id: String,
+    pub(self) session_store: Option<Arc<crate::session::PersistentSessionStore>>,
+    pub(self) snapshot_interval: Option<u32>,
+    pub(self) tool_calls_since_last_snapshot: u32,
 
-    // ── status tracking fields ────────────────────────────────────────────────
-    /// When this agent was spawned (used for wallTimeSec in status.yaml).
+    // ── status tracking ───────────────────────────────────────────────────────
     pub spawned_at: chrono::DateTime<chrono::Utc>,
-    /// Tokens occupying the working context window (updated each turn).
     pub context_used: u64,
-    /// Maximum context-window token limit passed at spawn (0 = unknown).
     pub context_limit: u64,
-    /// Tools denied at spawn.
     pub denied_tools: Vec<String>,
-    /// Total tokens consumed in this session (accumulates across turns).
     pub tokens_consumed: u64,
-    /// Total tool calls dispatched over the agent's lifetime.
     pub tool_calls_total: u32,
-    /// Name of the last signal received (interior-mutable; updated by signal listener).
-    last_signal_received: Arc<Mutex<Option<String>>>,
-    /// Pending signal count (interior-mutable; updated by signal listener).
+    pub(self) last_signal_received: Arc<Mutex<Option<String>>>,
     pub pending_signal_count: Arc<AtomicU32>,
-    /// Sender half of the in-process signal channel.
-    /// External callers (kernel, pipe manager) send signals here via [`deliver_signal`].
-    signal_tx: mpsc::Sender<Signal>,
-    /// Receiver half — taken once by [`run_with_client`] via `Option::take`.
-    signal_rx: Option<mpsc::Receiver<Signal>>,
+    pub(self) signal_tx: mpsc::Sender<Signal>,
+    pub(self) signal_rx: Option<mpsc::Receiver<Signal>>,
 }
 
 enum RegistryRef {
@@ -207,10 +173,10 @@ impl RuntimeExecutor {
         params: SpawnParams,
         registry: Arc<MockToolRegistry>,
     ) -> Result<Self, AvixError> {
-        let tools = compute_cat2_tools(&params.token, &params.spawned_by);
+        let cat2_tools = compute_cat2_tools(&params.token, &params.spawned_by);
         let mut registered_cat2 = Vec::new();
 
-        for (name, visibility) in &tools {
+        for (name, visibility) in &cat2_tools {
             registry
                 .register_tool(params.pid.as_u32(), name, visibility.clone())
                 .await;
@@ -218,6 +184,8 @@ impl RuntimeExecutor {
         }
 
         let (signal_tx, signal_rx) = mpsc::channel::<Signal>(64);
+
+        let tools = ToolManager::new(registered_cat2);
 
         let mut executor = Self {
             pid: params.pid,
@@ -227,11 +195,7 @@ impl RuntimeExecutor {
             session_id: params.session_id,
             token: params.token,
             pending_messages: Vec::new(),
-            registered_cat2,
-            removed_tools: Vec::new(),
-            tool_list: Vec::new(),
-            tool_budgets: ToolBudgets::default(),
-            hil_required_tools: Vec::new(),
+            tools,
             llm_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
             call_log: Arc::new(std::sync::Mutex::new(Vec::new())),
             fs_data: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -243,10 +207,8 @@ impl RuntimeExecutor {
             paused: Arc::new(AtomicBool::new(false)),
             killed: Arc::new(AtomicBool::new(false)),
             snapshot_requested: Arc::new(AtomicBool::new(false)),
-            memory_svc: None,
+            memory: MemoryManager::new(),
             runtime_dir: params.runtime_dir.clone(),
-            memory_context: None,
-            conversation_history: Vec::new(),
             event_bus: None,
             tracer: None,
             invocation_store: None,
@@ -266,7 +228,6 @@ impl RuntimeExecutor {
             signal_rx: Some(signal_rx),
         };
 
-        // GAP 3: populate tool_list at spawn time
         executor.refresh_tool_list();
 
         Ok(executor)
@@ -294,8 +255,7 @@ impl RuntimeExecutor {
         self
     }
 
-    /// Attach a `KernelResourceHandler` so `cap/request-tool` and token renewal
-    /// route through the real handler instead of the mock auto-approve flag.
+    /// Attach a `KernelResourceHandler` for `cap/request-tool` and token renewal.
     pub fn with_resource_handler(mut self, handler: Arc<KernelResourceHandler>) -> Self {
         self.resource_handler = Some(handler);
         self
@@ -327,28 +287,26 @@ impl RuntimeExecutor {
         self
     }
 
-    /// Set snapshot interval — if set, persist_interim is called after every N tool calls.
+    /// Set snapshot interval — persist_interim is called after every N tool calls.
     pub fn with_snapshot_interval(mut self, interval: u32) -> Self {
         self.snapshot_interval = Some(interval);
         self
     }
 
     /// Attach a `MemoryService` so SIGSTOP auto-logs the session to episodic memory.
-    pub fn with_memory_svc(mut self, svc: Arc<MemoryService>) -> Self {
-        self.memory_svc = Some(svc);
+    pub fn with_memory_svc(mut self, svc: Arc<crate::memory_svc::service::MemoryService>) -> Self {
+        self.memory.memory_svc = Some(svc);
         self
     }
 
-    /// Initialise the memory VFS tree for this agent.
-    ///
-    /// Creates `/users/<owner>/memory/<agent>/{episodic,semantic,preferences,grants}/` dirs.
-    /// No-op when no VFS is attached or when no memory tools are in the token.
+    // ── Memory delegates ──────────────────────────────────────────────────────
+
+    /// Initialise the memory VFS tree for this agent (dirs under `/users/<owner>/memory/<agent>/`).
     pub async fn init_memory_tree(&self) {
         let vfs = match &self.vfs {
             Some(v) => Arc::clone(v),
             None => return,
         };
-        // Only init if the agent has any memory tools
         let has_memory = self
             .token
             .granted_tools
@@ -358,599 +316,58 @@ impl RuntimeExecutor {
             return;
         }
         if let Err(e) = init_user_memory_tree(&vfs, &self.spawned_by, &self.agent_name).await {
-            tracing::warn!(
-                pid = self.pid.as_u32(),
-                err = ?e,
-                "memory tree init failed"
-            );
+            tracing::warn!(pid = self.pid.as_u32(), err = ?e, "memory tree init failed");
         }
     }
 
     /// Build and store the memory context block from existing VFS records.
-    ///
-    /// Reads preferences, recent episodic records, and pinned facts.
-    /// Stores the result in `self.memory_context` for inclusion in the system prompt.
-    /// No-op when no VFS is attached.
     pub async fn init_memory_context(&mut self) {
-        self.memory_context = self.build_memory_context_block().await;
-    }
-
-    async fn build_memory_context_block(&self) -> Option<String> {
-        use crate::memory_svc::{store, UserPreferenceModel};
-        let vfs = self.vfs.as_ref()?;
-        let mut parts = vec![];
-
-        // 1. User preferences
-        let pref_path = UserPreferenceModel::vfs_path(&self.spawned_by, &self.agent_name);
-        if let Ok(bytes) = vfs.read(&VfsPath::parse(&pref_path).ok()?).await {
-            if let Ok(model) = UserPreferenceModel::from_yaml(&String::from_utf8_lossy(&bytes)) {
-                if !model.spec.summary.is_empty() {
-                    let mut pref_text = format!("User preferences:\n  {}", model.spec.summary);
-                    if !model.spec.corrections.is_empty() {
-                        pref_text.push_str("\n\n  Corrections to avoid repeating:");
-                        for c in &model.spec.corrections {
-                            pref_text.push_str(&format!(
-                                "\n    • \"{}\" ({})",
-                                c.correction,
-                                c.at.format("%Y-%m-%d")
-                            ));
-                        }
-                    }
-                    parts.push(pref_text);
-                }
-            }
-        }
-
-        // 2. Recent episodic context (last 5 records)
-        let episodic_dir = format!(
-            "/users/{}/memory/{}/episodic",
-            self.spawned_by, self.agent_name
-        );
-        if let Ok(mut records) = store::list_records(vfs, &episodic_dir).await {
-            records.sort_by(|a, b| b.metadata.created_at.cmp(&a.metadata.created_at));
-            let recent: Vec<_> = records.into_iter().take(5).collect();
-            if !recent.is_empty() {
-                let mut hist = format!("Recent session history (last {}):", recent.len());
-                for r in &recent {
-                    let summary_len = r.spec.content.len().min(120);
-                    hist.push_str(&format!(
-                        "\n  • {} {}",
-                        r.metadata.created_at.format("%Y-%m-%d"),
-                        &r.spec.content[..summary_len]
-                    ));
-                }
-                parts.push(hist);
-            }
-        }
-
-        // 3. Pinned facts
-        let semantic_dir = format!(
-            "/users/{}/memory/{}/semantic",
-            self.spawned_by, self.agent_name
-        );
-        if let Ok(all_semantic) = store::list_records(vfs, &semantic_dir).await {
-            let pinned: Vec<_> = all_semantic
-                .into_iter()
-                .filter(|r| r.metadata.pinned)
-                .collect();
-            if !pinned.is_empty() {
-                let mut pin_text = "Pinned facts:".to_string();
-                for r in &pinned {
-                    let key = r.spec.key.as_deref().unwrap_or(&r.metadata.id);
-                    let content_len = r.spec.content.len().min(120);
-                    pin_text.push_str(&format!(
-                        "\n  • {}: {}",
-                        key,
-                        &r.spec.content[..content_len]
-                    ));
-                }
-                parts.push(pin_text);
-            }
-        }
-
-        if parts.is_empty() {
-            return None;
-        }
-
-        Some(format!(
-            "[MEMORY CONTEXT — {} — injected by memory.svc]\n\n{}",
-            self.agent_name,
-            parts.join("\n\n")
-        ))
+        let vfs = self.vfs.clone();
+        let spawned_by = self.spawned_by.clone();
+        let agent_name = self.agent_name.clone();
+        self.memory
+            .init_memory_context(vfs.as_ref(), &spawned_by, &agent_name)
+            .await;
     }
 
     /// Record a conversation message in the history (for session auto-log).
     pub fn push_conversation_message(&mut self, role: &str, content: &str) {
-        self.conversation_history
-            .push((role.to_string(), content.to_string()));
+        self.memory.push_conversation_message(role, content);
     }
 
-    /// Return a clone of the signal sender so external callers (e.g. `IpcExecutorFactory`)
-    /// can register it in a [`SignalChannelRegistry`] for later delivery.
-    pub fn signal_sender(&self) -> mpsc::Sender<Signal> {
-        self.signal_tx.clone()
-    }
+    // ── Tool delegates ────────────────────────────────────────────────────────
 
-    /// Deliver a signal to the executor.
-    ///
-    /// Updates the atomic tracking flags immediately **and** forwards the signal onto
-    /// the in-process channel so that an in-flight `run_with_client` loop can react
-    /// without waiting for the current LLM call to complete.
-    ///
-    /// SIGSTOP: runs auto-log if memory service is attached, then sets killed flag.
-    /// SIGKILL: sets killed flag immediately.
-    /// All signals update `last_signal_received` and increment `pending_signal_count`.
-    pub async fn deliver_signal(&self, signal: &str) {
-        // Record the signal in tracking state
-        *self.last_signal_received.lock().await = Some(signal.to_string());
-        self.pending_signal_count.fetch_add(1, Ordering::AcqRel);
-
-        // Forward onto the channel so run_with_client can interrupt an in-flight LLM call.
-        let kind = match signal {
-            "SIGKILL" => SignalKind::Kill,
-            "SIGSTOP" => SignalKind::Stop,
-            "SIGPAUSE" => SignalKind::Pause,
-            "SIGRESUME" => SignalKind::Resume,
-            "SIGSAVE" => SignalKind::Save,
-            "SIGPIPE" => SignalKind::Pipe,
-            "SIGESCALATE" => SignalKind::Escalate,
-            "SIGSTART" => SignalKind::Start,
-            _ => SignalKind::Usr1,
-        };
-        let sig = Signal {
-            target: self.pid,
-            kind,
-            payload: serde_json::Value::Null,
-        };
-        // Best-effort: ignore if the channel is full or the receiver has been taken.
-        let _ = self.signal_tx.try_send(sig);
-
-        match signal {
-            "SIGSTOP" => {
-                self.auto_log_session_end().await;
-                self.killed.store(true, Ordering::Release);
-                // Write updated status (stopped) to VFS
-                if let Some(vfs) = &self.vfs {
-                    self.write_status_yaml(vfs).await;
-                }
-            }
-            "SIGKILL" => {
-                self.killed.store(true, Ordering::Release);
-                if let Some(vfs) = &self.vfs {
-                    self.write_status_yaml(vfs).await;
-                }
-            }
-            "SIGPAUSE" => {
-                self.paused.store(true, Ordering::Release);
-                // Update invocation record to Paused so it's reflected in persistence.
-                if let (Some(store), false) =
-                    (&self.invocation_store, self.invocation_id.is_empty())
-                {
-                    let _ = store
-                        .update_status(
-                            &self.invocation_id,
-                            crate::invocation::InvocationStatus::Paused,
-                        )
-                        .await;
-                }
-                if let Some(vfs) = &self.vfs {
-                    self.write_status_yaml(vfs).await;
-                }
-            }
-            "SIGRESUME" => {
-                self.paused.store(false, Ordering::Release);
-                // Restore invocation to Running on resume.
-                if let (Some(store), false) =
-                    (&self.invocation_store, self.invocation_id.is_empty())
-                {
-                    let _ = store
-                        .update_status(
-                            &self.invocation_id,
-                            crate::invocation::InvocationStatus::Running,
-                        )
-                        .await;
-                }
-                if let Some(vfs) = &self.vfs {
-                    self.write_status_yaml(vfs).await;
-                }
-            }
-            "SIGSAVE" => {
-                self.capture_and_write_snapshot(SnapshotTrigger::Sigsave, CapturedBy::Kernel)
-                    .await;
-                self.take_interim_snapshot().await;
-            }
-            _ => {
-                tracing::debug!(pid = self.pid.as_u32(), signal, "signal received");
-                if let Some(vfs) = &self.vfs {
-                    self.write_status_yaml(vfs).await;
-                }
-            }
-        }
-    }
-
-    /// Capture a snapshot of current executor state and write it to the VFS.
-    ///
-    /// If no VFS is attached the snapshot is silently skipped — the executor
-    /// still runs normally.
-    async fn capture_and_write_snapshot(&self, trigger: SnapshotTrigger, captured_by: CapturedBy) {
-        let vfs = match &self.vfs {
-            Some(v) => Arc::clone(v),
-            None => {
-                tracing::debug!(pid = self.pid.as_u32(), "snapshot skipped: no VFS attached");
-                return;
-            }
-        };
-
-        let snap = capture(CaptureParams {
-            agent_name: &self.agent_name,
-            pid: self.pid.as_u32(),
-            username: &self.spawned_by,
-            goal: &self.goal,
-            message_history: &self.conversation_history,
-            temperature: 0.7, // default; updated when resolved config carries it
-            granted_tools: &self.token.granted_tools,
-            trigger,
-            captured_by,
-            memory: SnapshotMemory::default(),
-            pending_requests: vec![],
-            open_pipes: vec![],
-        });
-
-        let vfs_path_str = snap.vfs_path(&self.spawned_by);
-        match snap.to_yaml() {
-            Ok(yaml) => match VfsPath::parse(&vfs_path_str) {
-                Ok(path) => {
-                    if let Err(e) = vfs.write(&path, yaml.into_bytes()).await {
-                        tracing::warn!(
-                            pid = self.pid.as_u32(),
-                            path = vfs_path_str,
-                            err = ?e,
-                            "snapshot VFS write failed"
-                        );
-                    } else {
-                        tracing::info!(
-                            pid = self.pid.as_u32(),
-                            path = vfs_path_str,
-                            "snapshot written"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(pid = self.pid.as_u32(), err = ?e, "invalid snapshot VFS path")
-                }
-            },
-            Err(e) => {
-                tracing::warn!(pid = self.pid.as_u32(), err = ?e, "snapshot serialisation failed")
-            }
-        }
-    }
-
-    /// Take an interim snapshot by persisting current state to the invocation store.
-    /// Called periodically based on snapshot_interval or on SIGSAVE.
-    async fn take_interim_snapshot(&self) {
-        let store = match &self.invocation_store {
-            Some(s) => Arc::clone(s),
-            None => return,
-        };
-        let id = &self.invocation_id;
-        if id.is_empty() {
-            return;
-        }
-
-        let conversation: Vec<(String, String)> = self
-            .conversation_history
-            .iter()
-            .map(|(r, c)| (r.clone(), c.clone()))
-            .collect();
-
-        if let Err(e) = store
-            .persist_interim(
-                id,
-                &conversation,
-                self.tokens_consumed,
-                self.tool_calls_total,
-            )
-            .await
-        {
-            tracing::warn!(pid = self.pid.as_u32(), id = %id, err = ?e, "interim snapshot failed");
-        } else {
-            tracing::debug!(pid = self.pid.as_u32(), id = %id, "interim snapshot saved");
-        }
-    }
-
-    /// Restore executor state from a named snapshot stored in the VFS.
-    ///
-    /// Steps:
-    /// 1. Read YAML from `/users/<username>/snapshots/<name>.yaml`
-    /// 2. Verify checksum — abort with `AvixError` on mismatch
-    /// 3. Issue a fresh `CapabilityToken` from the snapshotted tool list
-    /// 4. Rebuild conversation context from the context summary
-    /// 5. Report pending requests (for re-issue) and open pipes (for SIGPIPE)
-    pub async fn restore_from_snapshot(
-        &mut self,
-        snapshot_name: &str,
-    ) -> Result<RestoreResult, AvixError> {
-        use crate::snapshot::verify_checksum;
-        use crate::snapshot::SnapshotFile;
-
-        let vfs = match &self.vfs {
-            Some(v) => Arc::clone(v),
-            None => return Err(AvixError::ConfigParse("no VFS attached".into())),
-        };
-
-        // 1. Read YAML from VFS
-        let path_str = format!(
-            "/users/{}/snapshots/{}.yaml",
-            self.spawned_by, snapshot_name
-        );
-        let path = VfsPath::parse(&path_str).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        let bytes = vfs
-            .read(&path)
-            .await
-            .map_err(|e| AvixError::NotFound(format!("snapshot '{snapshot_name}': {e}")))?;
-        let yaml = String::from_utf8(bytes).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        let file = SnapshotFile::from_str(&yaml)?;
-
-        // 2. Verify checksum
-        verify_checksum(&file)?;
-
-        // 3. Issue a fresh CapabilityToken from the original tool list
-        let original_tools = file.spec.environment.granted_tools.clone();
-        self.token = CapabilityToken::test_token(
-            &original_tools
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>(),
-        );
-
-        // 4. Restore goal and conversation context
-        self.goal = file.spec.goal.clone();
-        if !file.spec.context_summary.is_empty() {
-            self.conversation_history = vec![(
-                "assistant".to_string(),
-                format!(
-                    "[Restored from snapshot '{}']\n\nContext at capture:\n{}",
-                    file.metadata.name, file.spec.context_summary
-                ),
-            )];
-        }
-
-        // 5. Collect pending requests and open pipes
-        let reissued_requests: Vec<String> = file
-            .spec
-            .pending_requests
-            .iter()
-            .filter(|r| r.status == "in-flight")
-            .map(|r| r.request_id.clone())
-            .collect();
-
-        // Pipes always result in SIGPIPE on restore (pipe registry not yet available)
-        let sigpipe_pipes: Vec<String> = file
-            .spec
-            .pipes
-            .iter()
-            .filter(|p| p.state == "open")
-            .map(|p| p.pipe_id.clone())
-            .collect();
-
-        tracing::info!(
-            pid = self.pid.as_u32(),
-            snapshot = %file.metadata.name,
-            reissued = ?reissued_requests,
-            sigpipe = ?sigpipe_pipes,
-            "restore complete"
-        );
-
-        Ok(RestoreResult {
-            snapshot_name: file.metadata.name.clone(),
-            agent_name: file.metadata.agent_name.clone(),
-            reissued_requests,
-            reconnected_pipes: vec![],
-            sigpipe_pipes,
-        })
-    }
-
-    /// Return the current goal (used in tests and restore verification).
-    pub fn goal(&self) -> &str {
-        &self.goal
-    }
-
-    /// Return the current capability token (used in tests and restore verification).
-    pub fn token(&self) -> &CapabilityToken {
-        &self.token
-    }
-
-    /// Write a session summary to episodic memory when SIGSTOP fires.
-    ///
-    /// Uses a simple concatenation of conversation history as the summary.
-    /// (memory-gap-D: LLM summarisation added in memory-gap-E)
-    async fn auto_log_session_end(&self) {
-        let svc = match &self.memory_svc {
-            Some(s) => Arc::clone(s),
-            None => return,
-        };
-        if self.conversation_history.is_empty() {
-            return;
-        }
-
-        let summary = self
-            .conversation_history
-            .iter()
-            .map(|(role, content)| {
-                let preview_len = content.len().min(200);
-                format!("{}: {}", role, &content[..preview_len])
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let caller = CallerContext {
-            pid: self.pid.as_u32(),
-            agent_name: self.agent_name.clone(),
-            owner: self.spawned_by.clone(),
-            session_id: self.session_id.clone(),
-            granted_tools: self.token.granted_tools.clone(),
-        };
-        let params = serde_json::json!({
-            "summary": summary,
-            "outcome": "success",
-            "scope": "own"
-        });
-        if let Err(e) = svc.dispatch("memory/log-event", params, &caller).await {
-            tracing::warn!(
-                pid = self.pid.as_u32(),
-                err = ?e,
-                "auto session log failed"
-            );
-        }
-    }
-
-    /// Write `/proc/<pid>/status.yaml` and `/proc/<pid>/resolved.yaml` to the VFS.
-    /// Must be called after `with_vfs()` to populate the proc entries.
-    /// No-op when no VFS is attached.
-    /// Uses `spawned_by` as the username and no crew memberships.
-    pub async fn init_proc_files(&self) {
-        self.init_proc_files_for(&self.spawned_by.clone(), &[])
-            .await;
-    }
-
-    /// Like `init_proc_files`, but with explicit username and crew memberships for
-    /// the parameter resolution engine.
-    pub async fn init_proc_files_for(&self, username: &str, crews: &[String]) {
-        let vfs = match &self.vfs {
-            Some(v) => Arc::clone(v),
-            None => return,
-        };
-        self.write_status_yaml(&vfs).await;
-        self.write_resolved_file(&vfs, username, crews).await;
-    }
-
-    /// Build and write `/proc/<pid>/status.yaml` from current executor state.
-    ///
-    /// Called at spawn and after every lifecycle event (signal, tool call, LLM turn).
-    /// No-op when no VFS is attached.
-    async fn write_status_yaml(&self, vfs: &VfsRouter) {
-        use crate::process::entry::{ProcessEntry, ProcessKind, WaitingOn};
-        use crate::process::status_file::AgentStatusFile;
-
-        let pid = self.pid.as_u32();
-
-        // Determine state from atomic flags
-        let state = if self.killed.load(Ordering::Acquire) {
-            crate::process::entry::ProcessStatus::Stopped
-        } else if self.paused.load(Ordering::Acquire) {
-            crate::process::entry::ProcessStatus::Paused
-        } else {
-            crate::process::entry::ProcessStatus::Running
-        };
-
-        let last_signal = self.last_signal_received.lock().await.clone();
-
-        let entry = ProcessEntry {
-            pid: self.pid,
-            name: self.agent_name.clone(),
-            kind: ProcessKind::Agent,
-            status: state,
-            spawned_by_user: self.spawned_by.clone(),
-            goal: self.goal.clone(),
-            spawned_at: self.spawned_at,
-            context_used: self.context_used,
-            context_limit: self.context_limit,
-            last_activity_at: chrono::Utc::now(),
-            waiting_on: None::<WaitingOn>,
-            granted_tools: self.token.granted_tools.clone(),
-            denied_tools: self.denied_tools.clone(),
-            tool_chain_depth: 0, // reset at turn start; not tracked per-write here
-            tokens_consumed: self.tokens_consumed,
-            tool_calls_total: self.tool_calls_total,
-            last_signal_received: last_signal,
-            pending_signal_count: self.pending_signal_count.load(Ordering::Relaxed),
-            ..ProcessEntry::default()
-        };
-
-        let file = AgentStatusFile::from_entry(&entry, vec![]);
-        match file.to_yaml() {
-            Ok(yaml) => {
-                if let Ok(path) = VfsPath::parse(&format!("/proc/{pid}/status.yaml")) {
-                    let _ = vfs.write(&path, yaml).await;
-                }
-            }
-            Err(e) => {
-                tracing::warn!(pid, "failed to serialise status.yaml: {e}");
-            }
-        }
-    }
-
-    async fn write_resolved_file(&self, vfs: &VfsRouter, username: &str, crews: &[String]) {
-        use crate::params::defaults::system_agent_defaults;
-        use crate::params::limits::system_agent_limits;
-        use crate::params::resolved_file::ResolvedFile;
-        use crate::params::resolver::{ParamResolver, ResolverInput, ResolverInputLoader};
-
-        let pid = self.pid.as_u32();
-
-        // Load resolver inputs from VFS (system defaults/limits must be present).
-        // If they are missing (e.g. unit tests without phase1), fall back to
-        // compiled-in system defaults and limits directly.
-        let loader = ResolverInputLoader::new(vfs);
-        let mut input = match loader.load(username, crews).await {
-            Ok(inp) => inp,
-            Err(_) => ResolverInput {
-                system_defaults: system_agent_defaults(),
-                system_defaults_path: "compiled-in".into(),
-                system_limits: system_agent_limits(),
-                system_limits_path: "compiled-in".into(),
-                crew_defaults: vec![],
-                crew_limits: vec![],
-                user_defaults: None,
-                user_limits: None,
-                manifest: crate::params::defaults::AgentDefaults::default(),
-            },
-        };
-        input.manifest = crate::params::defaults::AgentDefaults::default();
-
-        let (resolved_config, _annotations) = match ParamResolver::resolve(&input) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!("param resolution failed for pid {pid}: {e}");
-                return;
-            }
-        };
-
-        let file = ResolvedFile::new(
-            username,
-            Some(pid),
-            crews.to_vec(),
-            resolved_config,
-            self.token.granted_tools.clone(),
-            None, // annotations omitted from per-pid resolved.yaml
-        );
-
-        match file.to_yaml() {
-            Ok(yaml) => {
-                if let Ok(path) = VfsPath::parse(&format!("/proc/{pid}/resolved.yaml")) {
-                    let _ = vfs.write(&path, yaml.into_bytes()).await;
-                }
-            }
-            Err(e) => {
-                tracing::warn!("failed to serialise resolved.yaml for pid {pid}: {e}");
-            }
-        }
-    }
-
-    pub fn pid(&self) -> Pid {
-        self.pid
-    }
-
-    /// GAP 3: Rebuild tool_list from the current Cat2 tools, excluding removed tools.
+    /// Rebuild tool_list from current Cat2 tools, excluding removed tools.
     pub fn refresh_tool_list(&mut self) {
-        let cat2 = compute_cat2_tools(&self.token, &self.spawned_by);
-        let removed = &self.removed_tools;
-        self.tool_list = cat2
-            .into_iter()
-            .filter(|(name, _)| !removed.contains(name))
-            .map(|(name, _)| cat2_tool_descriptor(&name))
-            .collect();
+        let token = self.token.clone();
+        let spawned_by = self.spawned_by.clone();
+        self.tools.refresh_tool_list(&token, &spawned_by);
     }
+
+    pub fn current_tool_list(&self) -> Vec<serde_json::Value> {
+        self.tools.current_tool_list()
+    }
+
+    /// Returns true if this tool is a registered Category 2 tool for this agent.
+    pub fn is_cat2_tool(&self, name: &str) -> bool {
+        self.tools.is_cat2_tool(name)
+    }
+
+    pub async fn handle_tool_changed(&mut self, op: &str, tool_name: &str, _reason: &str) {
+        self.tools.handle_tool_changed(op, tool_name);
+    }
+
+    /// Set a per-tool call budget.
+    pub fn set_tool_budget(&mut self, tool: &str, n: u32) {
+        self.tools.set_tool_budget(tool, n);
+    }
+
+    /// Register a tool that requires HIL approval before dispatch.
+    pub fn require_hil_for(&mut self, tool: &str) {
+        self.tools.require_hil_for(tool);
+    }
+
+    // ── System prompt ─────────────────────────────────────────────────────────
 
     pub fn build_system_prompt_str(&self) -> String {
         let tool_list = self.current_tool_list();
@@ -961,17 +378,21 @@ impl RuntimeExecutor {
             &self.spawned_by,
             &self.session_id,
             self.max_tool_chain_length,
-            // Convert ToolBudgets to HashMap<String, u32> for the prompt
             &self
+                .tools
                 .registered_cat2
                 .iter()
-                .filter_map(|name| self.tool_budgets.remaining(name).map(|n| (name.clone(), n)))
+                .filter_map(|name| {
+                    self.tools
+                        .tool_budgets
+                        .remaining(name)
+                        .map(|n| (name.clone(), n))
+                })
                 .collect::<HashMap<String, u32>>(),
             &self.pending_messages,
             &tool_list,
         );
-        // Prepend memory context block when present (injected by init_memory_context())
-        if let Some(ref ctx) = self.memory_context {
+        if let Some(ref ctx) = self.memory.memory_context {
             format!("{ctx}\n\n{base}")
         } else {
             base
@@ -992,340 +413,28 @@ impl RuntimeExecutor {
         self.pending_messages.push(msg);
     }
 
-    /// GAP 6: Register a tool that requires HIL approval before dispatch.
-    pub fn require_hil_for(&mut self, tool: &str) {
-        self.hil_required_tools.push(tool.to_string());
+    // ── Accessors ─────────────────────────────────────────────────────────────
+
+    pub fn pid(&self) -> Pid {
+        self.pid
     }
 
-    /// GAP 4: Set a per-tool call budget.
-    pub fn set_tool_budget(&mut self, tool: &str, n: u32) {
-        self.tool_budgets.set(tool, n);
+    /// Return the current goal (used in tests and restore verification).
+    pub fn goal(&self) -> &str {
+        &self.goal
     }
 
-    pub async fn shutdown(&mut self) {
-        self.shutdown_with_status(crate::invocation::InvocationStatus::Completed, None)
-            .await;
+    /// Return the current capability token.
+    pub fn token(&self) -> &CapabilityToken {
+        &self.token
     }
 
-    /// Shutdown the executor, deregistering tools and flushing invocation history.
-    ///
-    /// Called by the factory wrapper after `run_with_client()` returns or errors.
-    pub async fn shutdown_with_status(
-        &mut self,
-        status: crate::invocation::InvocationStatus,
-        exit_reason: Option<String>,
-    ) {
-        // 1. Deregister Category 2 tools.
-        match &self.registry_ref {
-            RegistryRef::Mock(reg) => {
-                for name in self.registered_cat2.clone() {
-                    reg.deregister_tool(self.pid.as_u32(), &name).await;
-                }
-                self.registered_cat2.clear();
-            }
-        }
-
-        // 2. Handle Idle transition (agent waiting for input)
-        if exit_reason.as_deref() == Some("waiting_for_input") {
-            if !self.invocation_id.is_empty() {
-                if let Some(store) = &self.invocation_store {
-                    let _ = store
-                        .update_status(
-                            &self.invocation_id,
-                            crate::invocation::InvocationStatus::Idle,
-                        )
-                        .await;
-                }
-            }
-            if !self.session_id.is_empty() {
-                if let Some(store) = &self.session_store {
-                    if let Ok(Some(mut session)) = store
-                        .get(&uuid::Uuid::parse_str(&self.session_id).unwrap_or_default())
-                        .await
-                    {
-                        session.mark_idle();
-                        let _ = store.update(&session).await;
-                    }
-                }
-            }
-            return;
-        }
-
-        // 3. Flush conversation history and finalize invocation record.
-        if !self.invocation_id.is_empty() {
-            if let Some(store) = &self.invocation_store {
-                let _ = store
-                    .write_conversation(
-                        &self.invocation_id,
-                        &self.spawned_by,
-                        &self.agent_name,
-                        &self.conversation_history,
-                    )
-                    .await;
-                let _ = store
-                    .finalize(
-                        &self.invocation_id,
-                        status,
-                        chrono::Utc::now(),
-                        self.tokens_consumed,
-                        self.tool_calls_total,
-                        exit_reason,
-                    )
-                    .await;
-            }
-        }
+    /// Return a clone of the signal sender for external signal delivery.
+    pub fn signal_sender(&self) -> mpsc::Sender<Signal> {
+        self.signal_tx.clone()
     }
 
-    pub async fn handle_tool_changed(&mut self, op: &str, tool_name: &str, _reason: &str) {
-        match op {
-            "removed" => {
-                if !self.removed_tools.contains(&tool_name.to_string()) {
-                    self.removed_tools.push(tool_name.to_string());
-                }
-            }
-            "added" => {
-                // Re-enable a previously removed tool by dropping it from the removed list.
-                self.removed_tools.retain(|t| t != tool_name);
-            }
-            _ => {}
-        }
-        // current_tool_list() filters removed_tools dynamically, so tool_list stays
-        // consistent without a full rebuild.  A full refresh happens at turn start.
-    }
-
-    pub fn current_tool_list(&self) -> Vec<serde_json::Value> {
-        self.tool_list
-            .iter()
-            .filter(|t| {
-                if let Some(name) = t["name"].as_str() {
-                    // removed_tools stores Avix names (with /)
-                    // The descriptor name may be Avix-style (/) or wire-mangled (__)
-                    // so check both forms.
-                    !self.removed_tools.iter().any(|r| {
-                        let mangled = r.replace('/', "__");
-                        name == r.as_str() || name == mangled.as_str()
-                    })
-                } else {
-                    true
-                }
-            })
-            .cloned()
-            .collect()
-    }
-
-    /// Returns true if this tool is a registered Category 2 tool for this agent.
-    /// Category 1/3 tools are forwarded to router.svc; Category 2 tools are handled locally.
-    pub fn is_cat2_tool(&self, name: &str) -> bool {
-        self.registered_cat2.contains(&name.to_string())
-    }
-
-    /// Dispatch a Category 1 or Category 3 (MCP-bridged) tool call via router.svc.
-    /// In production this opens a fresh IPC connection to router.svc per ADR-05.
-    pub async fn dispatch_via_router(
-        &self,
-        call: &AvixToolCall,
-    ) -> Result<serde_json::Value, AvixError> {
-        // IPC dispatch to router.svc not yet wired in this environment
-        Ok(serde_json::json!({
-            "content": format!("Tool '{}' executed via router (IPC dispatch not yet wired)", call.name)
-        }))
-    }
-
-    pub async fn dispatch_category2(
-        &mut self,
-        call: &AvixToolCall,
-    ) -> Result<serde_json::Value, AvixError> {
-        match call.name.as_str() {
-            "agent/spawn" => {
-                if let Some(kernel) = &self.kernel {
-                    let agent_name = call.args["agent"].as_str().unwrap_or("unknown");
-                    kernel.record_proc_spawn(agent_name).await;
-                }
-                Ok(serde_json::json!({"spawned": true}))
-            }
-            "agent/kill" => {
-                if let Some(kernel) = &self.kernel {
-                    let pid = call.args["pid"].as_u64().unwrap_or(0) as u32;
-                    kernel.record_proc_kill(pid).await;
-                }
-                Ok(serde_json::json!({"killed": true}))
-            }
-            "cap/request-tool" => {
-                let tool_name = call.args["tool"].as_str().unwrap_or("").to_string();
-                let reason = call.args["reason"].as_str().unwrap_or("").to_string();
-
-                // Route through KernelResourceHandler when available
-                if let Some(handler) = &self.resource_handler {
-                    let req = ResourceRequest::new(
-                        self.pid.as_u32(),
-                        self.token.signature.clone(),
-                        vec![ResourceItem::Tool {
-                            name: tool_name.clone(),
-                            urgency: Urgency::Normal,
-                            reason,
-                        }],
-                    );
-                    match handler.handle(&req, &self.token) {
-                        Ok(resp) => {
-                            if let Some(ResourceGrant::Tool {
-                                granted, new_token, ..
-                            }) = resp.grants.into_iter().next()
-                            {
-                                if granted {
-                                    if let Some(tok) = new_token {
-                                        self.token = tok;
-                                        self.refresh_tool_list();
-                                    }
-                                    return Ok(
-                                        serde_json::json!({"approved": true, "tool": tool_name}),
-                                    );
-                                }
-                            }
-                            return Ok(serde_json::json!({"approved": false, "tool": tool_name}));
-                        }
-                        Err(e) => {
-                            return Ok(
-                                serde_json::json!({"approved": false, "error": e.to_string()}),
-                            );
-                        }
-                    }
-                }
-
-                // Fallback: mock auto-approve flag
-                if let Some(kernel) = &self.kernel {
-                    if kernel.is_auto_approve().await {
-                        return Ok(serde_json::json!({"approved": true}));
-                    }
-                }
-                Ok(serde_json::json!({"approved": false}))
-            }
-            // cap/list — reads directly from in-memory CapabilityToken (no IPC call).
-            // Schema per docs/spec/runtime-exec-tool-exposure.md §cap/list.
-            // Never exposes the token's HMAC signature.
-            "cap/list" => {
-                let budgets: serde_json::Value = self
-                    .registered_cat2
-                    .iter()
-                    .filter_map(|name| {
-                        self.tool_budgets
-                            .remaining(name)
-                            .map(|n| (name.clone(), serde_json::json!(n)))
-                    })
-                    .collect::<serde_json::Map<_, _>>()
-                    .into();
-                Ok(serde_json::json!({
-                    "grantedTools": self.token.granted_tools,
-                    "constraints": {
-                        "maxTokensPerTurn": null,
-                        "maxToolChainLength": self.max_tool_chain_length,
-                        "toolCallBudgets": budgets
-                    },
-                    "tokenExpiresAt": self.token.expires_at.to_rfc3339()
-                }))
-            }
-            "cap/escalate" => {
-                let guidance = call.args["reason"].as_str().unwrap_or("");
-                // Inject into Block 4 (pending instructions) so the LLM sees the guidance
-                // on the next turn as per the spec §Category 3 transparent behaviours.
-                self.pending_messages
-                    .push(format!("[Human guidance]: {guidance}"));
-                Ok(serde_json::json!({
-                    "selectedOption": "acknowledged",
-                    "guidance": guidance
-                }))
-            }
-            "job/watch" => Ok(serde_json::json!({
-                "jobId": call.args["jobId"],
-                "finalStatus": "done",
-                "result": null,
-                "error": null
-            })),
-            "agent/list" => Ok(serde_json::json!({ "agents": [] })),
-            "agent/wait" => Ok(serde_json::json!({
-                "pid": call.args["pid"],
-                "finalStatus": "completed",
-                "result": null,
-                "durationSec": 0
-            })),
-            "agent/send-message" => Ok(serde_json::json!({ "delivered": true })),
-            "pipe/open" => {
-                let target_pid = call.args["targetPid"].as_u64().unwrap_or(0) as u32;
-                let direction = call.args["direction"].as_str().unwrap_or("out").to_string();
-                let buffer_tokens = call.args["bufferTokens"].as_u64().unwrap_or(8192) as u32;
-
-                if let Some(handler) = &self.resource_handler {
-                    let pipe_direction = match direction.as_str() {
-                        "in" => crate::kernel::resource_request::PipeDirection::In,
-                        "bidirectional" => {
-                            crate::kernel::resource_request::PipeDirection::Bidirectional
-                        }
-                        _ => crate::kernel::resource_request::PipeDirection::Out,
-                    };
-                    let req = ResourceRequest::new(
-                        self.pid.as_u32(),
-                        self.token.signature.clone(),
-                        vec![ResourceItem::Pipe {
-                            target_pid,
-                            direction: pipe_direction,
-                            buffer_tokens,
-                            reason: String::new(),
-                        }],
-                    );
-                    match handler.handle(&req, &self.token) {
-                        Ok(resp) => {
-                            if let Some(ResourceGrant::Pipe {
-                                granted: true,
-                                pipe_id: Some(pipe_id),
-                                ..
-                            }) = resp.grants.into_iter().next()
-                            {
-                                // Write /proc/<pid>/pipes/<pipeId>.yaml to VFS when handle available
-                                if let Some(vfs) = &self.vfs {
-                                    let pid = self.pid.as_u32();
-                                    let entry = serde_yaml::to_string(&serde_json::json!({
-                                        "pipe_id": pipe_id,
-                                        "target_pid": target_pid,
-                                        "direction": direction,
-                                        "buffer_tokens": buffer_tokens,
-                                        "state": "open"
-                                    }))
-                                    .unwrap_or_default();
-                                    let path_str = format!("/proc/{}/pipes/{}.yaml", pid, pipe_id);
-                                    if let Ok(path) = VfsPath::parse(&path_str) {
-                                        let _ = vfs.write(&path, entry.into_bytes()).await;
-                                    }
-                                }
-                                return Ok(
-                                    serde_json::json!({ "pipeId": pipe_id, "state": "open" }),
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(pid = ?self.pid, error = %e, "pipe/open resource request failed");
-                        }
-                    }
-                }
-
-                // Fallback stub
-                Ok(serde_json::json!({ "pipeId": "pipe-stub", "state": "open" }))
-            }
-            "pipe/write" => Ok(serde_json::json!({
-                "tokensSent": 0,
-                "bufferRemaining": 8192
-            })),
-            "pipe/read" => Ok(serde_json::json!({
-                "content": "",
-                "tokensRead": 0,
-                "pipeState": "open"
-            })),
-            "pipe/close" => Ok(serde_json::json!({ "closed": true })),
-            _ => Ok(serde_json::json!({
-                "content": format!("Tool '{}' executed (IPC dispatch not yet wired)", call.name)
-            })),
-        }
-    }
-
-    // Day 18 methods
+    // ── Mock / test helpers ───────────────────────────────────────────────────
 
     pub fn push_llm_response(&self, resp: LlmCompleteResponse) {
         self.llm_queue.lock().unwrap().push(resp);
@@ -1361,693 +470,76 @@ impl RuntimeExecutor {
         self.max_tool_chain_length = max;
     }
 
-    /// Token renewal — if the token is still valid but within 5 minutes of expiry,
-    /// send a `ResourceRequest{token_renewal}` to the kernel handler (when available)
-    /// and replace `self.token` with the newly signed token from the response.
-    /// Falls back to in-place extension when no handler is attached (tests).
-    /// Already-expired tokens are NOT renewed here; the expiry guard handles those.
-    fn maybe_renew_token(&mut self) {
-        let until_expiry = self
-            .token
-            .expires_at
-            .signed_duration_since(chrono::Utc::now());
-        if !(until_expiry > chrono::Duration::zero()
-            && until_expiry <= chrono::Duration::minutes(5))
-        {
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    pub async fn shutdown(&mut self) {
+        self.shutdown_with_status(crate::invocation::InvocationStatus::Completed, None)
+            .await;
+    }
+
+    /// Shutdown the executor, deregistering tools and flushing invocation history.
+    pub async fn shutdown_with_status(
+        &mut self,
+        status: crate::invocation::InvocationStatus,
+        exit_reason: Option<String>,
+    ) {
+        // 1. Deregister Category 2 tools.
+        match &self.registry_ref {
+            RegistryRef::Mock(reg) => {
+                for name in self.tools.registered_cat2.clone() {
+                    reg.deregister_tool(self.pid.as_u32(), &name).await;
+                }
+                self.tools.registered_cat2.clear();
+            }
+        }
+
+        // 2. Handle Idle transition
+        if exit_reason.as_deref() == Some("waiting_for_input") {
+            if !self.invocation_id.is_empty() {
+                if let Some(store) = &self.invocation_store {
+                    let _ = store
+                        .update_status(
+                            &self.invocation_id,
+                            crate::invocation::InvocationStatus::Idle,
+                        )
+                        .await;
+                }
+            }
+            if !self.session_id.is_empty() {
+                if let Some(store) = &self.session_store {
+                    if let Ok(Some(mut session)) = store
+                        .get(&uuid::Uuid::parse_str(&self.session_id).unwrap_or_default())
+                        .await
+                    {
+                        session.mark_idle();
+                        let _ = store.update(&session).await;
+                    }
+                }
+            }
             return;
         }
 
-        if let Some(handler) = self.resource_handler.clone() {
-            let req = ResourceRequest::new(
-                self.pid.as_u32(),
-                self.token.signature.clone(),
-                vec![ResourceItem::TokenRenewal {
-                    reason: "auto-renewal within 5 min window".into(),
-                }],
-            );
-            match handler.handle(&req, &self.token) {
-                Ok(resp) => {
-                    if let Some(ResourceGrant::TokenRenewal {
-                        granted: true,
-                        new_token: Some(tok),
-                        ..
-                    }) = resp.grants.into_iter().next()
-                    {
-                        tracing::info!(pid = ?self.pid, "token renewed via KernelResourceHandler");
-                        self.token = tok;
-                        return;
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(pid = ?self.pid, error = %e, "token renewal request failed");
-                }
-            }
-        }
-
-        // Fallback: extend in-place (unsigned test tokens)
-        self.token.expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
-        tracing::info!(pid = ?self.pid, "token renewed (mock)");
-    }
-
-    /// Execute a single LLM turn, preferring streaming when the client supports it.
-    ///
-    /// Text deltas are **batched** before being emitted as `agent.output.chunk` ATP
-    /// events: the buffer is flushed whenever it reaches `CHUNK_FLUSH_BYTES` characters
-    /// OR when the 50 ms flush timer fires, whichever comes first.  This keeps UI
-    /// renders smooth without firing a separate event per token.  A synthetic
-    /// `LlmCompleteResponse` is built from the accumulated stream data so the
-    /// existing `interpret_stop_reason` logic can work unchanged.
-    async fn run_turn_streaming(
-        &self,
-        req: crate::llm_client::LlmCompleteRequest,
-        client: &dyn crate::llm_client::LlmClient,
-        turn_id: uuid::Uuid,
-        cancel: CancellationToken,
-    ) -> Result<LlmCompleteResponse, AvixError> {
-        use futures::StreamExt as _;
-        use tokio::time::{interval, Duration, MissedTickBehavior};
-
-        // Flush buffered text when it reaches this many bytes, even before the timer.
-        const CHUNK_FLUSH_BYTES: usize = 80;
-
-        let stream = client.stream_complete(req.clone()).await;
-
-        // Fall back to non-streaming when the client doesn't support it.
-        let mut stream = match stream {
-            Ok(s) => s,
-            Err(_) => {
-                return client
-                    .complete(req)
-                    .await
-                    .map_err(|e| AvixError::ConfigParse(e.to_string()));
-            }
-        };
-
-        let turn_id_str = turn_id.to_string();
-        let mut accumulated_text = String::new();
-        // call_id → (name, accumulated_args_json)
-        let mut pending_calls: HashMap<String, (String, String)> = HashMap::new();
-        let mut stop_reason = StopReason::EndTurn;
-        let mut input_tokens = 0u32;
-        let mut output_tokens = 0u32;
-        let mut seq: u64 = 0;
-
-        // Pending text buffer — flushed to the event bus on timer or size threshold.
-        let mut pending_text = String::new();
-
-        // 50 ms flush timer. Skip missed ticks so a slow consumer doesn't flood.
-        let mut flush_timer = interval(Duration::from_millis(50));
-        flush_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        // Consume the initial immediate tick so we don't flush an empty buffer on entry.
-        flush_timer.tick().await;
-
-        // Helper closure — not a real closure due to borrow rules; we inline it.
-        macro_rules! flush_pending {
-            () => {
-                if !pending_text.is_empty() {
-                    if let Some(bus) = &self.event_bus {
-                        bus.agent_output_chunk(
-                            &self.session_id,
-                            self.pid.as_u32(),
-                            &turn_id_str,
-                            &pending_text,
-                            seq,
-                            false,
-                        );
-                        seq += 1;
-                    }
-                    pending_text.clear();
-                }
-            };
-        }
-
-        loop {
-            tokio::select! {
-                // Prioritise the stream so we don't stall behind a timer tick.
-                biased;
-
-                _ = cancel.cancelled() => {
-                    return Err(AvixError::Cancelled("LLM call cancelled by signal".into()));
-                }
-
-                chunk_opt = stream.next() => {
-                    let Some(chunk_result) = chunk_opt else { break; };
-                    match chunk_result.map_err(|e| AvixError::ConfigParse(e.to_string()))? {
-                        StreamChunk::TextDelta { text } => {
-                            accumulated_text.push_str(&text);
-                            pending_text.push_str(&text);
-                            // Eager flush once the buffer is large enough.
-                            if pending_text.len() >= CHUNK_FLUSH_BYTES {
-                                flush_pending!();
-                            }
-                        }
-                        StreamChunk::ToolCallStart { call_id, name } => {
-                            // Flush any buffered text before a tool call so the UI
-                            // shows all preceding text immediately.
-                            flush_pending!();
-                            pending_calls.insert(call_id, (name, String::new()));
-                        }
-                        StreamChunk::ToolCallArgsDelta { call_id, args_delta } => {
-                            if let Some(entry) = pending_calls.get_mut(&call_id) {
-                                entry.1.push_str(&args_delta);
-                            }
-                        }
-                        StreamChunk::ToolCallComplete { .. } => {} // args already accumulated
-                        StreamChunk::Done {
-                            stop_reason: sr,
-                            input_tokens: it,
-                            output_tokens: ot,
-                        } => {
-                            stop_reason = sr;
-                            input_tokens = it;
-                            output_tokens = ot;
-                        }
-                    }
-                }
-
-                _ = flush_timer.tick() => {
-                    flush_pending!();
-                }
-            }
-        }
-
-        // Flush any text that arrived after the last timer tick.
-        flush_pending!();
-
-        // Emit turn-end marker so TUI can stop the streaming indicator.
-        if let Some(bus) = &self.event_bus {
-            bus.agent_output_chunk(
-                &self.session_id,
-                self.pid.as_u32(),
-                &turn_id_str,
-                "",
-                seq,
-                true,
-            );
-        }
-
-        // Build synthetic content array matching the shape `interpret_stop_reason` expects.
-        let mut content: Vec<serde_json::Value> = Vec::new();
-        if !accumulated_text.is_empty() {
-            content.push(serde_json::json!({"type": "text", "text": accumulated_text}));
-        }
-        for (call_id, (name, args_str)) in &pending_calls {
-            let input = serde_json::from_str::<serde_json::Value>(args_str)
-                .unwrap_or_else(|_| serde_json::json!({}));
-            content.push(serde_json::json!({
-                "type": "tool_use",
-                "id": call_id,
-                "name": name,
-                "input": input,
-            }));
-        }
-
-        Ok(LlmCompleteResponse {
-            content,
-            stop_reason,
-            input_tokens,
-            output_tokens,
-        })
-    }
-
-    /// Run the turn loop against a real LLM client.
-    pub async fn run_with_client(
-        &mut self,
-        goal: &str,
-        client: &dyn crate::llm_client::LlmClient,
-    ) -> Result<TurnResult, AvixError> {
-        // Take the receiver once; if already taken (e.g. second call in tests), create an
-        // inert channel whose receiver never yields a message.
-        let mut signal_rx = self.signal_rx.take().unwrap_or_else(|| {
-            let (_, rx) = mpsc::channel(1);
-            rx
-        });
-
-        let system = self.build_system_prompt_str();
-        let mut messages: Vec<serde_json::Value> =
-            vec![serde_json::json!({"role": "user", "content": goal})];
-        let mut chain_count = 0;
-        let mut turn_num: u32 = 0;
-
-        loop {
-            turn_num += 1;
-            // GAP 3: refresh tool list at turn start
-            self.refresh_tool_list();
-
-            // Token renewal — extend before calling LLM so the turn doesn't start with an expired token
-            self.maybe_renew_token();
-
-            // Expiry guard — abort if token is still expired after renewal attempt
-            if self.token.is_expired() {
-                return Err(AvixError::CapabilityDenied(
-                    "capability token expired; cannot begin turn".into(),
-                ));
-            }
-
-            // Between-turn: drain any pending signals that arrived during tool dispatch.
-            while let Ok(sig) = signal_rx.try_recv() {
-                self.handle_signal_between_turns(&sig).await;
-                if self.killed.load(Ordering::Acquire) {
-                    return Err(AvixError::Cancelled("killed between turns".into()));
-                }
-            }
-            if self.paused.load(Ordering::Acquire) {
-                // Wait for SIGRESUME before proceeding.
-                loop {
-                    match signal_rx.recv().await {
-                        Some(sig) => {
-                            self.handle_signal_between_turns(&sig).await;
-                            if self.killed.load(Ordering::Acquire) {
-                                return Err(AvixError::Cancelled("killed while paused".into()));
-                            }
-                            if !self.paused.load(Ordering::Acquire) {
-                                break;
-                            }
-                        }
-                        None => return Err(AvixError::Cancelled("signal channel closed".into())),
-                    }
-                }
-            }
-
-            let turn_id = uuid::Uuid::new_v4();
-
-            // Check for pending SIGSAVE snapshot request
-            if self.snapshot_requested.load(Ordering::Acquire) {
-                self.snapshot_requested.store(false, Ordering::Release);
-                self.take_interim_snapshot().await;
-            }
-
-            let req = crate::llm_client::LlmCompleteRequest {
-                model: String::new(), // client picks its default
-                messages: messages.clone(),
-                tools: self.current_tool_list(),
-                system: Some(system.clone()),
-                max_tokens: 4096,
-                turn_id,
-            };
-
-            if let Some(t) = &self.tracer {
-                t.agent_llm_call(
-                    self.pid.as_u32(),
-                    turn_num,
-                    "",
-                    messages.len(),
-                    self.current_tool_list().len(),
-                );
-            }
-
-            let cancel = CancellationToken::new();
-            let response = tokio::select! {
-                res = self.run_turn_streaming(req, client, turn_id, cancel.clone()) => {
-                    match res {
-                        Ok(r) => r,
-                        Err(AvixError::Cancelled(_)) => {
-                            // LLM future was cancelled by a signal — the signal handler already
-                            // updated atomics; check exit/pause conditions now.
-                            if self.killed.load(Ordering::Acquire) {
-                                return Err(AvixError::Cancelled("SIGKILL/SIGSTOP".into()));
-                            }
-                            // Paused: re-enter loop which will wait for SIGRESUME.
-                            continue;
-                        }
-                        Err(e) => return Err(e),
-                    }
-                }
-                sig_opt = signal_rx.recv() => {
-                    match sig_opt {
-                        Some(sig) => {
-                            cancel.cancel();
-                            self.handle_signal_during_llm(&sig).await;
-                            if self.killed.load(Ordering::Acquire) {
-                                return Err(AvixError::Cancelled("SIGKILL/SIGSTOP during LLM".into()));
-                            }
-                            // Paused or SIGPIPE/SIGSAVE: re-enter loop.
-                            continue;
-                        }
-                        None => return Err(AvixError::Cancelled("signal channel closed".into())),
-                    }
-                }
-            };
-
-            tracing::debug!(response = ?response, "RuntimeExecutor LLM Response");
-
-            if let Some(t) = &self.tracer {
-                let stop = format!("{:?}", response.stop_reason);
-                t.agent_llm_response(
-                    self.pid.as_u32(),
-                    turn_num,
-                    &stop,
-                    response.input_tokens as u64,
-                    response.output_tokens as u64,
-                );
-            }
-
-            // Track token usage and context size from this response
-            self.tokens_consumed = self
-                .tokens_consumed
-                .saturating_add(response.total_tokens() as u64);
-            self.context_used = response.input_tokens as u64;
-            if let Some(vfs) = &self.vfs {
-                let vfs = Arc::clone(vfs);
-                self.write_status_yaml(&vfs).await;
-            }
-
-            match super::stop_reason::interpret_stop_reason(&response) {
-                super::stop_reason::TurnAction::ReturnResult(text) => {
-                    return Ok(TurnResult { text });
-                }
-                super::stop_reason::TurnAction::SummariseContext => {
-                    // summarise not yet implemented — treat as end
-                    let text = response
-                        .content
-                        .iter()
-                        .filter_map(|c| c["text"].as_str())
-                        .collect::<Vec<_>>()
-                        .join("");
-                    return Ok(TurnResult { text });
-                }
-                super::stop_reason::TurnAction::DispatchTools(calls) => {
-                    chain_count += calls.len();
-                    if chain_count > self.max_tool_chain_length {
-                        return Err(AvixError::ConfigParse(format!(
-                            "exceeded max tool chain limit of {}",
-                            self.max_tool_chain_length
-                        )));
-                    }
-                    // Append assistant message with tool_use blocks
-                    messages.push(serde_json::json!({
-                        "role": "assistant",
-                        "content": response.content
-                    }));
-                    // Dispatch each call and collect results
-                    let mut tool_results = Vec::new();
-                    for call in &calls {
-                        // GAP 4: capability validation + budget check (budget decremented on success)
-                        if let Err(e) =
-                            validate_tool_call(&self.token, call, &mut self.tool_budgets)
-                        {
-                            tool_results.push(serde_json::json!({
-                                "type": "tool_result",
-                                "tool_use_id": call.call_id,
-                                "content": format!("Error: {e}")
-                            }));
-                            continue;
-                        }
-
-                        // GAP 6: HIL gating
-                        if self.hil_required_tools.iter().any(|t| t == &call.name) {
-                            if let Some(kernel) = &self.kernel {
-                                if !kernel.is_auto_approve().await {
-                                    tool_results.push(serde_json::json!({
-                                        "type": "tool_result",
-                                        "tool_use_id": call.call_id,
-                                        "content": "Tool call requires human approval (HIL gate). Not yet approved."
-                                    }));
-                                    continue;
-                                }
-                                // Auto-approved in test mode — fall through to dispatch
-                            } else {
-                                // No kernel handle → inject pending message and deny
-                                self.inject_pending_message(format!(
-                                    "[System]: HIL required for {}",
-                                    call.name
-                                ));
-                                tool_results.push(serde_json::json!({
-                                    "type": "tool_result",
-                                    "tool_use_id": call.call_id,
-                                    "content": "Tool call requires human approval."
-                                }));
-                                continue;
-                            }
-                        }
-
-                        // Track lifetime tool call count
-                        self.tool_calls_total = self.tool_calls_total.saturating_add(1);
-
-                        // Track tool calls for interim snapshot
-                        if let Some(interval) = self.snapshot_interval {
-                            self.tool_calls_since_last_snapshot += 1;
-                            if self.tool_calls_since_last_snapshot >= interval {
-                                self.take_interim_snapshot().await;
-                                self.tool_calls_since_last_snapshot = 0;
-                            }
-                        }
-
-                        // Publish agent_tool_call event before dispatch
-                        if let Some(bus) = &self.event_bus {
-                            bus.agent_tool_call(
-                                &self.session_id,
-                                self.pid.as_u32(),
-                                &call.call_id,
-                                &call.name,
-                                &call.args,
-                            );
-                        }
-                        if let Some(t) = &self.tracer {
-                            t.agent_tool_call(
-                                self.pid.as_u32(),
-                                &call.call_id,
-                                &call.name,
-                                &call.args,
-                            );
-                        }
-
-                        // Cat2: handled locally; Cat1/3: forwarded to router.svc
-                        let result = if self.is_cat2_tool(&call.name) {
-                            self.dispatch_category2(call).await?
-                        } else {
-                            self.dispatch_via_router(call).await?
-                        };
-
-                        // Publish agent_tool_result event after dispatch
-                        if let Some(bus) = &self.event_bus {
-                            bus.agent_tool_result(
-                                &self.session_id,
-                                self.pid.as_u32(),
-                                &call.call_id,
-                                &call.name,
-                                &result.to_string(),
-                            );
-                        }
-                        if let Some(t) = &self.tracer {
-                            t.agent_tool_result(
-                                self.pid.as_u32(),
-                                &call.call_id,
-                                &call.name,
-                                &result,
-                            );
-                        }
-
-                        tool_results.push(serde_json::json!({
-                            "type": "tool_result",
-                            "tool_use_id": call.call_id,
-                            "content": result.to_string()
-                        }));
-                    }
-                    messages.push(serde_json::json!({
-                        "role": "user",
-                        "content": tool_results
-                    }));
-                }
-            }
-        }
-    }
-
-    /// Handle a signal that arrived **between** LLM turns (during tool dispatch or turn start).
-    ///
-    /// Updates atomics and persistence but does **not** perform cancellation (the LLM
-    /// future is not running).  Called from the signal-drain loop inside `run_with_client`.
-    async fn handle_signal_between_turns(&mut self, signal: &Signal) {
-        let name = signal.kind.as_str();
-        *self.last_signal_received.lock().await = Some(name.to_string());
-        self.pending_signal_count.fetch_add(1, Ordering::AcqRel);
-
-        match name {
-            "SIGKILL" | "SIGSTOP" => {
-                self.auto_log_session_end().await;
-                self.killed.store(true, Ordering::Release);
-                if let Some(vfs) = &self.vfs {
-                    let vfs = Arc::clone(vfs);
-                    self.write_status_yaml(&vfs).await;
-                }
-            }
-            "SIGPAUSE" => {
-                self.paused.store(true, Ordering::Release);
-                if let (Some(store), false) =
-                    (&self.invocation_store, self.invocation_id.is_empty())
-                {
-                    let _ = store
-                        .update_status(
-                            &self.invocation_id,
-                            crate::invocation::InvocationStatus::Paused,
-                        )
-                        .await;
-                }
-                if let Some(vfs) = &self.vfs {
-                    let vfs = Arc::clone(vfs);
-                    self.write_status_yaml(&vfs).await;
-                }
-            }
-            "SIGRESUME" => {
-                self.paused.store(false, Ordering::Release);
-                if let (Some(store), false) =
-                    (&self.invocation_store, self.invocation_id.is_empty())
-                {
-                    let _ = store
-                        .update_status(
-                            &self.invocation_id,
-                            crate::invocation::InvocationStatus::Running,
-                        )
-                        .await;
-                }
-                if let Some(vfs) = &self.vfs {
-                    let vfs = Arc::clone(vfs);
-                    self.write_status_yaml(&vfs).await;
-                }
-            }
-            "SIGSAVE" => {
-                self.snapshot_requested.store(true, Ordering::Release);
-            }
-            "SIGPIPE" => {
-                let text = signal.payload["text"].as_str().unwrap_or("[pipe data]");
-                self.inject_pending_message(format!("[SIGPIPE]: {text}"));
-            }
-            _ => {
-                tracing::debug!(pid = self.pid.as_u32(), signal = name, "unhandled signal between turns");
-            }
-        }
-    }
-
-    /// Handle a signal that arrived **while an LLM call was in flight**.
-    ///
-    /// The caller has already called `cancel.cancel()` on the `CancellationToken` before
-    /// invoking this method, so the LLM future will shortly return `Err(Cancelled)`.
-    /// This method updates state according to signal semantics.
-    async fn handle_signal_during_llm(&mut self, signal: &Signal) {
-        let name = signal.kind.as_str();
-        *self.last_signal_received.lock().await = Some(name.to_string());
-        self.pending_signal_count.fetch_add(1, Ordering::AcqRel);
-
-        match name {
-            "SIGKILL" | "SIGSTOP" => {
-                self.auto_log_session_end().await;
-                self.killed.store(true, Ordering::Release);
-                if let Some(vfs) = &self.vfs {
-                    let vfs = Arc::clone(vfs);
-                    self.write_status_yaml(&vfs).await;
-                }
-            }
-            "SIGPAUSE" => {
-                // Cancel already issued by caller; mark paused so re-enter loop blocks.
-                self.paused.store(true, Ordering::Release);
-                if let (Some(store), false) =
-                    (&self.invocation_store, self.invocation_id.is_empty())
-                {
-                    let _ = store
-                        .update_status(
-                            &self.invocation_id,
-                            crate::invocation::InvocationStatus::Paused,
-                        )
-                        .await;
-                }
-                if let Some(vfs) = &self.vfs {
-                    let vfs = Arc::clone(vfs);
-                    self.write_status_yaml(&vfs).await;
-                }
-            }
-            "SIGPIPE" => {
-                // Do NOT cancel; queue pipe data for the next turn context.
-                // (The cancellation was NOT yet called when SIGPIPE arrives — but the
-                //  caller already cancelled before this; the pipe data is queued anyway.)
-                let text = signal.payload["text"].as_str().unwrap_or("[pipe data]");
-                self.inject_pending_message(format!("[SIGPIPE]: {text}"));
-            }
-            "SIGSAVE" => {
-                self.capture_and_write_snapshot(SnapshotTrigger::Sigsave, CapturedBy::Kernel)
+        // 3. Flush conversation history and finalize invocation record.
+        if !self.invocation_id.is_empty() {
+            if let Some(store) = &self.invocation_store {
+                let _ = store
+                    .write_conversation(
+                        &self.invocation_id,
+                        &self.spawned_by,
+                        &self.agent_name,
+                        &self.memory.conversation_history,
+                    )
                     .await;
-                self.take_interim_snapshot().await;
-            }
-            "SIGRESUME" => {
-                // SIGRESUME during an LLM call: clear paused (shouldn't normally happen but handle it).
-                self.paused.store(false, Ordering::Release);
-            }
-            _ => {
-                tracing::debug!(pid = self.pid.as_u32(), signal = name, "unhandled signal during LLM");
-            }
-        }
-    }
-
-    pub async fn run_until_complete(&mut self, goal: &str) -> Result<TurnResult, AvixError> {
-        let mut messages: Vec<serde_json::Value> =
-            vec![serde_json::json!({"role": "user", "content": goal})];
-        let mut chain_count = 0;
-
-        loop {
-            let _system = self.build_system_prompt_str();
-            // pop from mock queue
-            let response = {
-                let mut q = self.llm_queue.lock().unwrap();
-                if q.is_empty() {
-                    return Err(AvixError::ConfigParse("no more mock LLM responses".into()));
-                }
-                q.remove(0)
-            };
-            // record call
-            self.call_log.lock().unwrap().push(messages.clone());
-
-            // Token renewal + expiry guard
-            self.maybe_renew_token();
-            if self.token.is_expired() {
-                return Err(AvixError::ConfigParse(
-                    "capability token expired; cannot begin turn".into(),
-                ));
-            }
-
-            match interpret_stop_reason(&response) {
-                TurnAction::ReturnResult(text) => return Ok(TurnResult { text }),
-                TurnAction::SummariseContext => {
-                    // stub: just continue - will fail if no more responses
-                }
-                TurnAction::DispatchTools(calls) => {
-                    chain_count += calls.len();
-                    if chain_count > self.max_tool_chain_length {
-                        return Err(AvixError::ConfigParse(format!(
-                            "exceeded max tool chain limit of {}",
-                            self.max_tool_chain_length
-                        )));
-                    }
-
-                    let mut results = Vec::new();
-                    for call in &calls {
-                        if call.name == "fs/read" {
-                            let path = call.args["path"].as_str().unwrap_or("");
-                            let content = {
-                                let fs = self.fs_data.lock().unwrap();
-                                fs.get(path).cloned().unwrap_or_default()
-                            };
-                            results.push(serde_json::json!([{
-                                "type": "tool_result",
-                                "tool_use_id": call.call_id,
-                                "content": String::from_utf8_lossy(&content).to_string()
-                            }]));
-                        } else {
-                            results.push(serde_json::json!([{
-                                "type": "tool_result",
-                                "tool_use_id": call.call_id,
-                                "content": "ok"
-                            }]));
-                        }
-                    }
-
-                    // append tool use from LLM
-                    for c in &response.content {
-                        messages.push(serde_json::json!({"role": "assistant", "content": [c]}));
-                    }
-                    // append tool results
-                    for r in results {
-                        messages.push(serde_json::json!({"role": "user", "content": r}));
-                    }
-                }
+                let _ = store
+                    .finalize(
+                        &self.invocation_id,
+                        status,
+                        chrono::Utc::now(),
+                        self.tokens_consumed,
+                        self.tool_calls_total,
+                        exit_reason,
+                    )
+                    .await;
             }
         }
     }
@@ -2057,8 +549,6 @@ impl RuntimeExecutor {
 mod tests {
     use super::*;
     use crate::executor::MockKernelHandle;
-    use crate::llm_client::{LlmCompleteRequest, LlmCompleteResponse, StopReason};
-    use serde_json::json;
 
     fn make_params(pid_val: u32, caps: &[&str]) -> SpawnParams {
         SpawnParams {
@@ -2088,9 +578,8 @@ mod tests {
     #[tokio::test]
     async fn test_tool_list_populated_at_spawn() {
         let executor = make_executor(200, &[]).await;
-        // Always-present tools should be in tool_list
         assert!(
-            !executor.tool_list.is_empty(),
+            !executor.tools.tool_list.is_empty(),
             "tool_list should be non-empty after spawn"
         );
     }
@@ -2103,6 +592,7 @@ mod tests {
             .await;
         executor.refresh_tool_list();
         let names: Vec<_> = executor
+            .tools
             .tool_list
             .iter()
             .filter_map(|t| t["name"].as_str())
@@ -2113,187 +603,12 @@ mod tests {
         );
     }
 
-    // GAP 4 tests
-    struct MockLlmClient {
-        responses: std::sync::Mutex<Vec<LlmCompleteResponse>>,
-    }
-
-    impl MockLlmClient {
-        fn new(responses: Vec<LlmCompleteResponse>) -> Self {
-            Self {
-                responses: std::sync::Mutex::new(responses),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl crate::llm_client::LlmClient for MockLlmClient {
-        async fn complete(&self, _req: LlmCompleteRequest) -> anyhow::Result<LlmCompleteResponse> {
-            let mut guard = self.responses.lock().unwrap();
-            if guard.is_empty() {
-                return Err(anyhow::anyhow!("no more mock responses"));
-            }
-            Ok(guard.remove(0))
-        }
-    }
-
-    #[tokio::test]
-    async fn test_run_with_client_rejects_ungranted_tool() {
-        // Token has no tools at all — any non-empty token would reject
-        let registry = Arc::new(MockToolRegistry::new());
-        let params = SpawnParams {
-            pid: Pid::new(202),
-            agent_name: "agent".into(),
-            goal: "goal".into(),
-            spawned_by: "kernel".into(),
-            session_id: "sess".into(),
-            token: CapabilityToken::test_token(&["cap/list"]), // has cap/list, not fs/read
-            system_prompt: None,
-            selected_model: "claude-sonnet-4".into(),
-            denied_tools: vec![],
-            context_limit: 0,
-            runtime_dir: std::path::PathBuf::new(),
-            invocation_id: String::new(),
-        };
-        let mut executor = RuntimeExecutor::spawn_with_registry(params, registry)
-            .await
-            .unwrap();
-
-        let mock_client = MockLlmClient::new(vec![
-            // First call: LLM tries to call fs/read (not in token)
-            LlmCompleteResponse {
-                content: vec![json!({
-                    "type": "tool_use",
-                    "id": "call-bad",
-                    "name": "fs__read",
-                    "input": {"path": "/etc/passwd"}
-                })],
-                stop_reason: StopReason::ToolUse,
-                input_tokens: 5,
-                output_tokens: 2,
-            },
-            // Second call: end turn
-            LlmCompleteResponse {
-                content: vec![json!({"type": "text", "text": "Done."})],
-                stop_reason: StopReason::EndTurn,
-                input_tokens: 5,
-                output_tokens: 2,
-            },
-        ]);
-
-        // Should not panic; the loop should handle the denied tool call gracefully
-        let result = executor.run_with_client("do something", &mock_client).await;
-        assert!(result.is_ok(), "should complete without panic: {result:?}");
-    }
-
-    // GAP 5 tests
-    #[tokio::test]
-    async fn test_dispatch_cap_list() {
-        let mut executor = make_executor(
-            210,
-            &[
-                "agent/spawn",
-                "agent/kill",
-                "agent/list",
-                "agent/wait",
-                "agent/send-message",
-            ],
-        )
-        .await;
-        let call = AvixToolCall {
-            call_id: "c1".into(),
-            name: "cap/list".into(),
-            args: json!({}),
-        };
-        let result = executor.dispatch_category2(&call).await.unwrap();
-        assert!(
-            result.get("grantedTools").is_some(),
-            "cap/list should return grantedTools"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_cap_escalate() {
-        let mut executor = make_executor(211, &[]).await;
-        let call = AvixToolCall {
-            call_id: "c2".into(),
-            name: "cap/escalate".into(),
-            args: json!({
-                "reason": "I found PII data",
-                "context": "some context",
-                "options": []
-            }),
-        };
-        let result = executor.dispatch_category2(&call).await.unwrap();
-        assert!(
-            result.get("guidance").is_some(),
-            "cap/escalate should return guidance"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_pipe_open() {
-        let mut executor =
-            make_executor(212, &["pipe/open", "pipe/write", "pipe/read", "pipe/close"]).await;
-        let call = AvixToolCall {
-            call_id: "c3".into(),
-            name: "pipe/open".into(),
-            args: json!({"targetPid": 99, "direction": "out"}),
-        };
-        let result = executor.dispatch_category2(&call).await.unwrap();
-        assert!(
-            result.get("pipeId").is_some(),
-            "pipe/open should return pipeId"
-        );
-    }
-
-    // GAP 6 tests
-    #[tokio::test]
-    async fn test_hil_gate_blocks_without_kernel() {
-        let mut executor = make_executor(220, &[]).await;
-        executor.require_hil_for("cap/list");
-
-        let mock_client = MockLlmClient::new(vec![
-            // First call: LLM calls cap/list (HIL required)
-            LlmCompleteResponse {
-                content: vec![json!({
-                    "type": "tool_use",
-                    "id": "hil-call",
-                    "name": "cap__list",
-                    "input": {}
-                })],
-                stop_reason: StopReason::ToolUse,
-                input_tokens: 5,
-                output_tokens: 2,
-            },
-            // Second call: end turn
-            LlmCompleteResponse {
-                content: vec![json!({"type": "text", "text": "Done."})],
-                stop_reason: StopReason::EndTurn,
-                input_tokens: 5,
-                output_tokens: 2,
-            },
-        ]);
-
-        let result = executor.run_with_client("do something", &mock_client).await;
-        assert!(
-            result.is_ok(),
-            "loop should complete gracefully: {result:?}"
-        );
-        // Verify a pending message was injected about HIL
-        assert!(
-            executor
-                .pending_messages
-                .iter()
-                .any(|m| m.contains("HIL required")),
-            "should have HIL pending message"
-        );
-    }
+    // Dispatch/run tests live in runtime_executor/dispatch_manager.rs
 
     #[tokio::test]
     async fn test_set_max_tool_chain_length() {
         let mut executor = make_executor(230, &[]).await;
-        assert_eq!(executor.max_tool_chain_length, 50); // default
+        assert_eq!(executor.max_tool_chain_length, 50);
         executor.set_max_tool_chain_length(10);
         assert_eq!(executor.max_tool_chain_length, 10);
     }
@@ -2302,37 +617,7 @@ mod tests {
     async fn test_set_tool_budget() {
         let mut executor = make_executor(231, &["fs/read"]).await;
         executor.set_tool_budget("fs/read", 5);
-        assert_eq!(executor.tool_budgets.remaining("fs/read"), Some(5));
-    }
-
-    #[tokio::test]
-    async fn test_require_hil_for_sets_field() {
-        let mut executor = make_executor(232, &[]).await;
-        executor.require_hil_for("cap/escalate");
-        executor.require_hil_for("fs/delete");
-        // Verify the tools are recorded by checking hil gating in a turn
-        // (indirect test — we just verify the pending_messages after a blocked call)
-        let mock_client = MockLlmClient::new(vec![
-            LlmCompleteResponse {
-                content: vec![json!({
-                    "type": "tool_use",
-                    "id": "call-1",
-                    "name": "cap__escalate",
-                    "input": {}
-                })],
-                stop_reason: StopReason::ToolUse,
-                input_tokens: 5,
-                output_tokens: 2,
-            },
-            LlmCompleteResponse {
-                content: vec![json!({"type": "text", "text": "ok"})],
-                stop_reason: StopReason::EndTurn,
-                input_tokens: 3,
-                output_tokens: 1,
-            },
-        ]);
-        let result = executor.run_with_client("test", &mock_client).await;
-        assert!(result.is_ok());
+        assert_eq!(executor.tools.tool_budgets.remaining("fs/read"), Some(5));
     }
 
     #[tokio::test]
@@ -2344,34 +629,6 @@ mod tests {
         assert_eq!(executor.pending_messages.len(), 3);
         assert_eq!(executor.pending_messages[0], "msg-1");
         assert_eq!(executor.pending_messages[2], "msg-3");
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_agent_kill() {
-        let registry = Arc::new(MockToolRegistry::new());
-        let kernel = Arc::new(MockKernelHandle::new());
-        let params = make_params(
-            250,
-            &[
-                "agent/spawn",
-                "agent/kill",
-                "agent/list",
-                "agent/wait",
-                "agent/send-message",
-            ],
-        );
-        let mut executor =
-            RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
-                .await
-                .unwrap();
-        let call = AvixToolCall {
-            call_id: "kill-1".into(),
-            name: "agent/kill".into(),
-            args: json!({"pid": 77, "reason": "done"}),
-        };
-        let result = executor.dispatch_category2(&call).await.unwrap();
-        assert_eq!(result["killed"], true);
-        assert!(kernel.received_proc_kill(77).await);
     }
 
     #[tokio::test]
@@ -2401,306 +658,14 @@ mod tests {
         let executor = RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, kernel)
             .await
             .unwrap();
-        assert!(!executor.tool_list.is_empty());
-        // kernel is set
+        assert!(!executor.tools.tool_list.is_empty());
     }
 
     #[tokio::test]
     async fn test_set_token_expiry_in_and_on_fs_read() {
         let mut executor = make_executor(241, &[]).await;
-        // set_token_expiry_in should set token_expiry_at
         executor.set_token_expiry_in(Duration::from_secs(300));
-        // on_fs_read should store data
         executor.on_fs_read("/tmp/test.txt", b"hello world");
-        // No panic = success; we test indirectly via run_until_complete with fs/read
-    }
-
-    #[tokio::test]
-    async fn test_run_until_complete_fs_read() {
-        let mut executor = make_executor(242, &[]).await;
-        executor.on_fs_read("/tmp/hello.txt", b"file contents here");
-
-        // Simulate: LLM calls fs/read, then returns text
-        executor.push_llm_response(LlmCompleteResponse {
-            content: vec![json!({
-                "type": "tool_use",
-                "id": "read-call",
-                "name": "fs/read",
-                "input": {"path": "/tmp/hello.txt"}
-            })],
-            stop_reason: StopReason::ToolUse,
-            input_tokens: 5,
-            output_tokens: 2,
-        });
-        executor.push_llm_response(LlmCompleteResponse {
-            content: vec![json!({"type": "text", "text": "I read the file"})],
-            stop_reason: StopReason::EndTurn,
-            input_tokens: 5,
-            output_tokens: 3,
-        });
-
-        let result = executor.run_until_complete("read the file").await;
-        assert!(result.is_ok());
-        assert!(result.unwrap().text.contains("read the file"));
-    }
-
-    #[tokio::test]
-    async fn test_run_until_complete_chain_limit_exceeded() {
-        let mut executor = make_executor(243, &[]).await;
-        executor.set_max_tool_chain_length(1);
-
-        // Push two tool-use responses (will exceed chain limit of 1)
-        for i in 0..3 {
-            executor.push_llm_response(LlmCompleteResponse {
-                content: vec![json!({
-                    "type": "tool_use",
-                    "id": format!("call-{i}"),
-                    "name": "cap/list",
-                    "input": {}
-                })],
-                stop_reason: StopReason::ToolUse,
-                input_tokens: 5,
-                output_tokens: 2,
-            });
-        }
-
-        let result = executor.run_until_complete("do stuff").await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("max tool chain"), "err: {err}");
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_job_watch() {
-        let mut executor = make_executor(244, &[]).await;
-        let call = AvixToolCall {
-            call_id: "c1".into(),
-            name: "job/watch".into(),
-            args: json!({"jobId": "job-abc"}),
-        };
-        let result = executor.dispatch_category2(&call).await.unwrap();
-        assert_eq!(result["finalStatus"], "done");
-        assert_eq!(result["jobId"], "job-abc");
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_agent_list() {
-        let mut executor = make_executor(245, &[]).await;
-        let call = AvixToolCall {
-            call_id: "c2".into(),
-            name: "agent/list".into(),
-            args: json!({}),
-        };
-        let result = executor.dispatch_category2(&call).await.unwrap();
-        assert!(result["agents"].is_array());
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_agent_wait() {
-        let mut executor = make_executor(246, &[]).await;
-        let call = AvixToolCall {
-            call_id: "c3".into(),
-            name: "agent/wait".into(),
-            args: json!({"pid": 99}),
-        };
-        let result = executor.dispatch_category2(&call).await.unwrap();
-        assert_eq!(result["finalStatus"], "completed");
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_agent_send_message() {
-        let mut executor = make_executor(247, &[]).await;
-        let call = AvixToolCall {
-            call_id: "c4".into(),
-            name: "agent/send-message".into(),
-            args: json!({"pid": 99, "message": "hello"}),
-        };
-        let result = executor.dispatch_category2(&call).await.unwrap();
-        assert_eq!(result["delivered"], true);
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_pipe_write_and_read_and_close() {
-        let mut executor = make_executor(248, &[]).await;
-
-        let write_call = AvixToolCall {
-            call_id: "pw".into(),
-            name: "pipe/write".into(),
-            args: json!({"pipeId": "p1", "content": "hello"}),
-        };
-        let w_result = executor.dispatch_category2(&write_call).await.unwrap();
-        assert!(w_result.get("tokensSent").is_some());
-
-        let read_call = AvixToolCall {
-            call_id: "pr".into(),
-            name: "pipe/read".into(),
-            args: json!({"pipeId": "p1"}),
-        };
-        let r_result = executor.dispatch_category2(&read_call).await.unwrap();
-        assert!(r_result.get("content").is_some());
-
-        let close_call = AvixToolCall {
-            call_id: "pc".into(),
-            name: "pipe/close".into(),
-            args: json!({"pipeId": "p1"}),
-        };
-        let c_result = executor.dispatch_category2(&close_call).await.unwrap();
-        assert_eq!(c_result["closed"], true);
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_unknown_tool_returns_stub() {
-        let mut executor = make_executor(249, &[]).await;
-        let call = AvixToolCall {
-            call_id: "c99".into(),
-            name: "some/unknown-tool".into(),
-            args: json!({}),
-        };
-        let result = executor.dispatch_category2(&call).await.unwrap();
-        // Unknown tool returns stub response
-        assert!(result.get("content").is_some());
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_cap_request_tool_without_kernel() {
-        let mut executor = make_executor(250, &[]).await;
-        let call = AvixToolCall {
-            call_id: "c5".into(),
-            name: "cap/request-tool".into(),
-            args: json!({"tool": "fs/read", "reason": "need it"}),
-        };
-        let result = executor.dispatch_category2(&call).await.unwrap();
-        // No kernel → not auto-approved
-        assert_eq!(result["approved"], false);
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_agent_spawn_without_kernel() {
-        let mut executor = make_executor(251, &[]).await;
-        let call = AvixToolCall {
-            call_id: "c6".into(),
-            name: "agent/spawn".into(),
-            args: json!({"agent": "worker", "goal": "do stuff"}),
-        };
-        let result = executor.dispatch_category2(&call).await.unwrap();
-        assert_eq!(result["spawned"], true);
-    }
-
-    #[tokio::test]
-    async fn test_hil_gate_with_auto_approve_kernel() {
-        let registry = Arc::new(MockToolRegistry::new());
-        let kernel = Arc::new(MockKernelHandle::new());
-        kernel.auto_approve_resource_request().await;
-
-        let params = make_params(252, &["cap/list"]);
-        let mut executor =
-            RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, kernel)
-                .await
-                .unwrap();
-
-        executor.require_hil_for("cap/list");
-
-        let mock_client = MockLlmClient::new(vec![
-            LlmCompleteResponse {
-                content: vec![json!({
-                    "type": "tool_use",
-                    "id": "hil-auto",
-                    "name": "cap__list",
-                    "input": {}
-                })],
-                stop_reason: StopReason::ToolUse,
-                input_tokens: 5,
-                output_tokens: 2,
-            },
-            LlmCompleteResponse {
-                content: vec![json!({"type": "text", "text": "Done."})],
-                stop_reason: StopReason::EndTurn,
-                input_tokens: 3,
-                output_tokens: 1,
-            },
-        ]);
-
-        let result = executor.run_with_client("do something", &mock_client).await;
-        assert!(
-            result.is_ok(),
-            "auto-approved HIL should complete: {result:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_run_with_client_chain_limit_exceeded() {
-        let mut executor = make_executor(253, &[]).await;
-        executor.set_max_tool_chain_length(1);
-
-        let mock_client = MockLlmClient::new(vec![LlmCompleteResponse {
-            content: vec![
-                json!({"type": "tool_use", "id": "c1", "name": "cap__list", "input": {}}),
-                json!({"type": "tool_use", "id": "c2", "name": "cap__list", "input": {}}),
-            ],
-            stop_reason: StopReason::ToolUse,
-            input_tokens: 5,
-            output_tokens: 2,
-        }]);
-
-        let result = executor.run_with_client("do it", &mock_client).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("max tool chain"));
-    }
-
-    #[tokio::test]
-    async fn test_current_tool_list_excludes_removed() {
-        let mut executor = make_executor(254, &[]).await;
-        let initial_count = executor.current_tool_list().len();
-        executor
-            .handle_tool_changed("removed", "cap/list", "test")
-            .await;
-        let after_count = executor.current_tool_list().len();
-        assert!(
-            after_count < initial_count,
-            "removed tool should reduce list"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_llm_call_count_tracks_calls() {
-        let mut executor = make_executor(255, &[]).await;
-        assert_eq!(executor.llm_call_count(), 0);
-
-        executor.push_llm_response(LlmCompleteResponse {
-            content: vec![json!({"type": "text", "text": "done"})],
-            stop_reason: StopReason::EndTurn,
-            input_tokens: 1,
-            output_tokens: 1,
-        });
-        let _ = executor.run_until_complete("test").await;
-        assert_eq!(executor.llm_call_count(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_call_messages_returns_empty_for_invalid_idx() {
-        let executor = make_executor(256, &[]).await;
-        let msgs = executor.call_messages(99);
-        assert!(msgs.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_run_until_complete_summarise_context_stub() {
-        let mut executor = make_executor(257, &[]).await;
-        // SummariseContext is treated as "continue" but needs another response
-        executor.push_llm_response(LlmCompleteResponse {
-            content: vec![],
-            stop_reason: StopReason::MaxTokens, // maps to SummariseContext
-            input_tokens: 5,
-            output_tokens: 0,
-        });
-        executor.push_llm_response(LlmCompleteResponse {
-            content: vec![json!({"type": "text", "text": "summary done"})],
-            stop_reason: StopReason::EndTurn,
-            input_tokens: 3,
-            output_tokens: 1,
-        });
-        let result = executor.run_until_complete("test").await;
-        assert!(result.is_ok());
     }
 
     // T-REX-20: shutdown_with_status(Completed) finalizes invocation
@@ -2728,7 +693,7 @@ mod tests {
         let mut executor = make_executor(200, &[]).await;
         executor.invocation_store = Some(Arc::clone(&store));
         executor.invocation_id = "inv-rex-20".into();
-        executor.conversation_history = vec![
+        executor.memory.conversation_history = vec![
             ("user".into(), "hello".into()),
             ("assistant".into(), "hi".into()),
         ];
@@ -2821,11 +786,9 @@ mod tests {
     async fn test_shutdown_with_status_no_store_no_panic() {
         use crate::invocation::InvocationStatus;
         let mut executor = make_executor(203, &[]).await;
-        // No invocation_store set
         executor
             .shutdown_with_status(InvocationStatus::Completed, None)
             .await;
-        // If we got here, no panic
     }
 
     // T-REX-24: 3-message conversation produces 3-line JSONL
@@ -2856,7 +819,7 @@ mod tests {
         let mut executor = make_executor(204, &[]).await;
         executor.invocation_store = Some(Arc::clone(&store));
         executor.invocation_id = "inv-rex-24".into();
-        executor.conversation_history = vec![
+        executor.memory.conversation_history = vec![
             ("user".into(), "msg1".into()),
             ("assistant".into(), "msg2".into()),
             ("user".into(), "msg3".into()),
@@ -2931,7 +894,6 @@ mod tests {
         executor.invocation_store = Some(Arc::clone(&store));
         executor.invocation_id = "inv-rex-31".into();
 
-        // Pause first, then resume.
         executor.deliver_signal("SIGPAUSE").await;
         executor.deliver_signal("SIGRESUME").await;
 
@@ -2943,7 +905,6 @@ mod tests {
     #[tokio::test]
     async fn sigpause_without_invocation_store_does_not_panic() {
         let executor = make_executor(232, &[]).await;
-        // No invocation_store set — should not panic.
         executor.deliver_signal("SIGPAUSE").await;
     }
 }

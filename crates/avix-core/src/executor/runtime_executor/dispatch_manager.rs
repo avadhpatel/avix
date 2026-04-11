@@ -1,0 +1,1605 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
+use tokio_util::sync::CancellationToken;
+
+use crate::error::AvixError;
+use crate::kernel::resource_request::{ResourceGrant, ResourceItem, ResourceRequest, Urgency};
+use crate::llm_client::{LlmCompleteResponse, StopReason, StreamChunk};
+use crate::llm_svc::adapter::AvixToolCall;
+use crate::memfs::VfsPath;
+use crate::signal::kind::SignalKind;
+use crate::snapshot::{capture, CaptureParams, CapturedBy, SnapshotMemory, SnapshotTrigger};
+
+use super::{RuntimeExecutor, TurnResult};
+
+impl RuntimeExecutor {
+    /// Deliver a signal to the executor.
+    ///
+    /// Updates atomic tracking flags immediately **and** forwards the signal onto
+    /// the in-process channel so an in-flight `run_with_client` loop can react
+    /// without waiting for the current LLM call to complete.
+    pub async fn deliver_signal(&self, signal: &str) {
+        *self.last_signal_received.lock().await = Some(signal.to_string());
+        self.pending_signal_count.fetch_add(1, Ordering::AcqRel);
+
+        let kind = match signal {
+            "SIGKILL" => SignalKind::Kill,
+            "SIGSTOP" => SignalKind::Stop,
+            "SIGPAUSE" => SignalKind::Pause,
+            "SIGRESUME" => SignalKind::Resume,
+            "SIGSAVE" => SignalKind::Save,
+            "SIGPIPE" => SignalKind::Pipe,
+            "SIGESCALATE" => SignalKind::Escalate,
+            "SIGSTART" => SignalKind::Start,
+            _ => SignalKind::Usr1,
+        };
+        let sig = crate::signal::kind::Signal {
+            target: self.pid,
+            kind,
+            payload: serde_json::Value::Null,
+        };
+        let _ = self.signal_tx.try_send(sig);
+
+        match signal {
+            "SIGSTOP" => {
+                self.memory
+                    .auto_log_session_end(
+                        self.pid.as_u32(),
+                        &self.agent_name,
+                        &self.spawned_by,
+                        &self.session_id,
+                        &self.token.granted_tools,
+                    )
+                    .await;
+                self.killed.store(true, Ordering::Release);
+                if let Some(vfs) = &self.vfs {
+                    self.write_status_yaml(vfs).await;
+                }
+            }
+            "SIGKILL" => {
+                self.killed.store(true, Ordering::Release);
+                if let Some(vfs) = &self.vfs {
+                    self.write_status_yaml(vfs).await;
+                }
+            }
+            "SIGPAUSE" => {
+                self.paused.store(true, Ordering::Release);
+                if let (Some(store), false) =
+                    (&self.invocation_store, self.invocation_id.is_empty())
+                {
+                    let _ = store
+                        .update_status(
+                            &self.invocation_id,
+                            crate::invocation::InvocationStatus::Paused,
+                        )
+                        .await;
+                }
+                if let Some(vfs) = &self.vfs {
+                    self.write_status_yaml(vfs).await;
+                }
+            }
+            "SIGRESUME" => {
+                self.paused.store(false, Ordering::Release);
+                if let (Some(store), false) =
+                    (&self.invocation_store, self.invocation_id.is_empty())
+                {
+                    let _ = store
+                        .update_status(
+                            &self.invocation_id,
+                            crate::invocation::InvocationStatus::Running,
+                        )
+                        .await;
+                }
+                if let Some(vfs) = &self.vfs {
+                    self.write_status_yaml(vfs).await;
+                }
+            }
+            "SIGSAVE" => {
+                self.capture_and_write_snapshot(SnapshotTrigger::Sigsave, CapturedBy::Kernel)
+                    .await;
+                self.take_interim_snapshot().await;
+            }
+            _ => {
+                tracing::debug!(pid = self.pid.as_u32(), signal, "signal received");
+                if let Some(vfs) = &self.vfs {
+                    self.write_status_yaml(vfs).await;
+                }
+            }
+        }
+    }
+
+    /// Capture a snapshot of current executor state and write it to the VFS.
+    pub(super) async fn capture_and_write_snapshot(
+        &self,
+        trigger: SnapshotTrigger,
+        captured_by: CapturedBy,
+    ) {
+        let vfs = match &self.vfs {
+            Some(v) => Arc::clone(v),
+            None => {
+                tracing::debug!(pid = self.pid.as_u32(), "snapshot skipped: no VFS attached");
+                return;
+            }
+        };
+
+        let snap = capture(CaptureParams {
+            agent_name: &self.agent_name,
+            pid: self.pid.as_u32(),
+            username: &self.spawned_by,
+            goal: &self.goal,
+            message_history: &self.memory.conversation_history,
+            temperature: 0.7,
+            granted_tools: &self.token.granted_tools,
+            trigger,
+            captured_by,
+            memory: SnapshotMemory::default(),
+            pending_requests: vec![],
+            open_pipes: vec![],
+        });
+
+        let vfs_path_str = snap.vfs_path(&self.spawned_by);
+        match snap.to_yaml() {
+            Ok(yaml) => match VfsPath::parse(&vfs_path_str) {
+                Ok(path) => {
+                    if let Err(e) = vfs.write(&path, yaml.into_bytes()).await {
+                        tracing::warn!(
+                            pid = self.pid.as_u32(),
+                            path = vfs_path_str,
+                            err = ?e,
+                            "snapshot VFS write failed"
+                        );
+                    } else {
+                        tracing::info!(
+                            pid = self.pid.as_u32(),
+                            path = vfs_path_str,
+                            "snapshot written"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(pid = self.pid.as_u32(), err = ?e, "invalid snapshot VFS path")
+                }
+            },
+            Err(e) => {
+                tracing::warn!(pid = self.pid.as_u32(), err = ?e, "snapshot serialisation failed")
+            }
+        }
+    }
+
+    /// Take an interim snapshot by persisting current state to the invocation store.
+    pub(super) async fn take_interim_snapshot(&self) {
+        let store = match &self.invocation_store {
+            Some(s) => Arc::clone(s),
+            None => return,
+        };
+        let id = &self.invocation_id;
+        if id.is_empty() {
+            return;
+        }
+
+        let conversation: Vec<(String, String)> = self
+            .memory
+            .conversation_history
+            .iter()
+            .map(|(r, c)| (r.clone(), c.clone()))
+            .collect();
+
+        if let Err(e) = store
+            .persist_interim(id, &conversation, self.tokens_consumed, self.tool_calls_total)
+            .await
+        {
+            tracing::warn!(pid = self.pid.as_u32(), id = %id, err = ?e, "interim snapshot failed");
+        } else {
+            tracing::debug!(pid = self.pid.as_u32(), id = %id, "interim snapshot saved");
+        }
+    }
+
+    /// Restore executor state from a named snapshot stored in the VFS.
+    pub async fn restore_from_snapshot(
+        &mut self,
+        snapshot_name: &str,
+    ) -> Result<super::RestoreResult, AvixError> {
+        use crate::snapshot::verify_checksum;
+        use crate::snapshot::SnapshotFile;
+
+        let vfs = match &self.vfs {
+            Some(v) => Arc::clone(v),
+            None => return Err(AvixError::ConfigParse("no VFS attached".into())),
+        };
+
+        let path_str = format!(
+            "/users/{}/snapshots/{}.yaml",
+            self.spawned_by, snapshot_name
+        );
+        let path = VfsPath::parse(&path_str).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let bytes = vfs
+            .read(&path)
+            .await
+            .map_err(|e| AvixError::NotFound(format!("snapshot '{snapshot_name}': {e}")))?;
+        let yaml = String::from_utf8(bytes).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let file = SnapshotFile::from_str(&yaml)?;
+
+        verify_checksum(&file)?;
+
+        let original_tools = file.spec.environment.granted_tools.clone();
+        self.token = crate::types::token::CapabilityToken::test_token(
+            &original_tools
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>(),
+        );
+
+        self.goal = file.spec.goal.clone();
+        if !file.spec.context_summary.is_empty() {
+            self.memory.conversation_history = vec![(
+                "assistant".to_string(),
+                format!(
+                    "[Restored from snapshot '{}']\n\nContext at capture:\n{}",
+                    file.metadata.name, file.spec.context_summary
+                ),
+            )];
+        }
+
+        let reissued_requests: Vec<String> = file
+            .spec
+            .pending_requests
+            .iter()
+            .filter(|r| r.status == "in-flight")
+            .map(|r| r.request_id.clone())
+            .collect();
+
+        let sigpipe_pipes: Vec<String> = file
+            .spec
+            .pipes
+            .iter()
+            .filter(|p| p.state == "open")
+            .map(|p| p.pipe_id.clone())
+            .collect();
+
+        tracing::info!(
+            pid = self.pid.as_u32(),
+            snapshot = %file.metadata.name,
+            reissued = ?reissued_requests,
+            sigpipe = ?sigpipe_pipes,
+            "restore complete"
+        );
+
+        Ok(super::RestoreResult {
+            snapshot_name: file.metadata.name.clone(),
+            agent_name: file.metadata.agent_name.clone(),
+            reissued_requests,
+            reconnected_pipes: vec![],
+            sigpipe_pipes,
+        })
+    }
+
+    /// Dispatch a Category 1 or 3 tool call via router.svc.
+    pub async fn dispatch_via_router(
+        &self,
+        call: &AvixToolCall,
+    ) -> Result<serde_json::Value, AvixError> {
+        Ok(serde_json::json!({
+            "content": format!("Tool '{}' executed via router (IPC dispatch not yet wired)", call.name)
+        }))
+    }
+
+    pub async fn dispatch_category2(
+        &mut self,
+        call: &AvixToolCall,
+    ) -> Result<serde_json::Value, AvixError> {
+        match call.name.as_str() {
+            "agent/spawn" => {
+                if let Some(kernel) = &self.kernel {
+                    let agent_name = call.args["agent"].as_str().unwrap_or("unknown");
+                    kernel.record_proc_spawn(agent_name).await;
+                }
+                Ok(serde_json::json!({"spawned": true}))
+            }
+            "agent/kill" => {
+                if let Some(kernel) = &self.kernel {
+                    let pid = call.args["pid"].as_u64().unwrap_or(0) as u32;
+                    kernel.record_proc_kill(pid).await;
+                }
+                Ok(serde_json::json!({"killed": true}))
+            }
+            "cap/request-tool" => {
+                let tool_name = call.args["tool"].as_str().unwrap_or("").to_string();
+                let reason = call.args["reason"].as_str().unwrap_or("").to_string();
+
+                if let Some(handler) = &self.resource_handler {
+                    let req = ResourceRequest::new(
+                        self.pid.as_u32(),
+                        self.token.signature.clone(),
+                        vec![ResourceItem::Tool {
+                            name: tool_name.clone(),
+                            urgency: Urgency::Normal,
+                            reason,
+                        }],
+                    );
+                    match handler.handle(&req, &self.token) {
+                        Ok(resp) => {
+                            if let Some(ResourceGrant::Tool {
+                                granted, new_token, ..
+                            }) = resp.grants.into_iter().next()
+                            {
+                                if granted {
+                                    if let Some(tok) = new_token {
+                                        self.token = tok;
+                                        self.refresh_tool_list();
+                                    }
+                                    return Ok(
+                                        serde_json::json!({"approved": true, "tool": tool_name}),
+                                    );
+                                }
+                            }
+                            return Ok(serde_json::json!({"approved": false, "tool": tool_name}));
+                        }
+                        Err(e) => {
+                            return Ok(
+                                serde_json::json!({"approved": false, "error": e.to_string()}),
+                            );
+                        }
+                    }
+                }
+
+                if let Some(kernel) = &self.kernel {
+                    if kernel.is_auto_approve().await {
+                        return Ok(serde_json::json!({"approved": true}));
+                    }
+                }
+                Ok(serde_json::json!({"approved": false}))
+            }
+            "cap/list" => {
+                let budgets: serde_json::Value = self
+                    .tools
+                    .registered_cat2
+                    .iter()
+                    .filter_map(|name| {
+                        self.tools
+                            .tool_budgets
+                            .remaining(name)
+                            .map(|n| (name.clone(), serde_json::json!(n)))
+                    })
+                    .collect::<serde_json::Map<String, serde_json::Value>>()
+                    .into();
+                Ok(serde_json::json!({
+                    "grantedTools": self.token.granted_tools,
+                    "constraints": {
+                        "maxTokensPerTurn": null,
+                        "maxToolChainLength": self.max_tool_chain_length,
+                        "toolCallBudgets": budgets
+                    },
+                    "tokenExpiresAt": self.token.expires_at.to_rfc3339()
+                }))
+            }
+            "cap/escalate" => {
+                let guidance = call.args["reason"].as_str().unwrap_or("");
+                self.pending_messages
+                    .push(format!("[Human guidance]: {guidance}"));
+                Ok(serde_json::json!({
+                    "selectedOption": "acknowledged",
+                    "guidance": guidance
+                }))
+            }
+            "job/watch" => Ok(serde_json::json!({
+                "jobId": call.args["jobId"],
+                "finalStatus": "done",
+                "result": null,
+                "error": null
+            })),
+            "agent/list" => Ok(serde_json::json!({ "agents": [] })),
+            "agent/wait" => Ok(serde_json::json!({
+                "pid": call.args["pid"],
+                "finalStatus": "completed",
+                "result": null,
+                "durationSec": 0
+            })),
+            "agent/send-message" => Ok(serde_json::json!({ "delivered": true })),
+            "pipe/open" => {
+                let target_pid = call.args["targetPid"].as_u64().unwrap_or(0) as u32;
+                let direction = call.args["direction"].as_str().unwrap_or("out").to_string();
+                let buffer_tokens = call.args["bufferTokens"].as_u64().unwrap_or(8192) as u32;
+
+                if let Some(handler) = &self.resource_handler {
+                    let pipe_direction = match direction.as_str() {
+                        "in" => crate::kernel::resource_request::PipeDirection::In,
+                        "bidirectional" => {
+                            crate::kernel::resource_request::PipeDirection::Bidirectional
+                        }
+                        _ => crate::kernel::resource_request::PipeDirection::Out,
+                    };
+                    let req = ResourceRequest::new(
+                        self.pid.as_u32(),
+                        self.token.signature.clone(),
+                        vec![ResourceItem::Pipe {
+                            target_pid,
+                            direction: pipe_direction,
+                            buffer_tokens,
+                            reason: String::new(),
+                        }],
+                    );
+                    match handler.handle(&req, &self.token) {
+                        Ok(resp) => {
+                            if let Some(ResourceGrant::Pipe {
+                                granted: true,
+                                pipe_id: Some(pipe_id),
+                                ..
+                            }) = resp.grants.into_iter().next()
+                            {
+                                if let Some(vfs) = &self.vfs {
+                                    let pid = self.pid.as_u32();
+                                    let entry = serde_yaml::to_string(&serde_json::json!({
+                                        "pipe_id": pipe_id,
+                                        "target_pid": target_pid,
+                                        "direction": direction,
+                                        "buffer_tokens": buffer_tokens,
+                                        "state": "open"
+                                    }))
+                                    .unwrap_or_default();
+                                    let path_str =
+                                        format!("/proc/{}/pipes/{}.yaml", pid, pipe_id);
+                                    if let Ok(path) = VfsPath::parse(&path_str) {
+                                        let _ = vfs.write(&path, entry.into_bytes()).await;
+                                    }
+                                }
+                                return Ok(
+                                    serde_json::json!({ "pipeId": pipe_id, "state": "open" }),
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(pid = ?self.pid, error = %e, "pipe/open resource request failed");
+                        }
+                    }
+                }
+
+                Ok(serde_json::json!({ "pipeId": "pipe-stub", "state": "open" }))
+            }
+            "pipe/write" => Ok(serde_json::json!({
+                "tokensSent": 0,
+                "bufferRemaining": 8192
+            })),
+            "pipe/read" => Ok(serde_json::json!({
+                "content": "",
+                "tokensRead": 0,
+                "pipeState": "open"
+            })),
+            "pipe/close" => Ok(serde_json::json!({ "closed": true })),
+            _ => Ok(serde_json::json!({
+                "content": format!("Tool '{}' executed (IPC dispatch not yet wired)", call.name)
+            })),
+        }
+    }
+
+    /// Token renewal — if the token is within 5 minutes of expiry, renew it.
+    pub(super) fn maybe_renew_token(&mut self) {
+        let until_expiry = self
+            .token
+            .expires_at
+            .signed_duration_since(chrono::Utc::now());
+        if !(until_expiry > chrono::Duration::zero()
+            && until_expiry <= chrono::Duration::minutes(5))
+        {
+            return;
+        }
+
+        if let Some(handler) = self.resource_handler.clone() {
+            let req = ResourceRequest::new(
+                self.pid.as_u32(),
+                self.token.signature.clone(),
+                vec![ResourceItem::TokenRenewal {
+                    reason: "auto-renewal within 5 min window".into(),
+                }],
+            );
+            match handler.handle(&req, &self.token) {
+                Ok(resp) => {
+                    if let Some(ResourceGrant::TokenRenewal {
+                        granted: true,
+                        new_token: Some(tok),
+                        ..
+                    }) = resp.grants.into_iter().next()
+                    {
+                        tracing::info!(pid = ?self.pid, "token renewed via KernelResourceHandler");
+                        self.token = tok;
+                        return;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(pid = ?self.pid, error = %e, "token renewal request failed");
+                }
+            }
+        }
+
+        self.token.expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+        tracing::info!(pid = ?self.pid, "token renewed (mock)");
+    }
+
+    /// Execute a single LLM turn, preferring streaming when the client supports it.
+    async fn run_turn_streaming(
+        &self,
+        req: crate::llm_client::LlmCompleteRequest,
+        client: &dyn crate::llm_client::LlmClient,
+        turn_id: uuid::Uuid,
+        cancel: CancellationToken,
+    ) -> Result<LlmCompleteResponse, AvixError> {
+        use futures::StreamExt as _;
+        use tokio::time::{interval, Duration, MissedTickBehavior};
+
+        const CHUNK_FLUSH_BYTES: usize = 80;
+
+        let stream = client.stream_complete(req.clone()).await;
+        let mut stream = match stream {
+            Ok(s) => s,
+            Err(_) => {
+                return client
+                    .complete(req)
+                    .await
+                    .map_err(|e| AvixError::ConfigParse(e.to_string()));
+            }
+        };
+
+        let turn_id_str = turn_id.to_string();
+        let mut accumulated_text = String::new();
+        let mut pending_calls: HashMap<String, (String, String)> = HashMap::new();
+        let mut stop_reason = StopReason::EndTurn;
+        let mut input_tokens = 0u32;
+        let mut output_tokens = 0u32;
+        let mut seq: u64 = 0;
+        let mut pending_text = String::new();
+
+        let mut flush_timer = interval(Duration::from_millis(50));
+        flush_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        flush_timer.tick().await;
+
+        macro_rules! flush_pending {
+            () => {
+                if !pending_text.is_empty() {
+                    if let Some(bus) = &self.event_bus {
+                        bus.agent_output_chunk(
+                            &self.session_id,
+                            self.pid.as_u32(),
+                            &turn_id_str,
+                            &pending_text,
+                            seq,
+                            false,
+                        );
+                        seq += 1;
+                    }
+                    pending_text.clear();
+                }
+            };
+        }
+
+        loop {
+            tokio::select! {
+                biased;
+
+                _ = cancel.cancelled() => {
+                    return Err(AvixError::Cancelled("LLM call cancelled by signal".into()));
+                }
+
+                chunk_opt = stream.next() => {
+                    let Some(chunk_result) = chunk_opt else { break; };
+                    match chunk_result.map_err(|e| AvixError::ConfigParse(e.to_string()))? {
+                        StreamChunk::TextDelta { text } => {
+                            accumulated_text.push_str(&text);
+                            pending_text.push_str(&text);
+                            if pending_text.len() >= CHUNK_FLUSH_BYTES {
+                                flush_pending!();
+                            }
+                        }
+                        StreamChunk::ToolCallStart { call_id, name } => {
+                            flush_pending!();
+                            pending_calls.insert(call_id, (name, String::new()));
+                        }
+                        StreamChunk::ToolCallArgsDelta { call_id, args_delta } => {
+                            if let Some(entry) = pending_calls.get_mut(&call_id) {
+                                entry.1.push_str(&args_delta);
+                            }
+                        }
+                        StreamChunk::ToolCallComplete { .. } => {}
+                        StreamChunk::Done {
+                            stop_reason: sr,
+                            input_tokens: it,
+                            output_tokens: ot,
+                        } => {
+                            stop_reason = sr;
+                            input_tokens = it;
+                            output_tokens = ot;
+                        }
+                    }
+                }
+
+                _ = flush_timer.tick() => {
+                    flush_pending!();
+                }
+            }
+        }
+
+        flush_pending!();
+
+        if let Some(bus) = &self.event_bus {
+            bus.agent_output_chunk(
+                &self.session_id,
+                self.pid.as_u32(),
+                &turn_id_str,
+                "",
+                seq,
+                true,
+            );
+        }
+
+        let mut content: Vec<serde_json::Value> = Vec::new();
+        if !accumulated_text.is_empty() {
+            content.push(serde_json::json!({"type": "text", "text": accumulated_text}));
+        }
+        for (call_id, (name, args_str)) in &pending_calls {
+            let input = serde_json::from_str::<serde_json::Value>(args_str)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            content.push(serde_json::json!({
+                "type": "tool_use",
+                "id": call_id,
+                "name": name,
+                "input": input,
+            }));
+        }
+
+        Ok(LlmCompleteResponse {
+            content,
+            stop_reason,
+            input_tokens,
+            output_tokens,
+        })
+    }
+
+    /// Handle a signal that arrived **between** LLM turns.
+    pub(super) async fn handle_signal_between_turns(
+        &mut self,
+        signal: &crate::signal::kind::Signal,
+    ) {
+        let name = signal.kind.as_str();
+        *self.last_signal_received.lock().await = Some(name.to_string());
+        self.pending_signal_count.fetch_add(1, Ordering::AcqRel);
+
+        match name {
+            "SIGKILL" | "SIGSTOP" => {
+                self.memory
+                    .auto_log_session_end(
+                        self.pid.as_u32(),
+                        &self.agent_name,
+                        &self.spawned_by,
+                        &self.session_id,
+                        &self.token.granted_tools,
+                    )
+                    .await;
+                self.killed.store(true, Ordering::Release);
+                if let Some(vfs) = &self.vfs {
+                    let vfs = Arc::clone(vfs);
+                    self.write_status_yaml(&vfs).await;
+                }
+            }
+            "SIGPAUSE" => {
+                self.paused.store(true, Ordering::Release);
+                if let (Some(store), false) =
+                    (&self.invocation_store, self.invocation_id.is_empty())
+                {
+                    let _ = store
+                        .update_status(
+                            &self.invocation_id,
+                            crate::invocation::InvocationStatus::Paused,
+                        )
+                        .await;
+                }
+                if let Some(vfs) = &self.vfs {
+                    let vfs = Arc::clone(vfs);
+                    self.write_status_yaml(&vfs).await;
+                }
+            }
+            "SIGRESUME" => {
+                self.paused.store(false, Ordering::Release);
+                if let (Some(store), false) =
+                    (&self.invocation_store, self.invocation_id.is_empty())
+                {
+                    let _ = store
+                        .update_status(
+                            &self.invocation_id,
+                            crate::invocation::InvocationStatus::Running,
+                        )
+                        .await;
+                }
+                if let Some(vfs) = &self.vfs {
+                    let vfs = Arc::clone(vfs);
+                    self.write_status_yaml(&vfs).await;
+                }
+            }
+            "SIGSAVE" => {
+                self.snapshot_requested.store(true, Ordering::Release);
+            }
+            "SIGPIPE" => {
+                let text = signal.payload["text"].as_str().unwrap_or("[pipe data]");
+                self.inject_pending_message(format!("[SIGPIPE]: {text}"));
+            }
+            _ => {
+                tracing::debug!(
+                    pid = self.pid.as_u32(),
+                    signal = name,
+                    "unhandled signal between turns"
+                );
+            }
+        }
+    }
+
+    /// Handle a signal that arrived **while an LLM call was in flight**.
+    pub(super) async fn handle_signal_during_llm(&mut self, signal: &crate::signal::kind::Signal) {
+        let name = signal.kind.as_str();
+        *self.last_signal_received.lock().await = Some(name.to_string());
+        self.pending_signal_count.fetch_add(1, Ordering::AcqRel);
+
+        match name {
+            "SIGKILL" | "SIGSTOP" => {
+                self.memory
+                    .auto_log_session_end(
+                        self.pid.as_u32(),
+                        &self.agent_name,
+                        &self.spawned_by,
+                        &self.session_id,
+                        &self.token.granted_tools,
+                    )
+                    .await;
+                self.killed.store(true, Ordering::Release);
+                if let Some(vfs) = &self.vfs {
+                    let vfs = Arc::clone(vfs);
+                    self.write_status_yaml(&vfs).await;
+                }
+            }
+            "SIGPAUSE" => {
+                self.paused.store(true, Ordering::Release);
+                if let (Some(store), false) =
+                    (&self.invocation_store, self.invocation_id.is_empty())
+                {
+                    let _ = store
+                        .update_status(
+                            &self.invocation_id,
+                            crate::invocation::InvocationStatus::Paused,
+                        )
+                        .await;
+                }
+                if let Some(vfs) = &self.vfs {
+                    let vfs = Arc::clone(vfs);
+                    self.write_status_yaml(&vfs).await;
+                }
+            }
+            "SIGPIPE" => {
+                let text = signal.payload["text"].as_str().unwrap_or("[pipe data]");
+                self.inject_pending_message(format!("[SIGPIPE]: {text}"));
+            }
+            "SIGSAVE" => {
+                self.capture_and_write_snapshot(SnapshotTrigger::Sigsave, CapturedBy::Kernel)
+                    .await;
+                self.take_interim_snapshot().await;
+            }
+            "SIGRESUME" => {
+                self.paused.store(false, Ordering::Release);
+            }
+            _ => {
+                tracing::debug!(
+                    pid = self.pid.as_u32(),
+                    signal = name,
+                    "unhandled signal during LLM"
+                );
+            }
+        }
+    }
+
+    /// Run the turn loop against a real LLM client.
+    pub async fn run_with_client(
+        &mut self,
+        goal: &str,
+        client: &dyn crate::llm_client::LlmClient,
+    ) -> Result<TurnResult, AvixError> {
+        use crate::executor::validation::validate_tool_call;
+        use crate::executor::stop_reason::{interpret_stop_reason, TurnAction};
+
+        let mut signal_rx = self.signal_rx.take().unwrap_or_else(|| {
+            let (_, rx) = tokio::sync::mpsc::channel(1);
+            rx
+        });
+
+        let system = self.build_system_prompt_str();
+        let mut messages: Vec<serde_json::Value> =
+            vec![serde_json::json!({"role": "user", "content": goal})];
+        let mut chain_count = 0;
+        let mut turn_num: u32 = 0;
+
+        loop {
+            turn_num += 1;
+            self.refresh_tool_list();
+            self.maybe_renew_token();
+
+            if self.token.is_expired() {
+                return Err(AvixError::CapabilityDenied(
+                    "capability token expired; cannot begin turn".into(),
+                ));
+            }
+
+            while let Ok(sig) = signal_rx.try_recv() {
+                self.handle_signal_between_turns(&sig).await;
+                if self.killed.load(Ordering::Acquire) {
+                    return Err(AvixError::Cancelled("killed between turns".into()));
+                }
+            }
+            if self.paused.load(Ordering::Acquire) {
+                loop {
+                    match signal_rx.recv().await {
+                        Some(sig) => {
+                            self.handle_signal_between_turns(&sig).await;
+                            if self.killed.load(Ordering::Acquire) {
+                                return Err(AvixError::Cancelled("killed while paused".into()));
+                            }
+                            if !self.paused.load(Ordering::Acquire) {
+                                break;
+                            }
+                        }
+                        None => {
+                            return Err(AvixError::Cancelled("signal channel closed".into()))
+                        }
+                    }
+                }
+            }
+
+            let turn_id = uuid::Uuid::new_v4();
+
+            if self.snapshot_requested.load(Ordering::Acquire) {
+                self.snapshot_requested.store(false, Ordering::Release);
+                self.take_interim_snapshot().await;
+            }
+
+            let req = crate::llm_client::LlmCompleteRequest {
+                model: String::new(),
+                messages: messages.clone(),
+                tools: self.current_tool_list(),
+                system: Some(system.clone()),
+                max_tokens: 4096,
+                turn_id,
+            };
+
+            if let Some(t) = &self.tracer {
+                t.agent_llm_call(
+                    self.pid.as_u32(),
+                    turn_num,
+                    "",
+                    messages.len(),
+                    self.current_tool_list().len(),
+                );
+            }
+
+            let cancel = CancellationToken::new();
+            let response = tokio::select! {
+                res = self.run_turn_streaming(req, client, turn_id, cancel.clone()) => {
+                    match res {
+                        Ok(r) => r,
+                        Err(AvixError::Cancelled(_)) => {
+                            if self.killed.load(Ordering::Acquire) {
+                                return Err(AvixError::Cancelled("SIGKILL/SIGSTOP".into()));
+                            }
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                sig_opt = signal_rx.recv() => {
+                    match sig_opt {
+                        Some(sig) => {
+                            cancel.cancel();
+                            self.handle_signal_during_llm(&sig).await;
+                            if self.killed.load(Ordering::Acquire) {
+                                return Err(AvixError::Cancelled(
+                                    "SIGKILL/SIGSTOP during LLM".into(),
+                                ));
+                            }
+                            continue;
+                        }
+                        None => return Err(AvixError::Cancelled("signal channel closed".into())),
+                    }
+                }
+            };
+
+            tracing::debug!(response = ?response, "RuntimeExecutor LLM Response");
+
+            if let Some(t) = &self.tracer {
+                let stop = format!("{:?}", response.stop_reason);
+                t.agent_llm_response(
+                    self.pid.as_u32(),
+                    turn_num,
+                    &stop,
+                    response.input_tokens as u64,
+                    response.output_tokens as u64,
+                );
+            }
+
+            self.tokens_consumed = self
+                .tokens_consumed
+                .saturating_add(response.total_tokens() as u64);
+            self.context_used = response.input_tokens as u64;
+            if let Some(vfs) = &self.vfs {
+                let vfs = Arc::clone(vfs);
+                self.write_status_yaml(&vfs).await;
+            }
+
+            match interpret_stop_reason(&response) {
+                TurnAction::ReturnResult(text) => {
+                    return Ok(TurnResult { text });
+                }
+                TurnAction::SummariseContext => {
+                    let text = response
+                        .content
+                        .iter()
+                        .filter_map(|c| c["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("");
+                    return Ok(TurnResult { text });
+                }
+                TurnAction::DispatchTools(calls) => {
+                    chain_count += calls.len();
+                    if chain_count > self.max_tool_chain_length {
+                        return Err(AvixError::ConfigParse(format!(
+                            "exceeded max tool chain limit of {}",
+                            self.max_tool_chain_length
+                        )));
+                    }
+                    messages.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": response.content
+                    }));
+                    let mut tool_results = Vec::new();
+                    for call in &calls {
+                        if let Err(e) = validate_tool_call(
+                            &self.token,
+                            call,
+                            &mut self.tools.tool_budgets,
+                        ) {
+                            tool_results.push(serde_json::json!({
+                                "type": "tool_result",
+                                "tool_use_id": call.call_id,
+                                "content": format!("Error: {e}")
+                            }));
+                            continue;
+                        }
+
+                        if self.tools.hil_required_tools.iter().any(|t| t == &call.name) {
+                            if let Some(kernel) = &self.kernel {
+                                if !kernel.is_auto_approve().await {
+                                    tool_results.push(serde_json::json!({
+                                        "type": "tool_result",
+                                        "tool_use_id": call.call_id,
+                                        "content": "Tool call requires human approval (HIL gate). Not yet approved."
+                                    }));
+                                    continue;
+                                }
+                            } else {
+                                self.inject_pending_message(format!(
+                                    "[System]: HIL required for {}",
+                                    call.name
+                                ));
+                                tool_results.push(serde_json::json!({
+                                    "type": "tool_result",
+                                    "tool_use_id": call.call_id,
+                                    "content": "Tool call requires human approval."
+                                }));
+                                continue;
+                            }
+                        }
+
+                        self.tool_calls_total = self.tool_calls_total.saturating_add(1);
+
+                        if let Some(interval) = self.snapshot_interval {
+                            self.tool_calls_since_last_snapshot += 1;
+                            if self.tool_calls_since_last_snapshot >= interval {
+                                self.take_interim_snapshot().await;
+                                self.tool_calls_since_last_snapshot = 0;
+                            }
+                        }
+
+                        if let Some(bus) = &self.event_bus {
+                            bus.agent_tool_call(
+                                &self.session_id,
+                                self.pid.as_u32(),
+                                &call.call_id,
+                                &call.name,
+                                &call.args,
+                            );
+                        }
+                        if let Some(t) = &self.tracer {
+                            t.agent_tool_call(
+                                self.pid.as_u32(),
+                                &call.call_id,
+                                &call.name,
+                                &call.args,
+                            );
+                        }
+
+                        let result = if self.is_cat2_tool(&call.name) {
+                            self.dispatch_category2(call).await?
+                        } else {
+                            self.dispatch_via_router(call).await?
+                        };
+
+                        if let Some(bus) = &self.event_bus {
+                            bus.agent_tool_result(
+                                &self.session_id,
+                                self.pid.as_u32(),
+                                &call.call_id,
+                                &call.name,
+                                &result.to_string(),
+                            );
+                        }
+                        if let Some(t) = &self.tracer {
+                            t.agent_tool_result(
+                                self.pid.as_u32(),
+                                &call.call_id,
+                                &call.name,
+                                &result,
+                            );
+                        }
+
+                        tool_results.push(serde_json::json!({
+                            "type": "tool_result",
+                            "tool_use_id": call.call_id,
+                            "content": result.to_string()
+                        }));
+                    }
+                    messages.push(serde_json::json!({
+                        "role": "user",
+                        "content": tool_results
+                    }));
+                }
+            }
+        }
+    }
+
+    pub async fn run_until_complete(&mut self, goal: &str) -> Result<TurnResult, AvixError> {
+        use crate::executor::stop_reason::{interpret_stop_reason, TurnAction};
+
+        let mut messages: Vec<serde_json::Value> =
+            vec![serde_json::json!({"role": "user", "content": goal})];
+        let mut chain_count = 0;
+
+        loop {
+            let _system = self.build_system_prompt_str();
+            let response = {
+                let mut q = self.llm_queue.lock().unwrap();
+                if q.is_empty() {
+                    return Err(AvixError::ConfigParse("no more mock LLM responses".into()));
+                }
+                q.remove(0)
+            };
+            self.call_log.lock().unwrap().push(messages.clone());
+
+            self.maybe_renew_token();
+            if self.token.is_expired() {
+                return Err(AvixError::ConfigParse(
+                    "capability token expired; cannot begin turn".into(),
+                ));
+            }
+
+            match interpret_stop_reason(&response) {
+                TurnAction::ReturnResult(text) => return Ok(TurnResult { text }),
+                TurnAction::SummariseContext => {
+                    // stub: continue
+                }
+                TurnAction::DispatchTools(calls) => {
+                    chain_count += calls.len();
+                    if chain_count > self.max_tool_chain_length {
+                        return Err(AvixError::ConfigParse(format!(
+                            "exceeded max tool chain limit of {}",
+                            self.max_tool_chain_length
+                        )));
+                    }
+
+                    let mut results = Vec::new();
+                    for call in &calls {
+                        if call.name == "fs/read" {
+                            let path = call.args["path"].as_str().unwrap_or("");
+                            let content = {
+                                let fs = self.fs_data.lock().unwrap();
+                                fs.get(path).cloned().unwrap_or_default()
+                            };
+                            results.push(serde_json::json!([{
+                                "type": "tool_result",
+                                "tool_use_id": call.call_id,
+                                "content": String::from_utf8_lossy(&content).to_string()
+                            }]));
+                        } else {
+                            results.push(serde_json::json!([{
+                                "type": "tool_result",
+                                "tool_use_id": call.call_id,
+                                "content": "ok"
+                            }]));
+                        }
+                    }
+
+                    for c in &response.content {
+                        messages.push(serde_json::json!({"role": "assistant", "content": [c]}));
+                    }
+                    for r in results {
+                        messages.push(serde_json::json!({"role": "user", "content": r}));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::executor::runtime_executor::{MockToolRegistry, RuntimeExecutor};
+    use crate::executor::MockKernelHandle;
+    use crate::executor::SpawnParams;
+    use crate::llm_client::{LlmCompleteRequest, LlmCompleteResponse, StopReason};
+    use crate::llm_svc::adapter::AvixToolCall;
+    use crate::types::{token::CapabilityToken, Pid};
+    use serde_json::json;
+
+    fn make_params(pid_val: u32, caps: &[&str]) -> SpawnParams {
+        SpawnParams {
+            pid: Pid::new(pid_val),
+            agent_name: "test-agent".into(),
+            goal: "test goal".into(),
+            spawned_by: "kernel".into(),
+            session_id: "sess-test".into(),
+            token: CapabilityToken::test_token(caps),
+            system_prompt: None,
+            selected_model: "claude-sonnet-4".into(),
+            denied_tools: vec![],
+            context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
+            invocation_id: String::new(),
+        }
+    }
+
+    async fn make_executor(pid_val: u32, caps: &[&str]) -> RuntimeExecutor {
+        let registry = Arc::new(MockToolRegistry::new());
+        RuntimeExecutor::spawn_with_registry(make_params(pid_val, caps), registry)
+            .await
+            .unwrap()
+    }
+
+    struct MockLlmClient {
+        responses: std::sync::Mutex<Vec<LlmCompleteResponse>>,
+    }
+
+    impl MockLlmClient {
+        fn new(responses: Vec<LlmCompleteResponse>) -> Self {
+            Self {
+                responses: std::sync::Mutex::new(responses),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::llm_client::LlmClient for MockLlmClient {
+        async fn complete(&self, _req: LlmCompleteRequest) -> anyhow::Result<LlmCompleteResponse> {
+            let mut guard = self.responses.lock().unwrap();
+            if guard.is_empty() {
+                return Err(anyhow::anyhow!("no more mock responses"));
+            }
+            Ok(guard.remove(0))
+        }
+    }
+
+    // Dispatch tests
+
+    #[tokio::test]
+    async fn test_dispatch_cap_list() {
+        let mut executor = make_executor(
+            3210,
+            &[
+                "agent/spawn",
+                "agent/kill",
+                "agent/list",
+                "agent/wait",
+                "agent/send-message",
+            ],
+        )
+        .await;
+        let call = AvixToolCall {
+            call_id: "c1".into(),
+            name: "cap/list".into(),
+            args: json!({}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        assert!(result.get("grantedTools").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_cap_escalate() {
+        let mut executor = make_executor(3211, &[]).await;
+        let call = AvixToolCall {
+            call_id: "c2".into(),
+            name: "cap/escalate".into(),
+            args: json!({"reason": "I found PII data", "context": "", "options": []}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        assert!(result.get("guidance").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_pipe_open() {
+        let mut executor =
+            make_executor(3212, &["pipe/open", "pipe/write", "pipe/read", "pipe/close"]).await;
+        let call = AvixToolCall {
+            call_id: "c3".into(),
+            name: "pipe/open".into(),
+            args: json!({"targetPid": 99, "direction": "out"}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        assert!(result.get("pipeId").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_job_watch() {
+        let mut executor = make_executor(3244, &[]).await;
+        let call = AvixToolCall {
+            call_id: "c1".into(),
+            name: "job/watch".into(),
+            args: json!({"jobId": "job-abc"}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        assert_eq!(result["finalStatus"], "done");
+        assert_eq!(result["jobId"], "job-abc");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_list() {
+        let mut executor = make_executor(3245, &[]).await;
+        let call = AvixToolCall {
+            call_id: "c2".into(),
+            name: "agent/list".into(),
+            args: json!({}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        assert!(result["agents"].is_array());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_wait() {
+        let mut executor = make_executor(3246, &[]).await;
+        let call = AvixToolCall {
+            call_id: "c3".into(),
+            name: "agent/wait".into(),
+            args: json!({"pid": 99}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        assert_eq!(result["finalStatus"], "completed");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_send_message() {
+        let mut executor = make_executor(3247, &[]).await;
+        let call = AvixToolCall {
+            call_id: "c4".into(),
+            name: "agent/send-message".into(),
+            args: json!({"pid": 99, "message": "hello"}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        assert_eq!(result["delivered"], true);
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_pipe_write_and_read_and_close() {
+        let mut executor = make_executor(3248, &[]).await;
+
+        let w = executor
+            .dispatch_category2(&AvixToolCall {
+                call_id: "pw".into(),
+                name: "pipe/write".into(),
+                args: json!({"pipeId": "p1", "content": "hello"}),
+            })
+            .await
+            .unwrap();
+        assert!(w.get("tokensSent").is_some());
+
+        let r = executor
+            .dispatch_category2(&AvixToolCall {
+                call_id: "pr".into(),
+                name: "pipe/read".into(),
+                args: json!({"pipeId": "p1"}),
+            })
+            .await
+            .unwrap();
+        assert!(r.get("content").is_some());
+
+        let c = executor
+            .dispatch_category2(&AvixToolCall {
+                call_id: "pc".into(),
+                name: "pipe/close".into(),
+                args: json!({"pipeId": "p1"}),
+            })
+            .await
+            .unwrap();
+        assert_eq!(c["closed"], true);
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_unknown_tool_returns_stub() {
+        let mut executor = make_executor(3249, &[]).await;
+        let result = executor
+            .dispatch_category2(&AvixToolCall {
+                call_id: "c99".into(),
+                name: "some/unknown-tool".into(),
+                args: json!({}),
+            })
+            .await
+            .unwrap();
+        assert!(result.get("content").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_cap_request_tool_without_kernel() {
+        let mut executor = make_executor(3250, &[]).await;
+        let result = executor
+            .dispatch_category2(&AvixToolCall {
+                call_id: "c5".into(),
+                name: "cap/request-tool".into(),
+                args: json!({"tool": "fs/read", "reason": "need it"}),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result["approved"], false);
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_spawn_without_kernel() {
+        let mut executor = make_executor(3251, &[]).await;
+        let result = executor
+            .dispatch_category2(&AvixToolCall {
+                call_id: "c6".into(),
+                name: "agent/spawn".into(),
+                args: json!({"agent": "worker", "goal": "do stuff"}),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result["spawned"], true);
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_kill() {
+        let registry = Arc::new(MockToolRegistry::new());
+        let kernel = Arc::new(MockKernelHandle::new());
+        let params = make_params(
+            3252,
+            &["agent/spawn", "agent/kill", "agent/list", "agent/wait", "agent/send-message"],
+        );
+        let mut executor =
+            RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
+                .await
+                .unwrap();
+        let result = executor
+            .dispatch_category2(&AvixToolCall {
+                call_id: "kill-1".into(),
+                name: "agent/kill".into(),
+                args: json!({"pid": 77, "reason": "done"}),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result["killed"], true);
+        assert!(kernel.received_proc_kill(77).await);
+    }
+
+    // Run tests
+
+    #[tokio::test]
+    async fn test_run_with_client_rejects_ungranted_tool() {
+        let registry = Arc::new(MockToolRegistry::new());
+        let params = SpawnParams {
+            pid: Pid::new(3260),
+            agent_name: "agent".into(),
+            goal: "goal".into(),
+            spawned_by: "kernel".into(),
+            session_id: "sess".into(),
+            token: CapabilityToken::test_token(&["cap/list"]),
+            system_prompt: None,
+            selected_model: "claude-sonnet-4".into(),
+            denied_tools: vec![],
+            context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
+            invocation_id: String::new(),
+        };
+        let mut executor = RuntimeExecutor::spawn_with_registry(params, registry)
+            .await
+            .unwrap();
+
+        let mock_client = MockLlmClient::new(vec![
+            LlmCompleteResponse {
+                content: vec![json!({
+                    "type": "tool_use", "id": "call-bad", "name": "fs__read",
+                    "input": {"path": "/etc/passwd"}
+                })],
+                stop_reason: StopReason::ToolUse,
+                input_tokens: 5,
+                output_tokens: 2,
+            },
+            LlmCompleteResponse {
+                content: vec![json!({"type": "text", "text": "Done."})],
+                stop_reason: StopReason::EndTurn,
+                input_tokens: 5,
+                output_tokens: 2,
+            },
+        ]);
+        let result = executor.run_with_client("do something", &mock_client).await;
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn test_hil_gate_blocks_without_kernel() {
+        let mut executor = make_executor(3261, &[]).await;
+        executor.require_hil_for("cap/list");
+
+        let mock_client = MockLlmClient::new(vec![
+            LlmCompleteResponse {
+                content: vec![json!({
+                    "type": "tool_use", "id": "hil-call", "name": "cap__list", "input": {}
+                })],
+                stop_reason: StopReason::ToolUse,
+                input_tokens: 5,
+                output_tokens: 2,
+            },
+            LlmCompleteResponse {
+                content: vec![json!({"type": "text", "text": "Done."})],
+                stop_reason: StopReason::EndTurn,
+                input_tokens: 5,
+                output_tokens: 2,
+            },
+        ]);
+        let result = executor.run_with_client("do something", &mock_client).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert!(executor.pending_messages.iter().any(|m| m.contains("HIL required")));
+    }
+
+    #[tokio::test]
+    async fn test_hil_gate_with_auto_approve_kernel() {
+        let registry = Arc::new(MockToolRegistry::new());
+        let kernel = Arc::new(MockKernelHandle::new());
+        kernel.auto_approve_resource_request().await;
+
+        let params = make_params(3262, &["cap/list"]);
+        let mut executor =
+            RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, kernel)
+                .await
+                .unwrap();
+        executor.require_hil_for("cap/list");
+
+        let mock_client = MockLlmClient::new(vec![
+            LlmCompleteResponse {
+                content: vec![json!({
+                    "type": "tool_use", "id": "hil-auto", "name": "cap__list", "input": {}
+                })],
+                stop_reason: StopReason::ToolUse,
+                input_tokens: 5,
+                output_tokens: 2,
+            },
+            LlmCompleteResponse {
+                content: vec![json!({"type": "text", "text": "Done."})],
+                stop_reason: StopReason::EndTurn,
+                input_tokens: 3,
+                output_tokens: 1,
+            },
+        ]);
+        let result = executor.run_with_client("do something", &mock_client).await;
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn test_run_with_client_chain_limit_exceeded() {
+        let mut executor = make_executor(3263, &[]).await;
+        executor.set_max_tool_chain_length(1);
+
+        let mock_client = MockLlmClient::new(vec![LlmCompleteResponse {
+            content: vec![
+                json!({"type": "tool_use", "id": "c1", "name": "cap__list", "input": {}}),
+                json!({"type": "tool_use", "id": "c2", "name": "cap__list", "input": {}}),
+            ],
+            stop_reason: StopReason::ToolUse,
+            input_tokens: 5,
+            output_tokens: 2,
+        }]);
+        let result = executor.run_with_client("do it", &mock_client).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("max tool chain"));
+    }
+
+    #[tokio::test]
+    async fn test_run_until_complete_fs_read() {
+        let mut executor = make_executor(3264, &[]).await;
+        executor.on_fs_read("/tmp/hello.txt", b"file contents here");
+
+        executor.push_llm_response(LlmCompleteResponse {
+            content: vec![json!({
+                "type": "tool_use", "id": "read-call", "name": "fs/read",
+                "input": {"path": "/tmp/hello.txt"}
+            })],
+            stop_reason: StopReason::ToolUse,
+            input_tokens: 5,
+            output_tokens: 2,
+        });
+        executor.push_llm_response(LlmCompleteResponse {
+            content: vec![json!({"type": "text", "text": "I read the file"})],
+            stop_reason: StopReason::EndTurn,
+            input_tokens: 5,
+            output_tokens: 3,
+        });
+        let result = executor.run_until_complete("read the file").await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().text.contains("read the file"));
+    }
+
+    #[tokio::test]
+    async fn test_run_until_complete_chain_limit_exceeded() {
+        let mut executor = make_executor(3265, &[]).await;
+        executor.set_max_tool_chain_length(1);
+        for i in 0..3 {
+            executor.push_llm_response(LlmCompleteResponse {
+                content: vec![json!({
+                    "type": "tool_use", "id": format!("call-{i}"), "name": "cap/list", "input": {}
+                })],
+                stop_reason: StopReason::ToolUse,
+                input_tokens: 5,
+                output_tokens: 2,
+            });
+        }
+        let result = executor.run_until_complete("do stuff").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("max tool chain"));
+    }
+
+    #[tokio::test]
+    async fn test_run_until_complete_summarise_context_stub() {
+        let mut executor = make_executor(3266, &[]).await;
+        executor.push_llm_response(LlmCompleteResponse {
+            content: vec![],
+            stop_reason: StopReason::MaxTokens,
+            input_tokens: 5,
+            output_tokens: 0,
+        });
+        executor.push_llm_response(LlmCompleteResponse {
+            content: vec![json!({"type": "text", "text": "summary done"})],
+            stop_reason: StopReason::EndTurn,
+            input_tokens: 3,
+            output_tokens: 1,
+        });
+        let result = executor.run_until_complete("test").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_llm_call_count_tracks_calls() {
+        let mut executor = make_executor(3267, &[]).await;
+        assert_eq!(executor.llm_call_count(), 0);
+        executor.push_llm_response(LlmCompleteResponse {
+            content: vec![json!({"type": "text", "text": "done"})],
+            stop_reason: StopReason::EndTurn,
+            input_tokens: 1,
+            output_tokens: 1,
+        });
+        let _ = executor.run_until_complete("test").await;
+        assert_eq!(executor.llm_call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_call_messages_returns_empty_for_invalid_idx() {
+        let executor = make_executor(3268, &[]).await;
+        assert!(executor.call_messages(99).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_current_tool_list_excludes_removed() {
+        let mut executor = make_executor(3269, &[]).await;
+        let initial = executor.current_tool_list().len();
+        executor.handle_tool_changed("removed", "cap/list", "test").await;
+        assert!(executor.current_tool_list().len() < initial);
+    }
+}
