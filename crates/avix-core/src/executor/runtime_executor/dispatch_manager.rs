@@ -794,6 +794,9 @@ impl RuntimeExecutor {
     }
 
     /// Run the turn loop against a real LLM client.
+    ///
+    /// On success the signal receiver is restored to `self.signal_rx` so the
+    /// caller can invoke `wait_for_next_goal` without rebuilding the channel.
     pub async fn run_with_client(
         &mut self,
         goal: &str,
@@ -801,6 +804,13 @@ impl RuntimeExecutor {
     ) -> Result<TurnResult, AvixError> {
         use crate::executor::validation::validate_tool_call;
         use crate::executor::stop_reason::{interpret_stop_reason, TurnAction};
+
+        tracing::info!(
+            pid = self.pid.as_u32(),
+            agent = %self.agent_name,
+            goal = %goal,
+            "executor starting turn loop"
+        );
 
         let mut signal_rx = self.signal_rx.take().unwrap_or_else(|| {
             let (_, rx) = tokio::sync::mpsc::channel(1);
@@ -815,10 +825,18 @@ impl RuntimeExecutor {
 
         loop {
             turn_num += 1;
+            tracing::debug!(
+                pid = self.pid.as_u32(),
+                turn = turn_num,
+                tokens_consumed = self.tokens_consumed,
+                tool_calls = self.tool_calls_total,
+                "starting LLM turn"
+            );
             self.refresh_tool_list();
             self.maybe_renew_token();
 
             if self.token.is_expired() {
+                self.signal_rx = Some(signal_rx);
                 return Err(AvixError::CapabilityDenied(
                     "capability token expired; cannot begin turn".into(),
                 ));
@@ -827,22 +845,27 @@ impl RuntimeExecutor {
             while let Ok(sig) = signal_rx.try_recv() {
                 self.handle_signal_between_turns(&sig).await;
                 if self.killed.load(Ordering::Acquire) {
+                    self.signal_rx = Some(signal_rx);
                     return Err(AvixError::Cancelled("killed between turns".into()));
                 }
             }
             if self.paused.load(Ordering::Acquire) {
+                tracing::debug!(pid = self.pid.as_u32(), "executor paused; waiting for SIGRESUME");
                 loop {
                     match signal_rx.recv().await {
                         Some(sig) => {
                             self.handle_signal_between_turns(&sig).await;
                             if self.killed.load(Ordering::Acquire) {
+                                self.signal_rx = Some(signal_rx);
                                 return Err(AvixError::Cancelled("killed while paused".into()));
                             }
                             if !self.paused.load(Ordering::Acquire) {
+                                tracing::debug!(pid = self.pid.as_u32(), "executor resumed");
                                 break;
                             }
                         }
                         None => {
+                            self.signal_rx = Some(signal_rx);
                             return Err(AvixError::Cancelled("signal channel closed".into()))
                         }
                     }
@@ -865,6 +888,14 @@ impl RuntimeExecutor {
                 turn_id,
             };
 
+            tracing::debug!(
+                pid = self.pid.as_u32(),
+                turn = turn_num,
+                messages = messages.len(),
+                tools = req.tools.len(),
+                "dispatching LLM request"
+            );
+
             if let Some(t) = &self.tracer {
                 t.agent_llm_call(
                     self.pid.as_u32(),
@@ -882,11 +913,15 @@ impl RuntimeExecutor {
                         Ok(r) => r,
                         Err(AvixError::Cancelled(_)) => {
                             if self.killed.load(Ordering::Acquire) {
+                                self.signal_rx = Some(signal_rx);
                                 return Err(AvixError::Cancelled("SIGKILL/SIGSTOP".into()));
                             }
                             continue;
                         }
-                        Err(e) => return Err(e),
+                        Err(e) => {
+                            self.signal_rx = Some(signal_rx);
+                            return Err(e);
+                        }
                     }
                 }
                 sig_opt = signal_rx.recv() => {
@@ -895,18 +930,28 @@ impl RuntimeExecutor {
                             cancel.cancel();
                             self.handle_signal_during_llm(&sig).await;
                             if self.killed.load(Ordering::Acquire) {
+                                self.signal_rx = Some(signal_rx);
                                 return Err(AvixError::Cancelled(
                                     "SIGKILL/SIGSTOP during LLM".into(),
                                 ));
                             }
                             continue;
                         }
-                        None => return Err(AvixError::Cancelled("signal channel closed".into())),
+                        None => {
+                            self.signal_rx = Some(signal_rx);
+                            return Err(AvixError::Cancelled("signal channel closed".into()));
+                        }
                     }
                 }
             };
 
-            tracing::debug!(response = ?response, "RuntimeExecutor LLM Response");
+            tracing::debug!(
+                pid = self.pid.as_u32(),
+                stop_reason = ?response.stop_reason,
+                input_tokens = response.input_tokens,
+                output_tokens = response.output_tokens,
+                "LLM response received"
+            );
 
             if let Some(t) = &self.tracer {
                 let stop = format!("{:?}", response.stop_reason);
@@ -930,6 +975,16 @@ impl RuntimeExecutor {
 
             match interpret_stop_reason(&response) {
                 TurnAction::ReturnResult(text) => {
+                    tracing::info!(
+                        pid = self.pid.as_u32(),
+                        turn = turn_num,
+                        tokens_consumed = self.tokens_consumed,
+                        tool_calls = self.tool_calls_total,
+                        "turn loop complete; persisting invocation state"
+                    );
+                    self.save_invocation_state().await;
+                    self.save_session_response(&text).await;
+                    self.signal_rx = Some(signal_rx);
                     return Ok(TurnResult { text });
                 }
                 TurnAction::SummariseContext => {
@@ -939,11 +994,20 @@ impl RuntimeExecutor {
                         .filter_map(|c| c["text"].as_str())
                         .collect::<Vec<_>>()
                         .join("");
+                    tracing::info!(
+                        pid = self.pid.as_u32(),
+                        turn = turn_num,
+                        "context summarised; persisting invocation state"
+                    );
+                    self.save_invocation_state().await;
+                    self.save_session_response(&text).await;
+                    self.signal_rx = Some(signal_rx);
                     return Ok(TurnResult { text });
                 }
                 TurnAction::DispatchTools(calls) => {
                     chain_count += calls.len();
                     if chain_count > self.max_tool_chain_length {
+                        self.signal_rx = Some(signal_rx);
                         return Err(AvixError::ConfigParse(format!(
                             "exceeded max tool chain limit of {}",
                             self.max_tool_chain_length
@@ -953,6 +1017,11 @@ impl RuntimeExecutor {
                         "role": "assistant",
                         "content": response.content
                     }));
+                    tracing::debug!(
+                        pid = self.pid.as_u32(),
+                        tool_count = calls.len(),
+                        "dispatching tool calls"
+                    );
                     let mut tool_results = Vec::new();
                     for call in &calls {
                         if let Err(e) = validate_tool_call(
@@ -960,6 +1029,12 @@ impl RuntimeExecutor {
                             call,
                             &mut self.tools.tool_budgets,
                         ) {
+                            tracing::warn!(
+                                pid = self.pid.as_u32(),
+                                tool = %call.name,
+                                error = %e,
+                                "tool call validation failed"
+                            );
                             tool_results.push(serde_json::json!({
                                 "type": "tool_result",
                                 "tool_use_id": call.call_id,
@@ -971,6 +1046,11 @@ impl RuntimeExecutor {
                         if self.tools.hil_required_tools.iter().any(|t| t == &call.name) {
                             if let Some(kernel) = &self.kernel {
                                 if !kernel.is_auto_approve().await {
+                                    tracing::debug!(
+                                        pid = self.pid.as_u32(),
+                                        tool = %call.name,
+                                        "HIL gate blocked tool call"
+                                    );
                                     tool_results.push(serde_json::json!({
                                         "type": "tool_result",
                                         "tool_use_id": call.call_id,
@@ -993,6 +1073,13 @@ impl RuntimeExecutor {
                         }
 
                         self.tool_calls_total = self.tool_calls_total.saturating_add(1);
+                        tracing::debug!(
+                            pid = self.pid.as_u32(),
+                            tool = %call.name,
+                            call_id = %call.call_id,
+                            tool_calls_total = self.tool_calls_total,
+                            "dispatching tool call"
+                        );
 
                         if let Some(interval) = self.snapshot_interval {
                             self.tool_calls_since_last_snapshot += 1;
@@ -1026,6 +1113,13 @@ impl RuntimeExecutor {
                             self.dispatch_via_router(call).await?
                         };
 
+                        tracing::debug!(
+                            pid = self.pid.as_u32(),
+                            tool = %call.name,
+                            call_id = %call.call_id,
+                            "tool call completed"
+                        );
+
                         if let Some(bus) = &self.event_bus {
                             bus.agent_tool_result(
                                 &self.session_id,
@@ -1044,6 +1138,10 @@ impl RuntimeExecutor {
                             );
                         }
 
+                        // Persist interim invocation state after each tool call so
+                        // progress is not lost on unexpected termination.
+                        self.save_invocation_state().await;
+
                         tool_results.push(serde_json::json!({
                             "type": "tool_result",
                             "tool_use_id": call.call_id,
@@ -1055,6 +1153,49 @@ impl RuntimeExecutor {
                         "content": tool_results
                     }));
                 }
+            }
+        }
+    }
+
+    /// Persist current invocation tokens and tool-call count to the store.
+    async fn save_invocation_state(&self) {
+        if self.invocation_id.is_empty() {
+            return;
+        }
+        if let Some(store) = &self.invocation_store {
+            let _ = store
+                .persist_interim(
+                    &self.invocation_id,
+                    &self.memory.conversation_history,
+                    self.tokens_consumed,
+                    self.tool_calls_total,
+                )
+                .await;
+        }
+    }
+
+    /// Update the session record with the latest response text and token count.
+    async fn save_session_response(&self, response_text: &str) {
+        if self.session_id.is_empty() {
+            return;
+        }
+        if let Some(store) = &self.session_store {
+            let session_uuid =
+                match uuid::Uuid::parse_str(&self.session_id) {
+                    Ok(u) => u,
+                    Err(_) => return,
+                };
+            if let Ok(Some(mut session)) = store.get(&session_uuid).await {
+                // Store a truncated preview of the last response as the session summary.
+                let preview_len = response_text.len().min(500);
+                session.summary = Some(response_text[..preview_len].to_string());
+                session.last_updated = chrono::Utc::now();
+                tracing::debug!(
+                    pid = self.pid.as_u32(),
+                    session_id = %self.session_id,
+                    "updating session response summary"
+                );
+                let _ = store.update(&session).await;
             }
         }
     }

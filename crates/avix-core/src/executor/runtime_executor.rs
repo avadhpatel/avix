@@ -477,6 +477,91 @@ impl RuntimeExecutor {
             .await;
     }
 
+    /// Transition this executor to idle, persisting invocation and session state.
+    ///
+    /// Called after a successful turn when the agent is waiting for the next message.
+    /// Unlike `shutdown_with_status`, this does NOT deregister Cat2 tools — the executor
+    /// stays alive and can accept another goal via `wait_for_next_goal`.
+    pub async fn idle(&mut self) {
+        tracing::debug!(pid = self.pid.as_u32(), "executor transitioning to idle");
+
+        if !self.invocation_id.is_empty() {
+            if let Some(store) = &self.invocation_store {
+                let _ = store
+                    .update_status(
+                        &self.invocation_id,
+                        crate::invocation::InvocationStatus::Idle,
+                    )
+                    .await;
+            }
+        }
+
+        if !self.session_id.is_empty() {
+            if let Some(store) = &self.session_store {
+                if let Ok(Some(mut session)) = store
+                    .get(&uuid::Uuid::parse_str(&self.session_id).unwrap_or_default())
+                    .await
+                {
+                    session.mark_idle();
+                    let _ = store.update(&session).await;
+                }
+            }
+        }
+    }
+
+    /// Block until a `SIGSTART` signal arrives carrying the next goal string.
+    ///
+    /// Handles `SIGPAUSE`/`SIGRESUME` while waiting. Returns `Some(goal)` on `SIGSTART`,
+    /// `None` if the executor is killed or the signal channel is closed.
+    pub async fn wait_for_next_goal(&mut self) -> Option<String> {
+        use std::sync::atomic::Ordering;
+        // Take ownership so we can freely borrow `self` inside the loop.
+        let mut signal_rx = self.signal_rx.take()?;
+        loop {
+            match signal_rx.recv().await {
+                Some(sig) => {
+                    match &sig.kind {
+                        crate::signal::kind::SignalKind::Start => {
+                            let goal = sig.payload["goal"].as_str().unwrap_or("").to_string();
+                            tracing::info!(
+                                pid = self.pid.as_u32(),
+                                "SIGSTART received; resuming executor with new goal"
+                            );
+                            self.signal_rx = Some(signal_rx);
+                            return Some(goal);
+                        }
+                        crate::signal::kind::SignalKind::Kill
+                        | crate::signal::kind::SignalKind::Stop => {
+                            self.killed.store(true, Ordering::Release);
+                            tracing::info!(
+                                pid = self.pid.as_u32(),
+                                signal = ?sig.kind,
+                                "executor killed while idle"
+                            );
+                            self.signal_rx = Some(signal_rx);
+                            return None;
+                        }
+                        _ => {
+                            self.handle_signal_between_turns(&sig).await;
+                            if self.killed.load(Ordering::Acquire) {
+                                self.signal_rx = Some(signal_rx);
+                                return None;
+                            }
+                        }
+                    }
+                }
+                None => {
+                    tracing::debug!(
+                        pid = self.pid.as_u32(),
+                        "signal channel closed while waiting for next goal"
+                    );
+                    self.signal_rx = Some(signal_rx);
+                    return None;
+                }
+            }
+        }
+    }
+
     /// Shutdown the executor, deregistering tools and flushing invocation history.
     pub async fn shutdown_with_status(
         &mut self,

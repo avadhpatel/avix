@@ -120,40 +120,61 @@ impl AgentExecutorFactory for IpcExecutorFactory {
             executor = executor.with_session_store(session_store);
 
             info!(pid = pid.as_u32(), "executor started");
-            event_bus.agent_status(&session_id, pid.as_u32(), "running");
 
-            match executor.run_with_client(&goal, &llm_client).await {
-                Ok(result) => {
-                    info!(pid = pid.as_u32(), "executor turn finished; transitioning to waiting");
-                    signal_channels.unregister(pid).await;
-                    // Mark invocation Idle and session Idle — agent is waiting for next message.
-                    executor
-                        .shutdown_with_status(
-                            InvocationStatus::Idle,
-                            Some("waiting_for_input".into()),
-                        )
-                        .await;
-                    event_bus.agent_output(&session_id, pid.as_u32(), &result.text);
-                    event_bus.agent_status(&session_id, pid.as_u32(), "waiting");
-                    let _ = process_table.set_status(pid, ProcessStatus::Waiting).await;
-                }
-                Err(err) => {
-                    warn!(pid = pid.as_u32(), error = %err, "executor crashed");
-                    signal_channels.unregister(pid).await;
-                    executor
-                        .shutdown_with_status(
-                            InvocationStatus::Failed,
-                            Some(err.to_string()),
-                        )
-                        .await;
-                    tracer.agent_exit(pid.as_u32(), "crashed", Some(&err.to_string()));
-                    event_bus.agent_status(&session_id, pid.as_u32(), "crashed");
-                    event_bus.agent_exit(&session_id, pid.as_u32(), 1);
-                    let _ = process_table
-                        .set_status(Pid::new(pid.as_u32()), ProcessStatus::Crashed)
-                        .await;
+            let mut current_goal = goal;
+
+            // ── Turn loop ────────────────────────────────────────────────────
+            // Each iteration processes one user message. After a successful
+            // turn the executor idles and waits for SIGSTART (next message).
+            // The loop exits on SIGKILL, SIGSTOP, or an unrecoverable error.
+            loop {
+                event_bus.agent_status(&session_id, pid.as_u32(), "running");
+
+                match executor.run_with_client(&current_goal, &llm_client).await {
+                    Ok(result) => {
+                        info!(pid = pid.as_u32(), "executor turn finished; transitioning to idle");
+
+                        // Persist idle state — invocation + session status → Idle.
+                        executor.idle().await;
+
+                        event_bus.agent_output(&session_id, pid.as_u32(), &result.text);
+                        event_bus.agent_status(&session_id, pid.as_u32(), "waiting");
+                        let _ = process_table.set_status(pid, ProcessStatus::Waiting).await;
+
+                        info!(pid = pid.as_u32(), "executor waiting for next goal (SIGSTART)");
+
+                        // Block until a new goal arrives via SIGSTART or a kill signal.
+                        match executor.wait_for_next_goal().await {
+                            Some(next_goal) => {
+                                info!(pid = pid.as_u32(), "received next goal; resuming");
+                                current_goal = next_goal;
+                            }
+                            None => {
+                                info!(pid = pid.as_u32(), "executor shutting down after idle wait");
+                                break;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        warn!(pid = pid.as_u32(), error = %err, "executor crashed");
+                        executor
+                            .shutdown_with_status(
+                                InvocationStatus::Failed,
+                                Some(err.to_string()),
+                            )
+                            .await;
+                        tracer.agent_exit(pid.as_u32(), "crashed", Some(&err.to_string()));
+                        event_bus.agent_status(&session_id, pid.as_u32(), "crashed");
+                        event_bus.agent_exit(&session_id, pid.as_u32(), 1);
+                        let _ = process_table
+                            .set_status(Pid::new(pid.as_u32()), ProcessStatus::Crashed)
+                            .await;
+                        break;
+                    }
                 }
             }
+
+            signal_channels.unregister(pid).await;
         });
 
         handle.abort_handle()
