@@ -44,7 +44,8 @@ sequenceDiagram
     P2->>P2: IpcExecutorFactory::new(process_table, event_bus)
     P2->>P2: ProcHandler::new_with_factory(...)
     P2->>P2: KernelIpcServer::start() on kernel.sock
-    P2-->>RT: kernel IPC ready
+    P2-->>RT: kernel IPC ready (invocation_store + session_store retained on Runtime)
+    RT->>RT: phase3_crash_recovery() — mark stale Running/Paused invocations Killed; sessions → Idle
     RT->>P3: phase3_services()
     P3->>P3: RouterIpcServer::start() on router.sock
     P3->>P3: ExecIpcServer::start() on exec.sock
@@ -52,8 +53,6 @@ sequenceDiagram
     P3->>P3: discover_installed() → spawn third-party services
     P3->>P3: ServiceWatchdog::start()
     P3-->>RT: services ready
-    RT->>P35: phase3_re_adopt() — re-adopt orphaned agents from agents.yaml
-    P35-->>RT: orphaned agents re-adopted
     RT->>P4: phase4_atp_gateway(port)
     P4->>P4: AuthService::new(), ATPTokenStore::new()
     P4->>P4: Arc::clone(&self.event_bus) — same bus as executor factory
@@ -227,11 +226,17 @@ Agents:
 
 Installed services fail independently — a broken service does not prevent boot.
 
-### Phase 3.5 — Re-adopt Orphaned Agents
+### Phase 2.5 — Crash Recovery
 
-The kernel reads `agents.yaml` and re-adopts any agent processes that were running before
-a restart. Re-adopted agents are added to the process table; their `/proc/` state files
-are still on disk from the prior session.
+Runs immediately after phase 2 (kernel IPC), before any services or ATP clients start,
+so no observer ever sees stale state.
+
+`phase3_crash_recovery(invocation_store, session_store)`:
+1. Scans all `InvocationRecord`s in redb. Any record with `status = Running` or `Paused`
+   is finalized as `Killed` with `exit_reason = "interrupted_at_shutdown"`.
+2. For each session whose invocations were affected: clears `session.pids` (all executor
+   tasks are dead) and transitions `Running` / `Paused` session status → `Idle`, allowing
+   the user to resume via `avix session resume <id>`.
 
 ### Phase 4 — ATP Gateway
 

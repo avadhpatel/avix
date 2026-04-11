@@ -28,12 +28,50 @@ Each `RuntimeExecutor` owns a `tokio::sync::mpsc` channel pair:
 | Field | Type | Purpose |
 |---|---|---|
 | `signal_tx` | `mpsc::Sender<Signal>` | Exposed via `signal_sender()` — given to `IpcExecutorFactory` at spawn so `SignalHandler` can reach this executor |
-| `signal_rx` | `Option<mpsc::Receiver<Signal>>` | Taken once by `run_with_client` via `Option::take`; drives the `tokio::select!` signal arm |
+| `signal_rx` | `Option<mpsc::Receiver<Signal>>` | Taken by `run_with_client` via `Option::take`; **restored before returning** so `wait_for_next_goal` can use it |
 
 `deliver_signal(&str)` — a convenience method that both updates atomics immediately
 (for between-turn polling) AND sends on `signal_tx` (for mid-LLM interruption). Only
 `signal_rx` is consumed inside `run_with_client`; the atomics are the source of truth
 between turns.
+
+### Multi-turn executor loop
+
+`IpcExecutorFactory::launch()` runs the executor in a persistent `loop {}` rather than
+a single shot. After each successful `run_with_client` call:
+
+```
+loop {
+    run_with_client(goal) → Ok(result)
+        │  ← run_with_client restores signal_rx before returning
+        │  ← interim invocation state already persisted inside run_with_client
+        ↓
+    executor.idle()          ← invocation status → Idle, session status → Idle
+    event_bus.agent_output   ← emit result to ATP clients
+    process_table → Waiting
+
+    wait_for_next_goal()     ← blocks on signal_rx waiting for SIGSTART
+        │  SIGSTART{payload.goal} → Some(new_goal)
+        │  SIGKILL / SIGSTOP     → None  (break)
+        ↓
+    (loop back with new_goal)
+}
+signal_channels.unregister(pid)   ← on exit
+```
+
+**SIGSTART payload:** `{ "goal": "<next user message>" }` — delivered by the kernel when
+a user sends a follow-up message to a waiting agent (via `proc/session-resume` or
+`agent/send-message`).
+
+### Idle vs shutdown
+
+| Method | Deregisters Cat2 tools | Flushes conversation | Updates status |
+|---|---|---|---|
+| `idle()` | No | No (already persisted) | Invocation → Idle, Session → Idle |
+| `shutdown_with_status(status, reason)` | Yes | Yes (full finalize) | Invocation → status |
+
+`idle()` is called after every successful turn — the executor stays alive. `shutdown_with_status`
+is called only on error/kill — the executor is about to exit.
 
 ---
 
@@ -160,13 +198,24 @@ At spawn, `RuntimeExecutor` iterates `all_gated_cat2_tools()` and checks
    │
    └─ LLM system prompt built; first turn begins
 
-2. (agent running — tool calls dispatched normally)
+2. (agent running — tool calls dispatched normally; invocation persisted after each tool call)
 
-3. RuntimeExecutor::shutdown()
+2a. turn completes → executor.idle()
+    │
+    ├─ invocation_store.update_status(id, Idle)
+    ├─ session_store: session.mark_idle() + update
+    │
+    └─ executor loops back; wait_for_next_goal() blocks on signal_rx
+
+2b. SIGSTART received → new goal; loop continues at step 2
+
+3. RuntimeExecutor::shutdown_with_status(status, exit_reason)   ← on error/kill only
    │
    ├─ for each registered Category 2 tool:
    │    registry.remove(tool, drain: true)   ← waits for in-flight calls
    │    ipc.tool-remove → router.svc
+   │
+   ├─ invocation_store.write_conversation + finalize(status)
    │
    └─ process table entry cleared
 ```

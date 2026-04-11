@@ -175,13 +175,30 @@ pub enum InvocationStatus {
 ### Idle state semantics
 
 An invocation transitions to `Idle` when:
-- The agent signals it's waiting for input (`exit_reason = "waiting_for_input"`)
-- The agent is not terminated but paused, awaiting:
-  - User input via ATP
-  - Another agent's tool call targeting this session
-  - External trigger (future)
+- The agent completes a turn and is waiting for the next user message (the executor calls
+  `RuntimeExecutor::idle()` before entering `wait_for_next_goal()`)
 
-From `Idle`, a new invocation can be spawned in the same session (continuation) or the session can be explicitly resumed.
+From `Idle`, a new invocation can be spawned in the same session (continuation) or the
+session can be explicitly resumed via `avix session resume <id>`.
+
+### Boot-time crash recovery
+
+On every `avix start`, `phase3_crash_recovery` runs before phase 3 (services) and the
+ATP gateway, ensuring no client sees stale records:
+
+| Invocation status | After recovery |
+|---|---|
+| `Running` | `Killed` (exit_reason: "interrupted_at_shutdown") |
+| `Paused` | `Killed` (exit_reason: "interrupted_at_shutdown") |
+| `Idle`, `Completed`, `Failed`, `Killed` | unchanged |
+
+| Session status | After recovery |
+|---|---|
+| `Running` | `Idle` + `pids` cleared |
+| `Paused` | `Idle` + `pids` cleared |
+| `Idle`, `Completed`, `Failed`, `Archived` | unchanged |
+
+Sessions transitioned to `Idle` remain available for resumption.
 
 ### Lifecycle
 

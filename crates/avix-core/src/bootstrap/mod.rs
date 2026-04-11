@@ -13,7 +13,7 @@ use crate::exec_svc::ExecIpcServer;
 use crate::gateway::config::GatewayConfig;
 use crate::gateway::event_bus::AtpEventBus;
 use crate::gateway::server::GatewayServer;
-use crate::kernel::{phase3_re_adopt, KernelIpcServer, ProcHandler};
+use crate::kernel::{phase3_crash_recovery, KernelIpcServer, ProcHandler};
 use crate::llm_svc::routing::RoutingEngine;
 use crate::llm_svc::LlmIpcServer;
 use crate::mcp_bridge::{McpBridgeRunner, McpConfig};
@@ -61,6 +61,10 @@ pub struct Runtime {
     trace_flags: TraceFlags,
     /// Active tracer — created at `start_daemon()` from `trace_flags`.
     tracer: Arc<Tracer>,
+    /// Invocation store opened in phase2; retained for crash recovery in phase2.5.
+    invocation_store: Option<Arc<InvocationStore>>,
+    /// Session store opened in phase2; retained for crash recovery in phase2.5.
+    session_store: Option<Arc<PersistentSessionStore>>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -138,6 +142,8 @@ impl Runtime {
             proc_handler: None,
             trace_flags: TraceFlags::default(),
             tracer: Tracer::noop(),
+            invocation_store: None,
+            session_store: None,
         })
     }
 
@@ -184,27 +190,24 @@ impl Runtime {
             message: "phase 2: kernel.agent spawned".into(),
         });
 
+        // Phase 2.5: crash recovery — fix stale Running/Paused records from prior run.
+        // Must run before phase3 (services) and phase4 (ATP gateway) so no client ever
+        // observes a Running/Paused record that has no live executor.
+        if let (Some(inv_store), Some(sess_store)) =
+            (self.invocation_store.clone(), self.session_store.clone())
+        {
+            phase3_crash_recovery(inv_store, sess_store).await?;
+            self.boot_log.push(BootLogEntry {
+                phase: BootPhase(2),
+                message: "phase 2.5: crash recovery complete".into(),
+            });
+        }
+
         // Phase 3: spawn services
         self.phase3_services().await?;
         self.boot_log.push(BootLogEntry {
             phase: BootPhase(3),
             message: "phase 3: services spawned".into(),
-        });
-
-        // Phase 3.5: re-adopt orphaned agents
-        // VFS mounts /etc/avix → <root>/etc, so agents.yaml lives at <root>/etc/agents.yaml.
-        let agents_yaml_path = self.root.join("etc/agents.yaml");
-        let master_key_bytes = hex::decode(&*self.master_key)
-            .map_err(|e| AvixError::ConfigParse(format!("invalid master key: {}", e)))?;
-        phase3_re_adopt(
-            self.process_table.clone(),
-            agents_yaml_path,
-            master_key_bytes,
-        )
-        .await?;
-        self.boot_log.push(BootLogEntry {
-            phase: BootPhase(3),
-            message: "phase 3.5: re-adopted agents".into(),
         });
 
         // Phase 4: start ATP gateway
@@ -274,6 +277,10 @@ impl Runtime {
             .with_session_store(Arc::clone(&session_store))
             .with_signal_channels(signal_channels),
         );
+        // Retain references for crash recovery in phase 2.5.
+        self.invocation_store = Some(Arc::clone(&invocation_store));
+        self.session_store = Some(Arc::clone(&session_store));
+
         // Retain a reference so phase3 can wire in service_manager and tool_registry.
         self.proc_handler = Some(Arc::clone(&proc_handler));
         let kernel_server =
