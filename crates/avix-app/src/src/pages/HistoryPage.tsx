@@ -248,7 +248,6 @@ const HistoryPage: React.FC = () => {
   const load = (filter?: string) => {
     setLoading(true);
     invoke<string>('list_invocations', {
-      username: 'default',
       agentName: filter || null,
     })
       .then((json) => {

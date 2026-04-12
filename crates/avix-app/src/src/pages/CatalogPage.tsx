@@ -30,7 +30,7 @@ const CatalogPage: React.FC = () => {
   const [spawnTarget, setSpawnTarget] = useState<InstalledAgent | null>(null);
 
   useEffect(() => {
-    invoke<string>('list_installed', { username: 'default' })
+    invoke<string>('list_installed', {})
       .then((json) => {
         try {
           const raw = JSON.parse(json);

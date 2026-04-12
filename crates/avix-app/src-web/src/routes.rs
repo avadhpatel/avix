@@ -206,7 +206,7 @@ pub async fn invoke_handler(
         "list_installed" => {
             let username = req.args["username"]
                 .as_str()
-                .unwrap_or("default")
+                .unwrap_or("")
                 .to_string();
             let dispatcher = s
                 .dispatcher
@@ -224,7 +224,7 @@ pub async fn invoke_handler(
         "list_invocations" => {
             let username = req.args["username"]
                 .as_str()
-                .unwrap_or("default")
+                .unwrap_or("")
                 .to_string();
             let agent_name = req.args["agent_name"].as_str().map(str::to_string);
             let dispatcher = s
@@ -369,7 +369,7 @@ pub async fn invoke_handler(
                 .ok_or_else(|| bad_request("not connected"))?
                 .clone();
             drop(s);
-            let agents = core_list_installed(&dispatcher, "default")
+            let agents = core_list_installed(&dispatcher, "")
                 .await
                 .map_err(|e| internal(format!("{e:?}")))?;
             let json_str = serde_json::to_string(&agents).map_err(|e| internal(e.to_string()))?;
