@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::AvixError;
+use crate::invocation::conversation::ConversationEntry;
 
 // ── Internal message type ────────────────────────────────────────────────────
 
@@ -192,7 +193,7 @@ pub struct CaptureParams<'a> {
     pub pid: u32,
     pub username: &'a str,
     pub goal: &'a str,
-    pub message_history: &'a [(String, String)],
+    pub message_history: &'a [ConversationEntry],
     pub temperature: f32,
     pub granted_tools: &'a [String],
     pub trigger: SnapshotTrigger,
@@ -214,7 +215,7 @@ pub fn capture(params: CaptureParams<'_>) -> SnapshotFile {
     let context_chars: usize = params
         .message_history
         .iter()
-        .map(|(_, content)| content.len())
+        .map(|entry| entry.content.len())
         .sum();
     let context_token_count = (context_chars / 4).max(1) as u32;
 
@@ -258,15 +259,16 @@ pub fn capture(params: CaptureParams<'_>) -> SnapshotFile {
     file
 }
 
-fn build_context_summary(history: &[(String, String)]) -> String {
+fn build_context_summary(history: &[ConversationEntry]) -> String {
+    use crate::invocation::conversation::Role;
     // Return the last assistant turn (up to 200 chars), or a generic placeholder.
     history
         .iter()
         .rev()
-        .find(|(role, _)| role == "assistant")
-        .map(|(_, content)| {
-            let len = content.len().min(200);
-            content[..len].to_string()
+        .find(|entry| entry.role == Role::Assistant)
+        .map(|entry| {
+            let len = entry.content.len().min(200);
+            entry.content[..len].to_string()
         })
         .unwrap_or_else(|| "No context available.".to_string())
 }

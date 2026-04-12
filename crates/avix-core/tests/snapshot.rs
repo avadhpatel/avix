@@ -53,12 +53,10 @@ async fn spawn_test_executor(username: &str, pid: u32) -> RuntimeExecutor {
 
 #[test]
 fn snapshot_capture_produces_valid_file() {
+    use avix_core::invocation::conversation::{ConversationEntry, Role};
     let messages = vec![
-        ("user".to_string(), "Research quantum computing".to_string()),
-        (
-            "assistant".to_string(),
-            "I'll start by searching...".to_string(),
-        ),
+        ConversationEntry::from_role_content(Role::User, "Research quantum computing"),
+        ConversationEntry::from_role_content(Role::Assistant, "I'll start by searching..."),
     ];
     let snap = capture(CaptureParams {
         agent_name: "researcher",

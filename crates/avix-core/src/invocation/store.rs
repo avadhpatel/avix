@@ -159,7 +159,7 @@ impl InvocationStore {
     pub async fn persist_interim(
         &self,
         id: &str,
-        conversation: &[(String, String)],
+        conversation: &[ConversationEntry],
         tokens_consumed: u64,
         tool_calls_total: u32,
     ) -> Result<(), AvixError> {
@@ -190,8 +190,13 @@ impl InvocationStore {
         self.write_yaml_artefact(&record).await;
 
         if !conversation.is_empty() {
-            self.write_conversation(id, &record.username, &record.agent_name, conversation)
-                .await?;
+            self.write_conversation_structured(
+                id,
+                &record.username,
+                &record.agent_name,
+                conversation,
+            )
+            .await?;
         }
 
         Ok(())
@@ -392,9 +397,12 @@ impl InvocationStore {
             if line.trim().is_empty() {
                 continue;
             }
-            let entry: ConversationEntry = serde_json::from_str(line)
-                .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-            entries.push(entry);
+            match serde_json::from_str::<ConversationEntry>(line) {
+                Ok(entry) => entries.push(entry),
+                Err(e) => {
+                    warn!(error = %e, "skipping malformed conversation line");
+                }
+            }
         }
         Ok(entries)
     }
@@ -658,9 +666,10 @@ mod tests {
         let rec = make_record("inv-10", "alice", "researcher");
         store.create(&rec).await.unwrap();
 
+        use super::super::conversation::Role;
         let messages = vec![
-            ("user".into(), "Hello agent".into()),
-            ("assistant".into(), "Hello user".into()),
+            ConversationEntry::from_role_content(Role::User, "Hello agent"),
+            ConversationEntry::from_role_content(Role::Assistant, "Hello user"),
         ];
         store
             .persist_interim("inv-10", &messages, 100, 1)

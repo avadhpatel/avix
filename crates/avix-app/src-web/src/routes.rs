@@ -342,17 +342,28 @@ pub async fn invoke_handler(
             let invocations = core_list_invocations_for_session(&dispatcher, &session_id)
                 .await
                 .map_err(|e| internal(format!("{e:?}")))?;
-            let mut result = Vec::new();
-            for inv in &invocations {
+            // Spawn all conversation fetches concurrently — one task per invocation.
+            let handles: Vec<_> = invocations
+                .iter()
+                .map(|inv| {
+                    let d = dispatcher.clone();
+                    let id = inv["id"].as_str().unwrap_or("").to_string();
+                    tokio::spawn(async move {
+                        core_get_invocation_conversation(&d, &id)
+                            .await
+                            .unwrap_or_default()
+                    })
+                })
+                .collect();
+            let mut result = Vec::with_capacity(invocations.len());
+            for (inv, handle) in invocations.iter().zip(handles) {
+                let entries = handle.await.unwrap_or_default();
                 let inv_id = inv["id"].as_str().unwrap_or("");
                 let agent_name = inv["agentName"]
                     .as_str()
                     .or_else(|| inv["agent_name"].as_str())
                     .unwrap_or("");
                 let status = inv["status"].as_str().unwrap_or("");
-                let entries = core_get_invocation_conversation(&dispatcher, inv_id)
-                    .await
-                    .unwrap_or_default();
                 result.push(serde_json::json!({
                     "invocationId": inv_id,
                     "agentName": agent_name,

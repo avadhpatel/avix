@@ -608,7 +608,7 @@ impl RuntimeExecutor {
         if !self.invocation_id.is_empty() {
             if let Some(store) = &self.invocation_store {
                 let _ = store
-                    .write_conversation(
+                    .write_conversation_structured(
                         &self.invocation_id,
                         &self.spawned_by,
                         &self.agent_name,
@@ -778,9 +778,10 @@ mod tests {
         let mut executor = make_executor(200, &[]).await;
         executor.invocation_store = Some(Arc::clone(&store));
         executor.invocation_id = "inv-rex-20".into();
+        use crate::invocation::conversation::{ConversationEntry, Role};
         executor.memory.conversation_history = vec![
-            ("user".into(), "hello".into()),
-            ("assistant".into(), "hi".into()),
+            ConversationEntry::from_role_content(Role::User, "hello"),
+            ConversationEntry::from_role_content(Role::Assistant, "hi"),
         ];
         executor.tokens_consumed = 1234;
         executor.tool_calls_total = 5;
@@ -904,10 +905,11 @@ mod tests {
         let mut executor = make_executor(204, &[]).await;
         executor.invocation_store = Some(Arc::clone(&store));
         executor.invocation_id = "inv-rex-24".into();
+        use crate::invocation::conversation::{ConversationEntry, Role};
         executor.memory.conversation_history = vec![
-            ("user".into(), "msg1".into()),
-            ("assistant".into(), "msg2".into()),
-            ("user".into(), "msg3".into()),
+            ConversationEntry::from_role_content(Role::User, "msg1"),
+            ConversationEntry::from_role_content(Role::Assistant, "msg2"),
+            ConversationEntry::from_role_content(Role::User, "msg3"),
         ];
 
         executor

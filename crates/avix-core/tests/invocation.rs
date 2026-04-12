@@ -416,7 +416,8 @@ async fn persist_interim_updates_tokens_without_finalizing() {
     let rec = make_record("inv-interim", "alice", "researcher", "s1");
     store.create(&rec).await.unwrap();
 
-    let messages = vec![("user".into(), "Hello".into())];
+    use avix_core::invocation::conversation::{ConversationEntry, Role};
+    let messages = vec![ConversationEntry::from_role_content(Role::User, "Hello")];
     store
         .persist_interim("inv-interim", &messages, 3_000, 7)
         .await

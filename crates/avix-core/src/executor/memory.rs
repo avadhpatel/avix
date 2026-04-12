@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::invocation::conversation::{ConversationEntry, Role};
 use crate::memfs::VfsRouter;
 use crate::memory_svc::{
     service::{CallerContext, MemoryService},
@@ -12,8 +13,8 @@ pub struct MemoryManager {
     pub memory_svc: Option<Arc<MemoryService>>,
     /// Pre-built memory context block injected into the system prompt at spawn.
     pub memory_context: Option<String>,
-    /// Conversation history: list of (role, content) pairs for session auto-log.
-    pub conversation_history: Vec<(String, String)>,
+    /// Conversation history: structured entries for persistence and auto-log.
+    pub conversation_history: Vec<ConversationEntry>,
 }
 
 impl MemoryManager {
@@ -27,8 +28,14 @@ impl MemoryManager {
 
     /// Append a conversation message to the history.
     pub fn push_conversation_message(&mut self, role: &str, content: &str) {
+        let r = match role {
+            "assistant" => Role::Assistant,
+            "tool" => Role::Tool,
+            "system" => Role::System,
+            _ => Role::User,
+        };
         self.conversation_history
-            .push((role.to_string(), content.to_string()));
+            .push(ConversationEntry::from_role_content(r, content));
     }
 
     /// Build the memory context block and store it in `memory_context`.
@@ -146,9 +153,9 @@ impl MemoryManager {
         let summary = self
             .conversation_history
             .iter()
-            .map(|(role, content)| {
-                let preview_len = content.len().min(200);
-                format!("{}: {}", role, &content[..preview_len])
+            .map(|entry| {
+                let preview_len = entry.content.len().min(200);
+                format!("{:?}: {}", entry.role, &entry.content[..preview_len])
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -183,11 +190,15 @@ mod tests {
 
     #[test]
     fn push_conversation_message() {
+        use crate::invocation::conversation::Role;
         let mut mgr = MemoryManager::new();
         mgr.push_conversation_message("user", "hello");
         mgr.push_conversation_message("assistant", "hi");
         assert_eq!(mgr.conversation_history.len(), 2);
-        assert_eq!(mgr.conversation_history[0], ("user".into(), "hello".into()));
+        assert_eq!(mgr.conversation_history[0].role, Role::User);
+        assert_eq!(mgr.conversation_history[0].content, "hello");
+        assert_eq!(mgr.conversation_history[1].role, Role::Assistant);
+        assert_eq!(mgr.conversation_history[1].content, "hi");
     }
 
     #[tokio::test]

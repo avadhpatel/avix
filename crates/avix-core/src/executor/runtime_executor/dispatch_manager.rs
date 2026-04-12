@@ -179,15 +179,13 @@ impl RuntimeExecutor {
             return;
         }
 
-        let conversation: Vec<(String, String)> = self
-            .memory
-            .conversation_history
-            .iter()
-            .map(|(r, c)| (r.clone(), c.clone()))
-            .collect();
-
         if let Err(e) = store
-            .persist_interim(id, &conversation, self.tokens_consumed, self.tool_calls_total)
+            .persist_interim(
+                id,
+                &self.memory.conversation_history,
+                self.tokens_consumed,
+                self.tool_calls_total,
+            )
             .await
         {
             tracing::warn!(pid = self.pid.as_u32(), id = %id, err = ?e, "interim snapshot failed");
@@ -233,8 +231,9 @@ impl RuntimeExecutor {
 
         self.goal = file.spec.goal.clone();
         if !file.spec.context_summary.is_empty() {
-            self.memory.conversation_history = vec![(
-                "assistant".to_string(),
+            use crate::invocation::conversation::{ConversationEntry, Role};
+            self.memory.conversation_history = vec![ConversationEntry::from_role_content(
+                Role::Assistant,
                 format!(
                     "[Restored from snapshot '{}']\n\nContext at capture:\n{}",
                     file.metadata.name, file.spec.context_summary
