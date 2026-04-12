@@ -144,11 +144,22 @@ AVIX_ROOT/users/<username>/agents/<agent_name>/invocations/
     └── conversation.jsonl   ← one ConversationEntry per line (structured format)
 ```
 
-Each line in `conversation.jsonl` is a `ConversationEntry` object:
+Each line in `conversation.jsonl` is a `ConversationEntry` object. Entries are written
+incrementally during `run_with_client` (not only at shutdown):
+
+| When | Entry written |
+|------|--------------|
+| Turn loop start | `{ role: user, content: goal }` |
+| Each tool-dispatch turn | `{ role: assistant, content: text_portion, toolCalls: [{ id, name, args, result }] }` — result is included after the tool returns |
+| Final assistant response | `{ role: assistant, content: response_text }` |
+| Non-clean exit (Failed/Killed) | `{ role: system, content: "[Agent stopped: <exit_reason>]" }` — appended by `shutdown_with_status` before flushing |
+
+Example JSONL for a two-turn session that hits the tool chain limit:
 
 ```json
 {"role":"user","content":"Research quantum computing"}
-{"role":"assistant","content":"I'll start by searching…","thought":"Let me consider the sources","toolCalls":[{"id":"tc-1","name":"fs/read","args":"{}"}],"filesChanged":[]}
+{"role":"assistant","content":"I'll start by searching…","toolCalls":[{"id":"tc-1","name":"fs/read","args":{"path":"/docs"},"result":{"content":"..."}}]}
+{"role":"system","content":"[Agent stopped: exceeded max tool chain limit of 8]"}
 ```
 
 All optional fields (`toolCalls`, `filesChanged`, `thought`) default to empty/null via
@@ -237,8 +248,11 @@ RuntimeExecutor::shutdown_with_status(status, exit_reason)
      - session.mark_idle()
      - return (do NOT finalize)
   3. Otherwise:
-     - store.write_conversation_structured(id, username, agent_name, &messages)
-       (messages is Vec<ConversationEntry> from MemoryManager.conversation_history)
+     - If exit_reason is set: append System entry "[Agent stopped: <reason>]"
+       to MemoryManager.conversation_history
+     - store.write_conversation_structured(id, username, agent_name,
+         &memory.conversation_history)
+       (history is built incrementally during run_with_client — see disk layout above)
      - store.finalize(id, status, ended_at, tokens, tool_calls, exit_reason)
      - If sub-agent completed → session.set_primary(origin_agent)
 
