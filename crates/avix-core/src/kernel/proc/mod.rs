@@ -12,7 +12,7 @@ use crate::executor::AgentExecutorFactory;
 use crate::signal::SignalChannelRegistry;
 use crate::history::record::{MessageRecord, PartRecord};
 use crate::history::HistoryStore;
-use crate::invocation::{InvocationRecord, InvocationStatus, InvocationStore};
+use crate::invocation::{ConversationEntry, InvocationRecord, InvocationStatus, InvocationStore};
 use crate::process::entry::ProcessStatus;
 use crate::process::table::ProcessTable;
 use crate::service::lifecycle::ServiceManager;
@@ -463,6 +463,33 @@ impl ProcHandler {
             Some(s) => s.get(invocation_id).await,
             None => Ok(None),
         }
+    }
+
+    pub async fn list_invocations_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<InvocationRecord>, AvixError> {
+        match &self.invocation_store {
+            Some(s) => s.list_for_session(session_id).await,
+            None => Ok(vec![]),
+        }
+    }
+
+    pub async fn read_invocation_conversation(
+        &self,
+        invocation_id: &str,
+    ) -> Result<Vec<ConversationEntry>, AvixError> {
+        let store = match &self.invocation_store {
+            Some(s) => s,
+            None => return Ok(vec![]),
+        };
+        let record = match store.get(invocation_id).await? {
+            Some(r) => r,
+            None => return Ok(vec![]),
+        };
+        store
+            .read_conversation(invocation_id, &record.username, &record.agent_name)
+            .await
     }
 
     pub async fn snapshot_invocation(&self, id: &str) -> Result<InvocationRecord, AvixError> {

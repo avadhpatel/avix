@@ -2,11 +2,10 @@ import React from 'react';
 
 interface Props {
   onNotifClick: () => void;
-  onAddAgent: () => void;
   unreadCount: number;
 }
 
-const Topbar: React.FC<Props> = ({ onNotifClick, onAddAgent, unreadCount }) => {
+const Topbar: React.FC<Props> = ({ onNotifClick, unreadCount }) => {
   return (
     <div
       style={{
@@ -74,37 +73,6 @@ const Topbar: React.FC<Props> = ({ onNotifClick, onAddAgent, unreadCount }) => {
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
         )}
-      </button>
-
-      {/* Add Agent button */}
-      <button
-        onClick={onAddAgent}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          padding: '6px 12px',
-          backgroundColor: '#3b82f6',
-          color: 'white',
-          border: 'none',
-          borderRadius: '6px',
-          fontSize: '13px',
-          fontWeight: 600,
-          cursor: 'pointer',
-          transition: 'background 0.15s',
-        }}
-        onMouseEnter={(e) => {
-          (e.currentTarget as HTMLButtonElement).style.background = '#2563eb';
-        }}
-        onMouseLeave={(e) => {
-          (e.currentTarget as HTMLButtonElement).style.background = '#3b82f6';
-        }}
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="12" y1="5" x2="12" y2="19" />
-          <line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-        Add Agent
       </button>
     </div>
   );

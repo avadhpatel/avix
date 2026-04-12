@@ -1,9 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useNotification } from '../../context/NotificationContext';
 import { NotificationKind } from '../../types/notifications';
-import { Page } from '../../types/agents';
-import SidebarAgentItem from './SidebarAgentItem';
+import { Page, Session } from '../../types/agents';
+import { NewSessionModal } from '../NewSessionModal';
 
 const NavItem: React.FC<{
   label: string;
@@ -47,21 +47,48 @@ const NavItem: React.FC<{
   </button>
 );
 
-const Sidebar: React.FC = () => {
-  const { agents, selectedAgentPid, currentPage, setSelectedAgent, setPage } = useApp();
-  const { notifications } = useNotification();
+const statusDot = (status: Session['status']) => {
+  const color =
+    status === 'running' ? '#a6e3a1' :
+    status === 'paused' ? '#f9e2af' :
+    status === 'idle' ? '#89b4fa' :
+    '#6c7086';
+  return (
+    <span
+      style={{
+        width: 7,
+        height: 7,
+        borderRadius: '50%',
+        background: color,
+        flexShrink: 0,
+        display: 'inline-block',
+      }}
+    />
+  );
+};
 
-  const getHilCount = (pid: number) =>
+const Sidebar: React.FC = () => {
+  const {
+    currentPage,
+    setPage,
+    sessions,
+    selectedSessionId,
+    setSelectedSession,
+  } = useApp();
+  const { notifications } = useNotification();
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
+
+  const activeStatuses = new Set(['running', 'idle', 'paused']);
+  const activeSessions = sessions.filter((s) => activeStatuses.has(s.status));
+
+  const getSessionHilCount = (session: Session) =>
     notifications.filter(
       (n) =>
         n.kind === NotificationKind.Hil &&
-        n.agent_pid === pid &&
+        session.pids.includes(n.agent_pid ?? 0) &&
         !n.hil?.outcome &&
         !n.resolved_at
     ).length;
-
-  const runningAgents = agents.filter((a) => a.status !== 'stopped');
-  const stoppedAgents = agents.filter((a) => a.status === 'stopped');
 
   return (
     <div
@@ -112,22 +139,45 @@ const Sidebar: React.FC = () => {
         </div>
       </div>
 
-      {/* Agents section */}
+      {/* Sessions section */}
       <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '1px' }}>
         <div
           style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
             padding: '4px 12px 6px',
-            fontSize: '10px',
-            fontWeight: 700,
-            color: '#475569',
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
           }}
         >
-          Agents
+          <span
+            style={{
+              fontSize: '10px',
+              fontWeight: 700,
+              color: '#475569',
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+            }}
+          >
+            Sessions
+          </span>
+          <button
+            onClick={() => setNewSessionOpen(true)}
+            title="New Session"
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#475569',
+              cursor: 'pointer',
+              fontSize: 16,
+              lineHeight: 1,
+              padding: '0 2px',
+            }}
+          >
+            +
+          </button>
         </div>
 
-        {agents.length === 0 && (
+        {activeSessions.length === 0 ? (
           <p
             style={{
               padding: '8px 12px',
@@ -136,45 +186,55 @@ const Sidebar: React.FC = () => {
               fontStyle: 'italic',
             }}
           >
-            No agents running
+            No active sessions — click + to start one
           </p>
-        )}
-
-        {runningAgents.map((agent) => (
-          <SidebarAgentItem
-            key={agent.pid}
-            agent={agent}
-            isSelected={selectedAgentPid === agent.pid && currentPage === 'agent'}
-            hilCount={getHilCount(agent.pid)}
-            onClick={() => setSelectedAgent(agent.pid)}
-          />
-        ))}
-
-        {stoppedAgents.length > 0 && (
-          <>
-            <div
-              style={{
-                padding: '8px 12px 4px',
-                fontSize: '10px',
-                fontWeight: 700,
-                color: '#334155',
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-                marginTop: '4px',
-              }}
-            >
-              Stopped
-            </div>
-            {stoppedAgents.map((agent) => (
-              <SidebarAgentItem
-                key={agent.pid}
-                agent={agent}
-                isSelected={selectedAgentPid === agent.pid && currentPage === 'agent'}
-                hilCount={0}
-                onClick={() => setSelectedAgent(agent.pid)}
-              />
-            ))}
-          </>
+        ) : (
+          activeSessions.map((session) => {
+            const hilCount = getSessionHilCount(session);
+            const isSelected = selectedSessionId === session.id && currentPage === 'session';
+            const title = (session.title || session.goal || '').slice(0, 40);
+            return (
+              <button
+                key={session.id}
+                onClick={() => setSelectedSession(session.id)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  width: '100%',
+                  padding: '7px 12px',
+                  background: isSelected ? '#1e293b' : 'none',
+                  border: 'none',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  color: isSelected ? '#f8fafc' : '#94a3b8',
+                  fontSize: 12,
+                  transition: 'background 0.12s',
+                }}
+              >
+                {statusDot(session.status)}
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {title || 'Session'}
+                </span>
+                {hilCount > 0 && (
+                  <span
+                    style={{
+                      background: '#f38ba8',
+                      color: '#1e1e2e',
+                      borderRadius: 10,
+                      fontSize: 10,
+                      fontWeight: 700,
+                      padding: '1px 6px',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {hilCount}
+                  </span>
+                )}
+              </button>
+            );
+          })
         )}
       </div>
 
@@ -234,6 +294,8 @@ const Sidebar: React.FC = () => {
           }
         />
       </div>
+
+      <NewSessionModal isOpen={newSessionOpen} onClose={() => setNewSessionOpen(false)} />
     </div>
   );
 };

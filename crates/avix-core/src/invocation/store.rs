@@ -354,6 +354,51 @@ impl InvocationStore {
             .collect())
     }
 
+    pub async fn list_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<InvocationRecord>, AvixError> {
+        Ok(self
+            .list_all()
+            .await?
+            .into_iter()
+            .filter(|r| r.session_id == session_id)
+            .collect())
+    }
+
+    /// Read the conversation.jsonl for an invocation and parse it as structured entries.
+    /// Returns an empty vec if the file does not exist.
+    pub async fn read_conversation(
+        &self,
+        id: &str,
+        username: &str,
+        agent_name: &str,
+    ) -> Result<Vec<ConversationEntry>, AvixError> {
+        let provider = match &self.local {
+            Some(p) => p,
+            None => return Ok(vec![]),
+        };
+        let rel = format!(
+            "{}/agents/{}/invocations/{}/conversation.jsonl",
+            username, agent_name, id
+        );
+        let bytes = match provider.read(&rel).await {
+            Ok(b) => b,
+            Err(_) => return Ok(vec![]),
+        };
+        let text = String::from_utf8(bytes).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let mut entries = Vec::new();
+        for line in text.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entry: ConversationEntry = serde_json::from_str(line)
+                .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+            entries.push(entry);
+        }
+        Ok(entries)
+    }
+
     /// Admin-only: returns all invocations across all users.
     pub async fn list_all(&self) -> Result<Vec<InvocationRecord>, AvixError> {
         let db = self.db.lock().await;
@@ -731,5 +776,83 @@ mod tests {
         assert_eq!(loaded.tokens_consumed, 200);
         assert_eq!(loaded.tool_calls_total, 3);
         assert_eq!(loaded.status, InvocationStatus::Running);
+    }
+
+    // T-INV-14
+    #[tokio::test]
+    async fn list_for_session_filters_by_session_id() {
+        let store = open_store().await;
+        store
+            .create(&make_record("a", "alice", "bot"))
+            .await
+            .unwrap();
+        // make_record always uses session_id "sess-1"; create one with a different session
+        let mut rec2 = make_record("b", "alice", "bot");
+        rec2.session_id = "sess-2".into();
+        store.create(&rec2).await.unwrap();
+        store
+            .create(&make_record("c", "alice", "coder"))
+            .await
+            .unwrap();
+
+        let results = store.list_for_session("sess-1").await.unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.session_id == "sess-1"));
+
+        let results2 = store.list_for_session("sess-2").await.unwrap();
+        assert_eq!(results2.len(), 1);
+        assert_eq!(results2[0].id, "b");
+
+        let empty = store.list_for_session("no-such-session").await.unwrap();
+        assert!(empty.is_empty());
+    }
+
+    // T-INV-15
+    #[tokio::test]
+    async fn read_conversation_roundtrip() {
+        use super::super::conversation::{ConversationEntry, Role};
+        let dir = tempdir().unwrap();
+        let provider = LocalProvider::new(dir.path()).unwrap();
+        let store = InvocationStore::open(dir.path().join("inv.redb"))
+            .await
+            .unwrap()
+            .with_local(provider);
+
+        let rec = make_record("inv-15", "alice", "researcher");
+        store.create(&rec).await.unwrap();
+
+        let entries = vec![
+            ConversationEntry::from_role_content(Role::User, "hello"),
+            ConversationEntry::from_role_content(Role::Assistant, "world"),
+        ];
+        store
+            .write_conversation_structured("inv-15", "alice", "researcher", &entries)
+            .await
+            .unwrap();
+
+        let loaded = store
+            .read_conversation("inv-15", "alice", "researcher")
+            .await
+            .unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].content, "hello");
+        assert_eq!(loaded[1].content, "world");
+    }
+
+    // T-INV-16
+    #[tokio::test]
+    async fn read_conversation_missing_file_returns_empty() {
+        let dir = tempdir().unwrap();
+        let provider = LocalProvider::new(dir.path()).unwrap();
+        let store = InvocationStore::open(dir.path().join("inv.redb"))
+            .await
+            .unwrap()
+            .with_local(provider);
+
+        let result = store
+            .read_conversation("no-such-inv", "alice", "agent")
+            .await
+            .unwrap();
+        assert!(result.is_empty());
     }
 }

@@ -1,5 +1,38 @@
 export type AgentStatus = 'running' | 'paused' | 'stopped' | 'crashed';
-export type Page = 'agent' | 'services' | 'tools' | 'catalog' | 'history';
+export type Page = 'agent' | 'services' | 'tools' | 'catalog' | 'history' | 'session';
+
+export type SessionStatus = 'running' | 'idle' | 'paused' | 'completed' | 'failed' | 'archived';
+
+export interface Session {
+  id: string;
+  title: string;
+  goal: string;
+  status: SessionStatus;
+  summary?: string;
+  originAgent: string;
+  primaryAgent: string;
+  participants: string[];
+  ownerPid: number;
+  pids: number[];
+  lastUpdated: string;
+  spawnedAt: string;
+  tokensTotal: number;
+}
+
+export interface ConversationEntry {
+  role: 'user' | 'assistant' | 'tool';
+  content: string;
+  toolCalls?: Array<{ id: string; name: string; args: string }>;
+  filesChanged?: Array<{ path: string; diff?: string }>;
+  thought?: string;
+}
+
+export interface InvocationMessages {
+  invocationId: string;
+  agentName: string;
+  status: string;
+  entries: ConversationEntry[];
+}
 
 export interface InstalledAgent {
   name: string;

@@ -163,18 +163,36 @@ async fn dispatch_request(
         }
 
         "kernel/proc/invocation-list" => {
-            let username = params["username"].as_str().unwrap_or("");
-            let agent_name = params["agent_name"].as_str();
-            // `live` defaults to true to preserve backward compatibility:
-            // callers that omit `live` get all records (including running).
-            let live = params["live"].as_bool().unwrap_or(true);
-            match proc_handler
-                .list_invocations(username, agent_name, live)
-                .await
-            {
+            let session_id = params["session_id"].as_str().unwrap_or("");
+            let result = if !session_id.is_empty() {
+                proc_handler
+                    .list_invocations_for_session(session_id)
+                    .await
+            } else {
+                let username = params["username"].as_str().unwrap_or("");
+                let agent_name = params["agent_name"].as_str();
+                // `live` defaults to true to preserve backward compatibility:
+                // callers that omit `live` get all records (including running).
+                let live = params["live"].as_bool().unwrap_or(true);
+                proc_handler
+                    .list_invocations(username, agent_name, live)
+                    .await
+            };
+            match result {
                 Ok(records) => JsonRpcResponse::ok(id, json!(records)),
                 Err(e) => {
                     warn!(error = %e, "kernel/proc/invocation-list failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+
+        "kernel/proc/invocation-conversation" => {
+            let inv_id = params["id"].as_str().unwrap_or("");
+            match proc_handler.read_invocation_conversation(inv_id).await {
+                Ok(entries) => JsonRpcResponse::ok(id, json!(entries)),
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/invocation-conversation failed");
                     JsonRpcResponse::err(id, -32000, &e.to_string(), None)
                 }
             }
@@ -770,6 +788,42 @@ mod tests {
         // No store configured → Ok(None) → 404-style error
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32003);
+    }
+
+    // T-GW-13a
+    #[tokio::test]
+    async fn invocation_conversation_returns_empty_for_unknown_id() {
+        let dir = TempDir::new().unwrap();
+        let ph = make_proc_handler(&dir);
+        let root = make_avix_root(&dir);
+        let resp = dispatch_request(
+            "req-1",
+            "kernel/proc/invocation-conversation",
+            json!({ "id": "no-such-id" }),
+            ph,
+            root,
+        )
+        .await;
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
+    }
+
+    // T-GW-13b
+    #[tokio::test]
+    async fn invocation_list_with_session_id_returns_empty_without_store() {
+        let dir = TempDir::new().unwrap();
+        let ph = make_proc_handler(&dir);
+        let root = make_avix_root(&dir);
+        let resp = dispatch_request(
+            "req-1",
+            "kernel/proc/invocation-list",
+            json!({ "session_id": "sess-xyz" }),
+            ph,
+            root,
+        )
+        .await;
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
     }
 
     // T-GW-13: regression — unknown op must NOT match new ops

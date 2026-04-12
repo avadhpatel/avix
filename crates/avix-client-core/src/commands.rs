@@ -201,6 +201,99 @@ pub async fn list_invocations_live(
     }
 }
 
+/// List active sessions for `username`.
+pub async fn list_sessions(
+    dispatcher: &Dispatcher,
+    username: &str,
+) -> Result<Vec<Value>, ClientError> {
+    let body = dispatch(
+        dispatcher,
+        "proc",
+        "session-list",
+        serde_json::json!({ "username": username }),
+    )
+    .await?;
+    match body {
+        Some(Value::Array(arr)) => Ok(arr),
+        Some(_) | None => Ok(vec![]),
+    }
+}
+
+/// Get a single session by id. Returns `None` if not found.
+pub async fn get_session(
+    dispatcher: &Dispatcher,
+    session_id: &str,
+) -> Result<Option<Value>, ClientError> {
+    match dispatch(
+        dispatcher,
+        "proc",
+        "session-get",
+        serde_json::json!({ "id": session_id }),
+    )
+    .await
+    {
+        Ok(body) => Ok(body),
+        Err(ClientError::Atp { code, .. })
+            if code.contains("32003") || code.contains("ENOTFOUND") =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Resume an idle session with a new input string.
+pub async fn resume_session(
+    dispatcher: &Dispatcher,
+    session_id: &str,
+    input: &str,
+) -> Result<Value, ClientError> {
+    let body = dispatch(
+        dispatcher,
+        "proc",
+        "session-resume",
+        serde_json::json!({ "session_id": session_id, "input": input }),
+    )
+    .await?;
+    body.ok_or_else(|| ClientError::Other(anyhow::anyhow!("empty session-resume response")))
+}
+
+/// Read the persisted conversation for an invocation as raw JSON entries.
+pub async fn get_invocation_conversation(
+    dispatcher: &Dispatcher,
+    invocation_id: &str,
+) -> Result<Vec<Value>, ClientError> {
+    let body = dispatch(
+        dispatcher,
+        "proc",
+        "invocation-conversation",
+        serde_json::json!({ "id": invocation_id }),
+    )
+    .await?;
+    match body {
+        Some(Value::Array(arr)) => Ok(arr),
+        Some(_) | None => Ok(vec![]),
+    }
+}
+
+/// List all invocations for a session (by session_id).
+pub async fn list_invocations_for_session(
+    dispatcher: &Dispatcher,
+    session_id: &str,
+) -> Result<Vec<Value>, ClientError> {
+    let body = dispatch(
+        dispatcher,
+        "proc",
+        "invocation-list",
+        serde_json::json!({ "session_id": session_id }),
+    )
+    .await?;
+    match body {
+        Some(Value::Array(arr)) => Ok(arr),
+        Some(_) | None => Ok(vec![]),
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ServiceListResponse {
     pub total: usize,

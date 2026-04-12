@@ -8,13 +8,13 @@ import { LoginPage } from "./components/LoginPage";
 import AppShell from "./components/layout/AppShell";
 import Topbar from "./components/layout/Topbar";
 import Sidebar from "./components/layout/Sidebar";
-import { AddAgentModal } from "./components/AddAgentModal";
 import NotificationCenter from "./components/notifications/NotificationCenter";
 import AgentThreadPage from "./pages/AgentThreadPage";
 import CatalogPage from "./pages/CatalogPage";
 import HistoryPage from "./pages/HistoryPage";
 import ServicesPage from "./pages/ServicesPage";
 import ToolsPage from "./pages/ToolsPage";
+import SessionPage from "./pages/SessionPage";
 
 interface AuthStatus {
   authenticated: boolean;
@@ -23,17 +23,9 @@ interface AuthStatus {
 
 // Inner app that uses contexts
 const AppInner: React.FC = () => {
-  const { currentPage, addAgent } = useApp();
+  const { currentPage } = useApp();
   const { unreadCount } = useNotification();
-  const [modalOpen, setModalOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-
-  const handleAgentAdded = (pidStr: string) => {
-    const pid = parseInt(pidStr, 10);
-    if (!isNaN(pid)) {
-      addAgent({ pid, name: `Agent #${pid}`, goal: '', status: 'running' });
-    }
-  };
 
   return (
     <AppShell
@@ -41,12 +33,12 @@ const AppInner: React.FC = () => {
         <Topbar
           unreadCount={unreadCount}
           onNotifClick={() => setNotifOpen((o) => !o)}
-          onAddAgent={() => setModalOpen(true)}
         />
       }
       sidebar={<Sidebar />}
     >
       {currentPage === 'agent' && <AgentThreadPage />}
+      {currentPage === 'session' && <SessionPage />}
       {currentPage === 'catalog' && <CatalogPage />}
       {currentPage === 'history' && <HistoryPage />}
       {currentPage === 'services' && <ServicesPage />}
@@ -55,12 +47,6 @@ const AppInner: React.FC = () => {
       {notifOpen && (
         <NotificationCenter onClose={() => setNotifOpen(false)} />
       )}
-
-      <AddAgentModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        onAgentAdded={handleAgentAdded}
-      />
     </AppShell>
   );
 };

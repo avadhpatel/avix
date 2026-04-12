@@ -16,10 +16,14 @@ use avix_client_core::{
     atp::types::HilOutcome,
     commands::spawn_agent::spawn_agent as core_spawn_agent,
     commands::{
-        get_invocation as core_get_invocation, list_agents as core_list_agents,
+        get_invocation as core_get_invocation,
+        get_invocation_conversation as core_get_invocation_conversation,
+        get_session as core_get_session, list_agents as core_list_agents,
         list_installed as core_list_installed, list_invocations as core_list_invocations,
-        list_services as core_list_services, list_tools as core_list_tools,
-        pipe_text as core_pipe_text, resolve_hil as core_resolve_hil,
+        list_invocations_for_session as core_list_invocations_for_session,
+        list_services as core_list_services, list_sessions as core_list_sessions,
+        list_tools as core_list_tools, pipe_text as core_pipe_text,
+        resolve_hil as core_resolve_hil, resume_session as core_resume_session,
     },
     persistence,
     state::SharedState,
@@ -262,6 +266,102 @@ pub async fn invoke_handler(
                 }
                 None => Ok(Json(Value::Null)),
             }
+        }
+
+        "list_sessions" => {
+            let dispatcher = s
+                .dispatcher
+                .as_ref()
+                .ok_or_else(|| bad_request("not connected"))?
+                .clone();
+            drop(s);
+            let sessions = core_list_sessions(&dispatcher, "")
+                .await
+                .map_err(|e| internal(format!("{e:?}")))?;
+            let json_str = serde_json::to_string(&sessions).map_err(|e| internal(e.to_string()))?;
+            Ok(Json(Value::String(json_str)))
+        }
+
+        "get_session" => {
+            let session_id = req.args["session_id"]
+                .as_str()
+                .ok_or_else(|| bad_request("missing session_id"))?
+                .to_string();
+            let dispatcher = s
+                .dispatcher
+                .as_ref()
+                .ok_or_else(|| bad_request("not connected"))?
+                .clone();
+            drop(s);
+            match core_get_session(&dispatcher, &session_id)
+                .await
+                .map_err(|e| internal(format!("{e:?}")))?
+            {
+                Some(session) => {
+                    let json_str =
+                        serde_json::to_string(&session).map_err(|e| internal(e.to_string()))?;
+                    Ok(Json(Value::String(json_str)))
+                }
+                None => Ok(Json(Value::Null)),
+            }
+        }
+
+        "resume_session" => {
+            let session_id = req.args["session_id"]
+                .as_str()
+                .ok_or_else(|| bad_request("missing session_id"))?
+                .to_string();
+            let input = req.args["input"]
+                .as_str()
+                .ok_or_else(|| bad_request("missing input"))?
+                .to_string();
+            let dispatcher = s
+                .dispatcher
+                .as_ref()
+                .ok_or_else(|| bad_request("not connected"))?
+                .clone();
+            drop(s);
+            let result = core_resume_session(&dispatcher, &session_id, &input)
+                .await
+                .map_err(|e| internal(format!("{e:?}")))?;
+            let json_str = serde_json::to_string(&result).map_err(|e| internal(e.to_string()))?;
+            Ok(Json(Value::String(json_str)))
+        }
+
+        "get_session_messages" => {
+            let session_id = req.args["session_id"]
+                .as_str()
+                .ok_or_else(|| bad_request("missing session_id"))?
+                .to_string();
+            let dispatcher = s
+                .dispatcher
+                .as_ref()
+                .ok_or_else(|| bad_request("not connected"))?
+                .clone();
+            drop(s);
+            let invocations = core_list_invocations_for_session(&dispatcher, &session_id)
+                .await
+                .map_err(|e| internal(format!("{e:?}")))?;
+            let mut result = Vec::new();
+            for inv in &invocations {
+                let inv_id = inv["id"].as_str().unwrap_or("");
+                let agent_name = inv["agentName"]
+                    .as_str()
+                    .or_else(|| inv["agent_name"].as_str())
+                    .unwrap_or("");
+                let status = inv["status"].as_str().unwrap_or("");
+                let entries = core_get_invocation_conversation(&dispatcher, inv_id)
+                    .await
+                    .unwrap_or_default();
+                result.push(serde_json::json!({
+                    "invocationId": inv_id,
+                    "agentName": agent_name,
+                    "status": status,
+                    "entries": entries,
+                }));
+            }
+            let json_str = serde_json::to_string(&result).map_err(|e| internal(e.to_string()))?;
+            Ok(Json(Value::String(json_str)))
         }
 
         "get_services" => {

@@ -278,8 +278,13 @@ ProcHandler::resume_agent(pid)
 | ATP op | IPC method | Body |
 |--------|------------|------|
 | `proc/list-installed` | `kernel/proc/list-installed` | `{ "username": "alice" }` |
-| `proc/invocation-list` | `kernel/proc/invocation-list` | `{ "username": "alice", "agent_name": "researcher" }` |
+| `proc/invocation-list` | `kernel/proc/invocation-list` | `{ "username": "alice", "agent_name": "researcher" }` or `{ "session_id": "<uuid>" }` |
 | `proc/invocation-get` | `kernel/proc/invocation-get` | `{ "id": "<uuid>" }` |
+| `proc/invocation-conversation` | `kernel/proc/invocation-conversation` | `{ "id": "<uuid>" }` |
+
+`invocation-list` selects by session when `session_id` is present; otherwise falls back to the `username`/`agent_name` filter. The gateway handler in `gateway/handlers/proc.rs` passes `session_id` through transparently.
+
+`invocation-conversation` returns the parsed `conversation.jsonl` for the given invocation as a JSON array of `ConversationEntry` objects. Returns an empty array if no conversation file exists yet (pre-first-turn invocation).
 
 ### Session ops
 
@@ -296,6 +301,43 @@ All ops forward via `ipc_forward()` in the gateway proc handler.
 
 ---
 
+## InvocationStore — Read Methods
+
+In addition to the write methods, `InvocationStore` exposes the following read methods:
+
+```rust
+pub async fn list_for_user(&self, username: &str) -> Result<Vec<InvocationRecord>>
+pub async fn list_for_agent(&self, username: &str, agent_name: &str) -> Result<Vec<InvocationRecord>>
+pub async fn list_for_session(&self, session_id: &str) -> Result<Vec<InvocationRecord>>
+pub async fn get(&self, id: &str) -> Result<Option<InvocationRecord>>
+pub async fn list_all(&self) -> Result<Vec<InvocationRecord>>
+
+/// Read the persisted conversation.jsonl for an invocation.
+/// Returns an empty vec if the file does not exist (pre-first-turn invocations).
+pub async fn read_conversation(
+    &self,
+    id: &str,
+    username: &str,
+    agent_name: &str,
+) -> Result<Vec<ConversationEntry>>
+```
+
+`list_for_session` does a full-scan of the redb table and filters by `record.session_id`.
+`read_conversation` builds the path `users/<username>/agents/<agent_name>/invocations/<id>/conversation.jsonl`, reads via `LocalProvider`, and deserializes each line as a `ConversationEntry`.
+
+## ProcHandler — Conversation Access
+
+`ProcHandler` exposes two delegation methods for the IPC server:
+
+```rust
+pub async fn list_invocations_for_session(&self, session_id: &str) -> Result<Vec<InvocationRecord>>
+pub async fn read_invocation_conversation(&self, invocation_id: &str) -> Result<Vec<ConversationEntry>>
+```
+
+`read_invocation_conversation` resolves `username` and `agent_name` from the stored record before calling `InvocationStore::read_conversation`.
+
+---
+
 ## Client Commands
 
 `crates/avix-client-core/src/commands.rs`:
@@ -303,10 +345,13 @@ All ops forward via `ipc_forward()` in the gateway proc handler.
 ```rust
 pub async fn list_installed(dispatcher, username) -> Result<Vec<Value>>
 pub async fn list_invocations(dispatcher, username, agent_name: Option<&str>) -> Result<Vec<Value>>
+pub async fn list_invocations_live(dispatcher, username, agent_name: Option<&str>) -> Result<Vec<Value>>
+pub async fn list_invocations_for_session(dispatcher, session_id: &str) -> Result<Vec<Value>>
 pub async fn get_invocation(dispatcher, invocation_id) -> Result<Option<Value>>
-pub async fn list_sessions(dispatcher, username) -> Result<Vec<SessionRecord>>
-pub async fn get_session(dispatcher, session_id) -> Result<Option<SessionRecord>>
-pub async fn resume_session(dispatcher, session_id, input) -> Result<InvocationRecord>
+pub async fn get_invocation_conversation(dispatcher, invocation_id: &str) -> Result<Vec<Value>>
+pub async fn list_sessions(dispatcher, username) -> Result<Vec<Value>>
+pub async fn get_session(dispatcher, session_id) -> Result<Option<Value>>
+pub async fn resume_session(dispatcher, session_id, input) -> Result<Value>
 ```
 
 ---
@@ -353,16 +398,38 @@ Output formats:
 
 ## GUI (avix-app)
 
-### Catalog page (existing)
+### Session-centric layout
+
+The avix-app web UI is organised around sessions rather than raw agent PIDs.
+
+**Sidebar** — Sessions section replaces the old Agents section:
+- Lists active sessions (`Running`, `Idle`, `Paused`) for the authenticated user
+- Each item: status dot (green=running, amber=idle/paused), title/goal preview, HIL count badge
+- Empty state: "No active sessions — click + to start one"
+- **"New Session" (+) button** at the top opens `NewSessionModal`
+- Bottom nav: Catalog, History, Services, Tools (unchanged)
+
+**NewSessionModal** — two-step wizard:
+1. **Agent picker** — shows all installed agents (calls `list_installed`); search by name/description; scope badge (`SYS`/`USR`)
+2. **Goal input** — pre-filled from agent description; textarea; "Start Session" calls `spawn_agent`; auto-navigates to the new session by matching `session.ownerPid === pid`
+
+**SessionPage** — per-session conversation view:
+- Header: title/goal, status badge, token count, multi-agent rail toggle
+- Message thread: per-invocation blocks, each labelled with agent name; historical entries from `get_session_messages`; live streaming block from `agent.output.chunk`
+- Context-aware input bar:
+  - `idle` → textarea → `resume_session(session_id, input)`
+  - `running` → textarea → `pipe_text(pid, text)`
+  - pending HIL → `HilInlineCard`
+  - `completed`/`failed` → read-only + "Spawn new session" button
+- Optional collapsible multi-agent rail (visible when `participants.length > 1`)
+
+### Catalog page
 - Lists installed agents
+- **Spawn** button opens `NewSessionModal` with the agent pre-selected (step 2)
+- `AddAgentModal` has been removed — `NewSessionModal` is the single entry point for session creation
 
-### History page (existing)
-- Shows invocation history
-
-### Sessions page (NEW - Phase 2)
-- Lists all sessions with status badges
-- Expandable to show all invocations in session
-- Resume action to continue from Idle state
+### History page (unchanged)
+- Shows invocation history table with detail drawer
 
 ---
 

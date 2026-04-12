@@ -11,7 +11,13 @@
   - `list_agents()` → `Vec<Value>`
   - `list_installed(username)` → `Vec<Value>` — installed agents via `proc/list-installed`
   - `list_invocations(username, agent_name?)` → `Vec<Value>` — history via `proc/invocation-list`
+  - `list_invocations_live(username, agent_name?)` → `Vec<Value>` — includes running invocations
+  - `list_invocations_for_session(session_id)` → `Vec<Value>` — filter by session via `proc/invocation-list { session_id }`
   - `get_invocation(id)` → `Option<Value>` — detail via `proc/invocation-get`
+  - `get_invocation_conversation(invocation_id)` → `Vec<Value>` — parsed JSONL entries via `proc/invocation-conversation`
+  - `list_sessions(username)` → `Vec<Value>` — active sessions via `proc/session-list`
+  - `get_session(session_id)` → `Option<Value>` — detail via `proc/session-get`
+  - `resume_session(session_id, input)` → `Value` — resume idle session via `proc/session-resume`
 - `commands/spawn_agent.rs` — spawn with typed params
 - `state.rs` — `AppState` (`RwLock`): config, dispatcher, emitter, `NotificationStore`, agents `Vec<ActiveAgent>`, connection_status, server_handle, pending_hils `hil_id→(pid,token)`, emit_callback
 - `notification.rs` — `NotificationStore` (add/resolve/all)

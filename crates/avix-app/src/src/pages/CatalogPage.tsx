@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '../platform';
 import { InstalledAgent } from '../types/agents';
-import { AddAgentModal } from '../components/AddAgentModal';
-import { useApp } from '../context/AppContext';
+import { NewSessionModal } from '../components/NewSessionModal';
 
 const ScopeBadge: React.FC<{ scope: string }> = ({ scope }) => (
   <span
@@ -23,7 +22,6 @@ const ScopeBadge: React.FC<{ scope: string }> = ({ scope }) => (
 );
 
 const CatalogPage: React.FC = () => {
-  const { addAgent } = useApp();
   const [agents, setAgents] = useState<InstalledAgent[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -46,16 +44,8 @@ const CatalogPage: React.FC = () => {
   const filtered = agents.filter(
     (a) =>
       a.name.toLowerCase().includes(search.toLowerCase()) ||
-      a.description.toLowerCase().includes(search.toLowerCase())
+      (a.description ?? '').toLowerCase().includes(search.toLowerCase())
   );
-
-  const handleAgentAdded = (pidStr: string) => {
-    const pid = parseInt(pidStr, 10);
-    if (!isNaN(pid) && spawnTarget) {
-      addAgent({ pid, name: spawnTarget.name, goal: '', status: 'running' });
-    }
-    setSpawnTarget(null);
-  };
 
   return (
     <div style={{ height: '100%', overflow: 'auto', padding: '24px' }}>
@@ -191,7 +181,7 @@ const CatalogPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Spawn button */}
+                {/* Spawn button — opens NewSessionModal with agent pre-selected (step 2) */}
                 <button
                   onClick={() => setSpawnTarget(agent)}
                   style={{
@@ -221,14 +211,11 @@ const CatalogPage: React.FC = () => {
         )}
       </div>
 
-      {spawnTarget && (
-        <AddAgentModal
-          isOpen={true}
-          onClose={() => setSpawnTarget(null)}
-          onAgentAdded={handleAgentAdded}
-          defaultName={spawnTarget.name}
-        />
-      )}
+      <NewSessionModal
+        isOpen={spawnTarget !== null}
+        onClose={() => setSpawnTarget(null)}
+        defaultAgent={spawnTarget ?? undefined}
+      />
     </div>
   );
 };

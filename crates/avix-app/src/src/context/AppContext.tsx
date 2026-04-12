@@ -8,7 +8,7 @@ import React, {
   ReactNode,
 } from 'react';
 import { invoke, listen } from '../platform';
-import { Agent, AgentStatus, OutputItem, Page } from '../types/agents';
+import { Agent, AgentStatus, OutputItem, Page, Session } from '../types/agents';
 
 interface AppContextValue {
   agents: Agent[];
@@ -22,6 +22,12 @@ interface AppContextValue {
   updateAgentStatus: (pid: number, status: AgentStatus) => void;
   removeAgent: (pid: number) => void;
   appendOutput: (pid: number, item: OutputItem) => void;
+  // Session-centric additions
+  identity: string;
+  sessions: Session[];
+  selectedSessionId: string | null;
+  setSelectedSession: (id: string) => void;
+  refreshSessions: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -57,6 +63,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Pending chunk buffers: turn_id -> accumulated text
   const pendingChunks = useRef<Map<string, { pid: number; text: string }>>(new Map());
 
+  // Session-centric state
+  const [identity, setIdentity] = useState<string>('');
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [selectedSessionId, setSelectedSessionIdState] = useState<string | null>(null);
+
   const addAgent = useCallback((agent: Agent) => {
     setAgents((prev) => {
       if (prev.some((a) => a.pid === agent.pid)) return prev;
@@ -89,10 +100,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const setPage = useCallback((p: Page) => {
     setCurrentPage(p);
     if (p !== 'agent') setSelectedAgentPid(null);
+    if (p !== 'session') setSelectedSessionIdState(null);
   }, []);
 
-  // Load agents on mount
+  const setSelectedSession = useCallback((id: string) => {
+    setSelectedSessionIdState(id);
+    setCurrentPage('session');
+  }, []);
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      const json = await invoke<string>('list_sessions', {});
+      const raw = JSON.parse(json);
+      setSessions(Array.isArray(raw) ? raw : []);
+    } catch {
+      // ignore errors
+    }
+  }, []);
+
+  // Load identity + agents + sessions on mount
   useEffect(() => {
+    // Load identity
+    invoke<{ identity?: string; username?: string }>('auth_status')
+      .then((status) => {
+        const id = status?.identity ?? status?.username ?? '';
+        setIdentity(id);
+      })
+      .catch(() => {});
+
+    // Load agents
     invoke<string>('list_agents')
       .then((json) => {
         try {
@@ -103,7 +139,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
       })
       .catch(() => {});
-  }, []);
+
+    // Load sessions
+    refreshSessions();
+  }, [refreshSessions]);
 
   // Listen for agent lifecycle events
   useEffect(() => {
@@ -114,7 +153,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const unlisteners: Array<() => void> = [];
 
     Promise.all([
-      // agent.spawned → refresh agent list
+      // agent.spawned → refresh agent list + sessions
       listen<unknown>('agent.spawned', () => {
         invoke<string>('list_agents')
           .then((json) => {
@@ -124,11 +163,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             } catch {}
           })
           .catch(() => {});
+        refreshSessions();
       }),
 
-      // agent.exit → mark stopped
+      // agent.exit → mark stopped + refresh sessions
       listen<{ pid: number; exitCode?: number }>('agent.exit', (e) => {
         removeAgent(e.payload.pid);
+        refreshSessions();
       }),
 
       // agent.status → update status
@@ -184,7 +225,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       active = false;
       unlisteners.forEach((f) => f());
     };
-  }, [appendOutput, removeAgent, updateAgentStatus]);
+  }, [appendOutput, removeAgent, updateAgentStatus, refreshSessions]);
 
   return (
     <AppContext.Provider
@@ -200,6 +241,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updateAgentStatus,
         removeAgent,
         appendOutput,
+        identity,
+        sessions,
+        selectedSessionId,
+        setSelectedSession,
+        refreshSessions,
       }}
     >
       {children}

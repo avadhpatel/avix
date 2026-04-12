@@ -47,6 +47,7 @@ pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
         | "wait"
         | "setcap"
         | "invocation-get"
+        | "invocation-conversation"
         | "invocation-snapshot"
         | "message-create"
         | "message-get"
