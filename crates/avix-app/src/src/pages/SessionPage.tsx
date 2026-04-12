@@ -11,6 +11,7 @@ const RoleBadge: React.FC<{ role: string }> = ({ role }) => {
   const color =
     role === 'user' ? '#89b4fa' :
     role === 'assistant' ? '#a6e3a1' :
+    role === 'system' ? '#f38ba8' :
     '#f9e2af';
   return (
     <span
@@ -29,51 +30,68 @@ const RoleBadge: React.FC<{ role: string }> = ({ role }) => {
   );
 };
 
-const MessageBubble: React.FC<{ entry: ConversationEntry; agentName: string }> = ({ entry }) => (
-  <div
-    style={{
-      display: 'flex',
-      flexDirection: 'column',
-      padding: '8px 12px',
-      borderRadius: 8,
-      background: entry.role === 'user' ? 'rgba(137,180,250,0.06)' : 'rgba(166,227,161,0.04)',
-      border: '1px solid rgba(255,255,255,0.04)',
-      marginBottom: 6,
-    }}
-  >
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 4 }}>
-      <RoleBadge role={entry.role} />
-      {entry.thought && (
-        <span style={{ fontSize: 11, color: '#585b70', fontStyle: 'italic' }}>
-          thinking: {entry.thought}
-        </span>
+const MessageBubble: React.FC<{ entry: ConversationEntry; agentName: string }> = ({ entry }) => {
+  const isSystem = entry.role === 'system';
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        padding: '8px 12px',
+        borderRadius: 8,
+        background: isSystem
+          ? 'rgba(243,139,168,0.06)'
+          : entry.role === 'user'
+          ? 'rgba(137,180,250,0.06)'
+          : 'rgba(166,227,161,0.04)',
+        border: isSystem
+          ? '1px solid rgba(243,139,168,0.15)'
+          : '1px solid rgba(255,255,255,0.04)',
+        marginBottom: 6,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 4 }}>
+        <RoleBadge role={entry.role} />
+        {entry.thought && (
+          <span style={{ fontSize: 11, color: '#585b70', fontStyle: 'italic' }}>
+            thinking: {entry.thought}
+          </span>
+        )}
+      </div>
+      {entry.content && (
+        <div style={{ fontSize: 13, color: isSystem ? '#f38ba8' : '#cdd6f4', lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {entry.content}
+        </div>
+      )}
+      {entry.toolCalls && entry.toolCalls.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          {entry.toolCalls.map((tc, i) => (
+            <div key={i} style={{ marginBottom: 4 }}>
+              <div style={{ fontSize: 11, color: '#f9e2af', background: 'rgba(249,226,175,0.06)', borderRadius: 4, padding: '2px 8px', fontFamily: 'monospace' }}>
+                → {tc.name}
+                {tc.args != null && (() => { const s = JSON.stringify(tc.args); return s && s !== '{}' && s !== 'null' ? <span style={{ color: '#585b70', marginLeft: 6 }}>{s.slice(0, 60)}{s.length > 60 ? '…' : ''}</span> : null; })()}
+              </div>
+              {tc.result !== undefined && tc.result !== null && (
+                <div style={{ fontSize: 11, color: '#a6e3a1', background: 'rgba(166,227,161,0.04)', borderRadius: 4, padding: '2px 8px', marginTop: 1, fontFamily: 'monospace' }}>
+                  ← {(() => { const s = typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result); return s.slice(0, 120) + (s.length > 120 ? '…' : ''); })()}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {entry.filesChanged && entry.filesChanged.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          {entry.filesChanged.map((f, i) => (
+            <div key={i} style={{ fontSize: 11, color: '#cba6f7', background: 'rgba(203,166,247,0.06)', borderRadius: 4, padding: '2px 8px', marginBottom: 2 }}>
+              changed: {f.path}
+            </div>
+          ))}
+        </div>
       )}
     </div>
-    {entry.content && (
-      <div style={{ fontSize: 13, color: '#cdd6f4', lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-        {entry.content}
-      </div>
-    )}
-    {entry.toolCalls && entry.toolCalls.length > 0 && (
-      <div style={{ marginTop: 6 }}>
-        {entry.toolCalls.map((tc, i) => (
-          <div key={i} style={{ fontSize: 11, color: '#f9e2af', background: 'rgba(249,226,175,0.06)', borderRadius: 4, padding: '2px 8px', marginBottom: 2 }}>
-            tool: {tc.name}
-          </div>
-        ))}
-      </div>
-    )}
-    {entry.filesChanged && entry.filesChanged.length > 0 && (
-      <div style={{ marginTop: 6 }}>
-        {entry.filesChanged.map((f, i) => (
-          <div key={i} style={{ fontSize: 11, color: '#cba6f7', background: 'rgba(203,166,247,0.06)', borderRadius: 4, padding: '2px 8px', marginBottom: 2 }}>
-            changed: {f.path}
-          </div>
-        ))}
-      </div>
-    )}
-  </div>
-);
+  );
+};
 
 const InvocationBlock: React.FC<{ block: InvocationMessages }> = ({ block }) => (
   <div style={{ marginBottom: 16 }}>

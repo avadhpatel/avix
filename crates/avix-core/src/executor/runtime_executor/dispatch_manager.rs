@@ -816,9 +816,14 @@ impl RuntimeExecutor {
             rx
         });
 
+        use crate::invocation::conversation::{ConversationEntry, Role, ToolCallEntry};
+
         let system = self.build_system_prompt_str();
         let mut messages: Vec<serde_json::Value> =
             vec![serde_json::json!({"role": "user", "content": goal})];
+        // Record the initial user goal in persistent conversation history.
+        self.memory.conversation_history
+            .push(ConversationEntry::from_role_content(Role::User, goal));
         let mut chain_count = 0;
         let mut turn_num: u32 = 0;
 
@@ -981,6 +986,8 @@ impl RuntimeExecutor {
                         tool_calls = self.tool_calls_total,
                         "turn loop complete; persisting invocation state"
                     );
+                    self.memory.conversation_history
+                        .push(ConversationEntry::from_role_content(Role::Assistant, &text));
                     self.save_invocation_state().await;
                     self.save_session_response(&text).await;
                     self.signal_rx = Some(signal_rx);
@@ -998,6 +1005,8 @@ impl RuntimeExecutor {
                         turn = turn_num,
                         "context summarised; persisting invocation state"
                     );
+                    self.memory.conversation_history
+                        .push(ConversationEntry::from_role_content(Role::Assistant, &text));
                     self.save_invocation_state().await;
                     self.save_session_response(&text).await;
                     self.signal_rx = Some(signal_rx);
@@ -1022,6 +1031,9 @@ impl RuntimeExecutor {
                         "dispatching tool calls"
                     );
                     let mut tool_results = Vec::new();
+                    // Track (call, result) pairs for conversation history.
+                    let mut dispatched_with_results: Vec<(&AvixToolCall, serde_json::Value)> =
+                        Vec::new();
                     for call in &calls {
                         if let Err(e) = validate_tool_call(
                             &self.token,
@@ -1146,7 +1158,37 @@ impl RuntimeExecutor {
                             "tool_use_id": call.call_id,
                             "content": result.to_string()
                         }));
+                        dispatched_with_results.push((call, result));
                     }
+
+                    // Record this tool-dispatch turn in persistent conversation history.
+                    {
+                        let text = response
+                            .content
+                            .iter()
+                            .filter_map(|c| c["text"].as_str())
+                            .collect::<Vec<_>>()
+                            .join("");
+                        let tc_entries: Vec<ToolCallEntry> = dispatched_with_results
+                            .iter()
+                            .map(|(call, result)| ToolCallEntry {
+                                id: call.call_id.clone(),
+                                name: call.name.clone(),
+                                args: call.args.clone(),
+                                result: Some(result.clone()),
+                            })
+                            .collect();
+                        if !tc_entries.is_empty() || !text.is_empty() {
+                            self.memory.conversation_history.push(ConversationEntry {
+                                role: Role::Assistant,
+                                content: text,
+                                tool_calls: tc_entries,
+                                files_changed: vec![],
+                                thought: None,
+                            });
+                        }
+                    }
+
                     messages.push(serde_json::json!({
                         "role": "user",
                         "content": tool_results

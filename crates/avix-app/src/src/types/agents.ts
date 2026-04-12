@@ -20,10 +20,10 @@ export interface Session {
 }
 
 export interface ConversationEntry {
-  role: 'user' | 'assistant' | 'tool';
+  role: 'user' | 'assistant' | 'tool' | 'system';
   content: string;
-  toolCalls?: Array<{ id: string; name: string; args: string }>;
-  filesChanged?: Array<{ path: string; diff?: string }>;
+  toolCalls?: Array<{ id: string; name: string; args: unknown; result?: unknown }>;
+  filesChanged?: Array<{ path: string; diff?: string; content?: string }>;
   thought?: string;
 }
 

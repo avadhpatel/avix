@@ -607,6 +607,17 @@ impl RuntimeExecutor {
         // 3. Flush conversation history and finalize invocation record.
         if !self.invocation_id.is_empty() {
             if let Some(store) = &self.invocation_store {
+                // Append exit reason as a final system message so users can see
+                // why the agent stopped (e.g. "exceeded max tool chain limit").
+                if let Some(ref reason) = exit_reason {
+                    use crate::invocation::conversation::{ConversationEntry, Role};
+                    self.memory.conversation_history.push(
+                        ConversationEntry::from_role_content(
+                            Role::System,
+                            format!("[Agent stopped: {}]", reason),
+                        ),
+                    );
+                }
                 let _ = store
                     .write_conversation_structured(
                         &self.invocation_id,
