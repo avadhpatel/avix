@@ -8,7 +8,7 @@ import React, {
   ReactNode,
 } from 'react';
 import { invoke, listen } from '../platform';
-import { Agent, AgentStatus, OutputItem, Page, Session } from '../types/agents';
+import { Agent, AgentStatus, LiveToolEntry, OutputItem, Page, Session } from '../types/agents';
 
 interface AppContextValue {
   agents: Agent[];
@@ -28,6 +28,10 @@ interface AppContextValue {
   selectedSessionId: string | null;
   setSelectedSession: (id: string) => void;
   refreshSessions: () => Promise<void>;
+  // Incremented whenever any agent exits — lets SessionPage reload conversation
+  conversationVersion: number;
+  // Live tool call activity: pid → last N entries
+  liveToolCalls: Record<number, LiveToolEntry[]>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -67,6 +71,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [identity, setIdentity] = useState<string>('');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionIdState] = useState<string | null>(null);
+  const [conversationVersion, setConversationVersion] = useState(0);
+  const [liveToolCalls, setLiveToolCalls] = useState<Record<number, LiveToolEntry[]>>({});
 
   const addAgent = useCallback((agent: Agent) => {
     setAgents((prev) => {
@@ -166,10 +172,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         refreshSessions();
       }),
 
-      // agent.exit → mark stopped + refresh sessions
+      // agent.exit → mark stopped + refresh sessions + trigger conversation reload
       listen<{ pid: number; exitCode?: number }>('agent.exit', (e) => {
-        removeAgent(e.payload.pid);
+        const { pid } = e.payload;
+        removeAgent(pid);
         refreshSessions();
+        setConversationVersion((v) => v + 1);
+        // Clear live tool activity for this pid
+        setLiveToolCalls((prev) => {
+          const next = { ...prev };
+          delete next[pid];
+          return next;
+        });
       }),
 
       // agent.status → update status
@@ -212,6 +226,33 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           }
         }
       ),
+      // agent.tool_call → accumulate live tool activity (last 20 per pid)
+      listen<{ pid: number; callId: string; tool: string; args: unknown }>(
+        'agent.tool_call',
+        (e) => {
+          const { pid, callId, tool, args } = e.payload;
+          const entry: LiveToolEntry = { callId, tool, args, isResult: false, timestamp: Date.now() };
+          setLiveToolCalls((prev) => {
+            const existing = prev[pid] ?? [];
+            const updated = [...existing, entry].slice(-20);
+            return { ...prev, [pid]: updated };
+          });
+        }
+      ),
+
+      // agent.tool_result → annotate matching call with result
+      listen<{ pid: number; callId: string; tool: string; result: string }>(
+        'agent.tool_result',
+        (e) => {
+          const { pid, callId, tool, result } = e.payload;
+          const entry: LiveToolEntry = { callId, tool, result, isResult: true, timestamp: Date.now() };
+          setLiveToolCalls((prev) => {
+            const existing = prev[pid] ?? [];
+            const updated = [...existing, entry].slice(-20);
+            return { ...prev, [pid]: updated };
+          });
+        }
+      ),
     ]).then((fns) => {
       if (!active) {
         // Cleanup already ran before promises resolved — unlisten immediately
@@ -246,6 +287,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         selectedSessionId,
         setSelectedSession,
         refreshSessions,
+        conversationVersion,
+        liveToolCalls,
       }}
     >
       {children}

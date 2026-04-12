@@ -19,7 +19,22 @@
   - `get_session(session_id)` → `Option<Value>` — detail via `proc/session-get`
   - `resume_session(session_id, input)` → `Value` — resume idle session via `proc/session-resume`
 - `commands/spawn_agent.rs` — spawn with typed params
-- `state.rs` — `AppState` (`RwLock`): config, dispatcher, emitter, `NotificationStore`, agents `Vec<ActiveAgent>`, connection_status, server_handle, pending_hils `hil_id→(pid,token)`, emit_callback
+- `state.rs` — `AppState` (`RwLock`): config, dispatcher, emitter, `NotificationStore`, agents `Vec<ActiveAgent>`, connection_status, server_handle, pending_hils `hil_id→(pid,token)`, emit_callback. Runs `start_event_bridge()` to relay ATP events to the UI callback. Forwarded event names:
+
+  | ATP `EventKind` | Wire name | Notes |
+  |---|---|---|
+  | `SessionReady` | `daemon-ready` | |
+  | `AgentSpawned` | `agent.spawned` | |
+  | `AgentOutput` | `agent.output` | full turn text |
+  | `AgentOutputChunk` | `agent.output.chunk` | streaming delta |
+  | `AgentStatus` | `agent.status` | |
+  | `AgentExit` | `agent.exit` | |
+  | `AgentToolCall` | `agent.tool_call` | `{pid, callId, tool, args}` |
+  | `AgentToolResult` | `agent.tool_result` | `{pid, callId, tool, result}` |
+  | `ToolChanged` | `tool.changed` | |
+  | `SysService` | `sys.service` | |
+
+  All other event kinds are dropped at the bridge.
 - `notification.rs` — `NotificationStore` (add/resolve/all)
 - `persistence.rs` — save/load JSON (`notifications.json`, `layout.json`)
 - `config.rs` — `ClientConfig`

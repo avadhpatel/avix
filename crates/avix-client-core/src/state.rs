@@ -180,6 +180,8 @@ impl AppState {
                         crate::atp::types::EventKind::AgentExit => "agent.exit",
                         crate::atp::types::EventKind::ToolChanged => "tool.changed",
                         crate::atp::types::EventKind::SysService => "sys.service",
+                        crate::atp::types::EventKind::AgentToolCall => "agent.tool_call",
+                        crate::atp::types::EventKind::AgentToolResult => "agent.tool_result",
                         _ => continue,
                     };
                     let data = serde_json::to_value(&event.body).unwrap_or(serde_json::Value::Null);

@@ -215,7 +215,7 @@ At spawn, `RuntimeExecutor` iterates `all_gated_cat2_tools()` and checks
    │    registry.remove(tool, drain: true)   ← waits for in-flight calls
    │    ipc.tool-remove → router.svc
    │
-   ├─ invocation_store.write_conversation + finalize(status)
+   ├─ invocation_store.write_conversation_structured + finalize(status)
    │
    └─ process table entry cleared
 ```

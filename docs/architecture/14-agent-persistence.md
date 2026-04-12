@@ -141,8 +141,21 @@ Every agent spawn creates an `InvocationRecord`. Records persist across reboots 
 AVIX_ROOT/users/<username>/agents/<agent_name>/invocations/
 ├── <uuid>.yaml              ← summary (status, tokens, goal, timing)
 └── <uuid>/
-    └── conversation.jsonl   ← one JSON object per line: {role, content}
+    └── conversation.jsonl   ← one ConversationEntry per line (structured format)
 ```
+
+Each line in `conversation.jsonl` is a `ConversationEntry` object:
+
+```json
+{"role":"user","content":"Research quantum computing"}
+{"role":"assistant","content":"I'll start by searching…","thought":"Let me consider the sources","toolCalls":[{"id":"tc-1","name":"fs/read","args":"{}"}],"filesChanged":[]}
+```
+
+All optional fields (`toolCalls`, `filesChanged`, `thought`) default to empty/null via
+`#[serde(default)]` — files written by older versions (flat `{role, content}` pairs)
+parse correctly. Lines that fail to deserialize are **skipped with a warning** rather
+than aborting the read, so a single corrupt line never makes the whole conversation
+unreadable.
 
 ### InvocationRecord fields
 
@@ -224,7 +237,8 @@ RuntimeExecutor::shutdown_with_status(status, exit_reason)
      - session.mark_idle()
      - return (do NOT finalize)
   3. Otherwise:
-     - store.write_conversation(id, username, agent_name, &messages)
+     - store.write_conversation_structured(id, username, agent_name, &messages)
+       (messages is Vec<ConversationEntry> from MemoryManager.conversation_history)
      - store.finalize(id, status, ended_at, tokens, tool_calls, exit_reason)
      - If sub-agent completed → session.set_primary(origin_agent)
 
@@ -323,7 +337,7 @@ pub async fn read_conversation(
 ```
 
 `list_for_session` does a full-scan of the redb table and filters by `record.session_id`.
-`read_conversation` builds the path `users/<username>/agents/<agent_name>/invocations/<id>/conversation.jsonl`, reads via `LocalProvider`, and deserializes each line as a `ConversationEntry`.
+`read_conversation` builds the path `users/<username>/agents/<agent_name>/invocations/<id>/conversation.jsonl`, reads via `LocalProvider`, and deserializes each line as a `ConversationEntry`. Lines that fail to deserialize are **skipped with a `warn!` log** — a single corrupt line never prevents the rest of the conversation from being returned.
 
 ## ProcHandler — Conversation Access
 
@@ -416,6 +430,8 @@ The avix-app web UI is organised around sessions rather than raw agent PIDs.
 **SessionPage** — per-session conversation view:
 - Header: title/goal, status badge, token count, multi-agent rail toggle
 - Message thread: per-invocation blocks, each labelled with agent name; historical entries from `get_session_messages`; live streaming block from `agent.output.chunk`
+- **Live tool activity feed**: rendered above the streaming block; shows the last 10 `agent.tool_call` / `agent.tool_result` events for the active pid as a compact monospace ticker (call → yellow, result → green)
+- **Auto-reload on exit**: when `agent.exit` fires, `AppContext` increments `conversationVersion`; `SessionPage` depends on this value and re-fetches `get_session_messages` automatically — so the full structured conversation (written by `shutdown_with_status` before the exit event) appears without a manual refresh
 - Context-aware input bar:
   - `idle` → textarea → `resume_session(session_id, input)`
   - `running` → textarea → `pipe_text(pid, text)`

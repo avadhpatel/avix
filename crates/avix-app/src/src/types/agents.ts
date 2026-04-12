@@ -69,3 +69,12 @@ export interface OutputItem {
   mime?: string;
   content: string;
 }
+
+export interface LiveToolEntry {
+  callId: string;
+  tool: string;
+  args?: unknown;
+  result?: string;
+  isResult: boolean;
+  timestamp: number;
+}

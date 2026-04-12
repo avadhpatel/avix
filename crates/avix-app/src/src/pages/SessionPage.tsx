@@ -97,7 +97,7 @@ const InvocationBlock: React.FC<{ block: InvocationMessages }> = ({ block }) => 
 );
 
 const SessionPage: React.FC = () => {
-  const { selectedSessionId, sessions, streamingOutputs, refreshSessions } = useApp();
+  const { selectedSessionId, sessions, streamingOutputs, refreshSessions, conversationVersion, liveToolCalls } = useApp();
   const { notifications } = useNotification();
 
   const [session, setSession] = useState<Session | null>(null);
@@ -142,6 +142,13 @@ const SessionPage: React.FC = () => {
     loadSession();
     loadMessages();
   }, [selectedSessionId, loadSession, loadMessages]);
+
+  // Reload conversation whenever an agent in this session exits
+  useEffect(() => {
+    if (conversationVersion > 0) {
+      loadMessages();
+    }
+  }, [conversationVersion, loadMessages]);
 
   // Also sync session from context sessions list for live status updates
   useEffect(() => {
@@ -288,6 +295,33 @@ const SessionPage: React.FC = () => {
           {invocationMessages.map((block) => (
             <InvocationBlock key={block.invocationId} block={block} />
           ))}
+          {/* Live tool activity feed */}
+          {activePid > 0 && (liveToolCalls[activePid]?.length ?? 0) > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              {liveToolCalls[activePid].slice(-10).map((tc, i) => (
+                <div
+                  key={i}
+                  style={{
+                    fontSize: 11,
+                    color: tc.isResult ? '#a6e3a1' : '#f9e2af',
+                    background: tc.isResult ? 'rgba(166,227,161,0.04)' : 'rgba(249,226,175,0.04)',
+                    borderRadius: 4,
+                    padding: '2px 8px',
+                    marginBottom: 2,
+                    fontFamily: 'monospace',
+                  }}
+                >
+                  {tc.isResult ? '← ' : '→ '}{tc.tool}
+                  {tc.isResult && tc.result && (
+                    <span style={{ color: '#6c7086', marginLeft: 6 }}>
+                      {tc.result.slice(0, 80)}{tc.result.length > 80 ? '…' : ''}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Live streaming block */}
           {liveText && (
             <div style={{ marginBottom: 16 }}>
