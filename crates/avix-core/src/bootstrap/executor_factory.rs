@@ -131,13 +131,12 @@ impl AgentExecutorFactory for IpcExecutorFactory {
                 event_bus.agent_status(&session_id, pid.as_u32(), "running");
 
                 match executor.run_with_client(&current_goal, &llm_client).await {
-                    Ok(result) => {
+                    Ok(_result) => {
                         info!(pid = pid.as_u32(), "executor turn finished; transitioning to idle");
 
                         // Persist idle state — invocation + session status → Idle.
                         executor.idle().await;
 
-                        event_bus.agent_output(&session_id, pid.as_u32(), &result.text);
                         event_bus.agent_status(&session_id, pid.as_u32(), "waiting");
                         let _ = process_table.set_status(pid, ProcessStatus::Waiting).await;
 
