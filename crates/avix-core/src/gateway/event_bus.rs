@@ -127,12 +127,12 @@ impl AtpEventBus {
 
     // ── Convenience publish helpers ─────────────────────────────────────────
 
-    pub fn agent_output(&self, atp_session_id: &str, pid: u32, text: &str) {
+    pub fn agent_output(&self, atp_session_id: &str, pid: u64, text: &str) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentOutput);
         let ev = AtpEvent::new(
             AtpEventKind::AgentOutput,
             atp_session_id,
-            serde_json::json!({ "pid": pid, "text": text }),
+            serde_json::json!({ "pid": pid.to_string(), "text": text }),
         );
         self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
@@ -142,7 +142,7 @@ impl AtpEventBus {
     pub fn agent_output_chunk(
         &self,
         atp_session_id: &str,
-        pid: u32,
+        pid: u64,
         turn_id: &str,
         text_delta: &str,
         seq: u64,
@@ -153,7 +153,7 @@ impl AtpEventBus {
             AtpEventKind::AgentOutputChunk,
             atp_session_id,
             serde_json::json!({
-                "pid": pid,
+                "pid": pid.to_string(),
                 "turn_id": turn_id,
                 "text_delta": text_delta,
                 "seq": seq,
@@ -164,23 +164,23 @@ impl AtpEventBus {
     }
 
     /// `atp_session_id` routes the event to the originating client connection.
-    pub fn agent_exit(&self, atp_session_id: &str, pid: u32, exit_code: i32) {
+    pub fn agent_exit(&self, atp_session_id: &str, pid: u64, exit_code: i32) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentExit);
         let ev = AtpEvent::new(
             AtpEventKind::AgentExit,
             atp_session_id,
-            serde_json::json!({ "pid": pid, "exitCode": exit_code }),
+            serde_json::json!({ "pid": pid.to_string(), "exitCode": exit_code }),
         );
         self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 
     /// `atp_session_id` routes the event to the originating client connection.
-    pub fn agent_status(&self, atp_session_id: &str, pid: u32, status: &str) {
+    pub fn agent_status(&self, atp_session_id: &str, pid: u64, status: &str) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentStatus);
         let ev = AtpEvent::new(
             AtpEventKind::AgentStatus,
             atp_session_id,
-            serde_json::json!({ "pid": pid, "status": status }),
+            serde_json::json!({ "pid": pid.to_string(), "status": status }),
         );
         self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
@@ -248,7 +248,7 @@ impl AtpEventBus {
     pub fn agent_tool_call(
         &self,
         atp_session_id: &str,
-        pid: u32,
+        pid: u64,
         call_id: &str,
         tool_name: &str,
         args: &serde_json::Value,
@@ -257,7 +257,7 @@ impl AtpEventBus {
         let ev = AtpEvent::new(
             AtpEventKind::AgentToolCall,
             atp_session_id,
-            serde_json::json!({ "pid": pid, "callId": call_id, "tool": tool_name, "args": args }),
+            serde_json::json!({ "pid": pid.to_string(), "callId": call_id, "tool": tool_name, "args": args }),
         );
         self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
@@ -265,7 +265,7 @@ impl AtpEventBus {
     pub fn agent_tool_result(
         &self,
         atp_session_id: &str,
-        pid: u32,
+        pid: u64,
         call_id: &str,
         tool_name: &str,
         result: &str,
@@ -274,7 +274,7 @@ impl AtpEventBus {
         let ev = AtpEvent::new(
             AtpEventKind::AgentToolResult,
             atp_session_id,
-            serde_json::json!({ "pid": pid, "callId": call_id, "tool": tool_name, "result": result }),
+            serde_json::json!({ "pid": pid.to_string(), "callId": call_id, "tool": tool_name, "result": result }),
         );
         self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }

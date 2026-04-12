@@ -16,7 +16,7 @@ impl PipeRegistry {
         }
     }
 
-    pub async fn open(&self, owner_pid: u32, capacity: usize) -> String {
+    pub async fn open(&self, owner_pid: u64, capacity: usize) -> String {
         let pipe = Arc::new(Pipe::new(owner_pid, capacity));
         let id = pipe.id.clone();
         self.pipes.write().await.insert(id.clone(), pipe);

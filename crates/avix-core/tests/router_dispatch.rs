@@ -74,7 +74,7 @@ async fn build_dispatcher(
     let process_table = Arc::new(ProcessTable::new());
     process_table
         .insert(ProcessEntry {
-            pid: Pid::new(10),
+            pid: Pid::from_u64(10),
             name: "agent".into(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Running,
@@ -110,7 +110,7 @@ async fn dispatch_routes_to_correct_service() {
     let (dispatcher, _) = build_dispatcher(&sock, "echo/ping", vec!["echo/ping".into()]).await;
 
     let resp = dispatcher
-        .dispatch(make_request("echo/ping"), Pid::new(10), "alice", "tok")
+        .dispatch(make_request("echo/ping"), Pid::from_u64(10), "alice", "tok")
         .await;
 
     assert!(resp.result.is_some(), "expected result, got: {resp:?}");
@@ -128,7 +128,7 @@ async fn dispatch_unknown_tool_returns_not_found() {
     let (dispatcher, _) = build_dispatcher(&sock, "echo/ping", vec!["echo/ping".into()]).await;
 
     let resp = dispatcher
-        .dispatch(make_request("ghost/unknown"), Pid::new(10), "alice", "tok")
+        .dispatch(make_request("ghost/unknown"), Pid::from_u64(10), "alice", "tok")
         .await;
 
     assert!(resp.error.is_some());
@@ -169,7 +169,7 @@ async fn dispatch_unavailable_tool_returns_eunavail() {
     let process_table = Arc::new(ProcessTable::new());
     process_table
         .insert(ProcessEntry {
-            pid: Pid::new(10),
+            pid: Pid::from_u64(10),
             name: "a".into(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Running,
@@ -183,7 +183,7 @@ async fn dispatch_unavailable_tool_returns_eunavail() {
         .with_call_timeout(Duration::from_millis(500));
 
     let resp = dispatcher
-        .dispatch(make_request("down/tool"), Pid::new(10), "alice", "tok")
+        .dispatch(make_request("down/tool"), Pid::from_u64(10), "alice", "tok")
         .await;
 
     assert!(resp.error.is_some());
@@ -249,7 +249,7 @@ async fn dispatch_at_capacity_returns_ebusy() {
     let process_table = Arc::new(ProcessTable::new());
     process_table
         .insert(ProcessEntry {
-            pid: Pid::new(10),
+            pid: Pid::from_u64(10),
             name: "a".into(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Running,
@@ -271,7 +271,7 @@ async fn dispatch_at_capacity_returns_ebusy() {
     // First call — occupies the single slot.
     let first = tokio::spawn(async move {
         lim_clone
-            .dispatch(make_request("slow/op"), Pid::new(10), "alice", "tok")
+            .dispatch(make_request("slow/op"), Pid::from_u64(10), "alice", "tok")
             .await
     });
 
@@ -280,7 +280,7 @@ async fn dispatch_at_capacity_returns_ebusy() {
 
     // Second call — should get EBUSY.
     let resp = limited
-        .dispatch(make_request("slow/op"), Pid::new(10), "alice", "tok")
+        .dispatch(make_request("slow/op"), Pid::from_u64(10), "alice", "tok")
         .await;
 
     assert!(resp.error.is_some(), "expected EBUSY error, got: {resp:?}");
@@ -342,7 +342,7 @@ async fn dispatch_slow_service_returns_etimeout() {
     let process_table = Arc::new(ProcessTable::new());
     process_table
         .insert(ProcessEntry {
-            pid: Pid::new(10),
+            pid: Pid::from_u64(10),
             name: "a".into(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Running,
@@ -357,7 +357,7 @@ async fn dispatch_slow_service_returns_etimeout() {
         .with_call_timeout(Duration::from_millis(50));
 
     let resp = dispatcher
-        .dispatch(make_request("slow/op"), Pid::new(10), "alice", "tok")
+        .dispatch(make_request("slow/op"), Pid::from_u64(10), "alice", "tok")
         .await;
 
     assert!(resp.error.is_some());
@@ -426,7 +426,7 @@ async fn dispatch_injects_caller() {
     let process_table = Arc::new(ProcessTable::new());
     process_table
         .insert(ProcessEntry {
-            pid: Pid::new(10),
+            pid: Pid::from_u64(10),
             name: "agent".into(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Running,
@@ -440,7 +440,7 @@ async fn dispatch_injects_caller() {
         .with_call_timeout(Duration::from_millis(500));
 
     let resp = dispatcher
-        .dispatch(make_request("echo/ping"), Pid::new(10), "alice", "tok")
+        .dispatch(make_request("echo/ping"), Pid::from_u64(10), "alice", "tok")
         .await;
 
     let result = resp.result.expect("expected result");
@@ -465,7 +465,7 @@ async fn capability_check_blocks_unauthorized() {
     let table = Arc::new(ProcessTable::new());
     table
         .insert(ProcessEntry {
-            pid: Pid::new(10),
+            pid: Pid::from_u64(10),
             name: "a".into(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Running,
@@ -476,10 +476,10 @@ async fn capability_check_blocks_unauthorized() {
         })
         .await;
 
-    check_capability("fs/write", Pid::new(10), &table)
+    check_capability("fs/write", Pid::from_u64(10), &table)
         .await
         .unwrap_err();
-    check_capability("fs/read", Pid::new(10), &table)
+    check_capability("fs/read", Pid::from_u64(10), &table)
         .await
         .unwrap();
 }
@@ -491,7 +491,7 @@ async fn always_present_tools_are_always_allowed() {
     let table = Arc::new(ProcessTable::new());
     table
         .insert(ProcessEntry {
-            pid: Pid::new(10),
+            pid: Pid::from_u64(10),
             name: "a".into(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Running,
@@ -503,7 +503,7 @@ async fn always_present_tools_are_always_allowed() {
         .await;
 
     for tool in ALWAYS_PRESENT {
-        check_capability(tool, Pid::new(10), &table).await.unwrap();
+        check_capability(tool, Pid::from_u64(10), &table).await.unwrap();
     }
 }
 
@@ -519,7 +519,7 @@ async fn dispatch_denied_for_unauthorized_caller() {
     let (dispatcher, _) = build_dispatcher(&sock, "echo/ping", vec![]).await;
 
     let resp = dispatcher
-        .dispatch(make_request("echo/ping"), Pid::new(10), "alice", "tok")
+        .dispatch(make_request("echo/ping"), Pid::from_u64(10), "alice", "tok")
         .await;
 
     assert!(resp.error.is_some());

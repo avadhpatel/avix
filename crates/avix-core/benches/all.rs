@@ -34,7 +34,7 @@ fn bench_process_table_get(c: &mut Criterion) {
         for i in 0..1000u32 {
             table
                 .insert(ProcessEntry {
-                    pid: Pid::new(i),
+                    pid: Pid::from_u64(i),
                     name: format!("proc-{i}"),
                     kind: ProcessKind::Agent,
                     status: ProcessStatus::Running,
@@ -46,7 +46,7 @@ fn bench_process_table_get(c: &mut Criterion) {
     });
 
     c.bench_function("process_table_get", |b| {
-        let pid = Pid::new(500);
+        let pid = Pid::from_u64(500);
         b.iter(|| rt.block_on(async { std::hint::black_box(table.get(pid).await) }));
     });
 }

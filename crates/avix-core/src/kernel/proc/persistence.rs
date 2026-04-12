@@ -22,7 +22,7 @@ pub async fn save_agents_yaml(path: &PathBuf, agents: &AgentsYaml) -> Result<(),
 
 pub async fn persist_agent_record(
     path: &PathBuf,
-    pid: u32,
+    pid: u64,
     name: &str,
     goal: &str,
     session_id: &str,
@@ -46,7 +46,7 @@ pub async fn persist_agent_record(
     save_agents_yaml(path, &agents).await
 }
 
-pub async fn remove_agent_record(path: &PathBuf, pid: u32) -> Result<(), AvixError> {
+pub async fn remove_agent_record(path: &PathBuf, pid: u64) -> Result<(), AvixError> {
     let mut agents = load_agents_yaml(path).await.unwrap_or_default();
     agents.agents.retain(|a| a.pid != pid);
     save_agents_yaml(path, &agents).await

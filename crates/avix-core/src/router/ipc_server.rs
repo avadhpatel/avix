@@ -61,8 +61,8 @@ async fn handle_message(
                 .params
                 .get("_caller_pid")
                 .and_then(|v| v.as_u64())
-                .map(|p| Pid::new(p as u32))
-                .unwrap_or(Pid::new(0));
+                .map(|p| Pid::from_u64(p))
+                .unwrap_or(Pid::from_u64(0));
             let caller_user = req
                 .params
                 .get("_caller_user")

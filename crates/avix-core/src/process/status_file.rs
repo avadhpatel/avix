@@ -20,7 +20,7 @@ pub struct AgentStatusFile {
 #[serde(rename_all = "camelCase")]
 pub struct AgentStatusMetadata {
     pub name: String,
-    pub pid: u32,
+    pub pid: u64,
     pub spawned_at: DateTime<Utc>,
     pub spawned_by: String,
 }
@@ -52,7 +52,7 @@ pub struct AgentStatusTools {
 #[serde(rename_all = "camelCase")]
 pub struct AgentStatusPipe {
     pub id: String,
-    pub target_pid: u32,
+    pub target_pid: u64,
     /// `"in"`, `"out"`, or `"bidirectional"`
     pub direction: String,
     /// `"open"`, `"closed"`, or `"draining"`
@@ -88,7 +88,7 @@ impl AgentStatusFile {
             kind: "AgentStatus".into(),
             metadata: AgentStatusMetadata {
                 name: entry.name.clone(),
-                pid: entry.pid.as_u32(),
+                pid: entry.pid.as_u64(),
                 spawned_at: entry.spawned_at,
                 spawned_by: entry.spawned_by_user.clone(),
             },
@@ -132,7 +132,7 @@ mod tests {
 
     fn make_entry() -> ProcessEntry {
         ProcessEntry {
-            pid: Pid::new(42),
+            pid: Pid::from_u64(42),
             name: "test-agent".into(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Running,

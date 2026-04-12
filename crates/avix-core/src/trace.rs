@@ -172,7 +172,7 @@ impl Tracer {
     // ── Agent tracing ─────────────────────────────────────────────────────────
 
     /// Trace agent spawn.
-    pub fn agent_spawn(&self, pid: u32, name: &str, goal: &str, session_id: &str) {
+    pub fn agent_spawn(&self, pid: u64, name: &str, goal: &str, session_id: &str) {
         if !self.flags.agent {
             return;
         }
@@ -192,7 +192,7 @@ impl Tracer {
     /// Trace an LLM call being sent (before the response arrives).
     pub fn agent_llm_call(
         &self,
-        pid: u32,
+        pid: u64,
         turn: u32,
         model: &str,
         message_count: usize,
@@ -218,7 +218,7 @@ impl Tracer {
     /// Trace an LLM response received.
     pub fn agent_llm_response(
         &self,
-        pid: u32,
+        pid: u64,
         turn: u32,
         stop_reason: &str,
         input_tokens: u64,
@@ -242,7 +242,7 @@ impl Tracer {
     }
 
     /// Trace a tool call dispatched by the executor.
-    pub fn agent_tool_call(&self, pid: u32, call_id: &str, tool: &str, params: &Value) {
+    pub fn agent_tool_call(&self, pid: u64, call_id: &str, tool: &str, params: &Value) {
         if !self.flags.agent {
             return;
         }
@@ -260,7 +260,7 @@ impl Tracer {
     }
 
     /// Trace a tool result returned to the executor.
-    pub fn agent_tool_result(&self, pid: u32, call_id: &str, tool: &str, result: &Value) {
+    pub fn agent_tool_result(&self, pid: u64, call_id: &str, tool: &str, result: &Value) {
         if !self.flags.agent {
             return;
         }
@@ -278,7 +278,7 @@ impl Tracer {
     }
 
     /// Trace agent exit.
-    pub fn agent_exit(&self, pid: u32, status: &str, exit_reason: Option<&str>) {
+    pub fn agent_exit(&self, pid: u64, status: &str, exit_reason: Option<&str>) {
         if !self.flags.agent {
             return;
         }

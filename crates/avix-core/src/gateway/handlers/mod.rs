@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -84,7 +83,7 @@ impl IpcRouter for NullIpcRouter {
 
 /// In-memory proc entry tracked by TestIpcRouter.
 struct TestProc {
-    pid: u32,
+    pid: u64,
     name: String,
     goal: String,
     is_agent: bool,
@@ -94,8 +93,7 @@ struct TestProc {
 /// Links: docs/dev_plans/ATP-WS-TESTS-PLAN.md#51
 pub struct TestIpcRouter {
     event_bus: Arc<crate::gateway::event_bus::AtpEventBus>,
-    procs: Arc<Mutex<HashMap<u32, TestProc>>>,
-    next_pid: Arc<AtomicU32>,
+    procs: Arc<Mutex<HashMap<u64, TestProc>>>,
 }
 
 impl TestIpcRouter {
@@ -103,7 +101,6 @@ impl TestIpcRouter {
         Self {
             event_bus,
             procs: Arc::new(Mutex::new(HashMap::new())),
-            next_pid: Arc::new(AtomicU32::new(1000)),
         }
     }
 }
@@ -118,7 +115,7 @@ impl IpcRouter for TestIpcRouter {
 
         match method {
             "kernel/proc/spawn" => {
-                let pid = self.next_pid.fetch_add(1, Ordering::SeqCst);
+                let pid = crate::types::Pid::generate().as_u64();
                 let is_agent = params["agent"].is_string();
                 let name = if is_agent {
                     params["agent"].as_str().unwrap_or("agent").to_string()
@@ -146,12 +143,12 @@ impl IpcRouter for TestIpcRouter {
                 let (event_kind, event_body) = if is_agent {
                     (
                         AtpEventKind::AgentSpawned,
-                        serde_json::json!({ "pid": pid, "name": name, "goal": goal }),
+                        serde_json::json!({ "pid": pid.to_string().to_string(), "name": name, "goal": goal }),
                     )
                 } else {
                     (
                         AtpEventKind::ProcStart,
-                        serde_json::json!({ "pid": pid, "cmd": cmd, "name": name }),
+                        serde_json::json!({ "pid": pid.to_string().to_string(), "cmd": cmd, "name": name }),
                     )
                 };
                 self.event_bus.publish(
@@ -172,14 +169,14 @@ impl IpcRouter for TestIpcRouter {
                         crate::gateway::atp::frame::AtpEvent::new(
                             AtpEventKind::ProcOutput,
                             "test-session",
-                            serde_json::json!({ "pid": pid, "text": output }),
+                            serde_json::json!({ "pid": pid.to_string().to_string(), "text": output }),
                         ),
                         None,
                         Role::User,
                     );
                 }
 
-                Ok(serde_json::json!({ "pid": pid, "status": "running" }))
+                Ok(serde_json::json!({ "pid": pid.to_string().to_string(), "status": "running" }))
             }
 
             "kernel/proc/list" => {
@@ -199,10 +196,10 @@ impl IpcRouter for TestIpcRouter {
             }
 
             "kernel/proc/kill" => {
-                let pid = (params["id"]
+                let pid = params["id"]
                     .as_u64()
                     .or_else(|| params["pid"].as_u64())
-                    .unwrap_or(0)) as u32;
+                    .unwrap_or(0);
                 let is_agent = {
                     let mut procs = self.procs.lock().await;
                     procs.remove(&pid).map(|p| p.is_agent).unwrap_or(false)
@@ -210,12 +207,12 @@ impl IpcRouter for TestIpcRouter {
                 let (event_kind, event_body) = if is_agent {
                     (
                         crate::gateway::atp::types::AtpEventKind::AgentExit,
-                        serde_json::json!({ "pid": pid, "exitCode": 0 }),
+                        serde_json::json!({ "pid": pid.to_string().to_string(), "exitCode": 0 }),
                     )
                 } else {
                     (
                         crate::gateway::atp::types::AtpEventKind::ProcExit,
-                        serde_json::json!({ "pid": pid, "exitCode": 0 }),
+                        serde_json::json!({ "pid": pid.to_string().to_string(), "exitCode": 0 }),
                     )
                 };
                 self.event_bus.publish(
@@ -231,10 +228,10 @@ impl IpcRouter for TestIpcRouter {
             }
 
             "kernel/proc/stat" => {
-                let pid = (params["id"]
+                let pid = params["id"]
                     .as_u64()
                     .or_else(|| params["pid"].as_u64())
-                    .unwrap_or(0)) as u32;
+                    .unwrap_or(0);
                 let procs = self.procs.lock().await;
                 match procs.get(&pid) {
                     Some(p) => Ok(serde_json::json!({

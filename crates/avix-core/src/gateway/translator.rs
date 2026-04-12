@@ -31,18 +31,24 @@ impl ATPTranslator {
                 method: "kernel/proc/spawn".into(),
                 params: json!({ "name": name, "goal": goal }),
             }),
-            ATPCommand::AgentKill { pid } => Ok(IpcCall {
-                method: "kernel/proc/kill".into(),
-                params: json!({ "pid": pid }),
-            }),
+            ATPCommand::AgentKill { pid } => {
+                let pid_u64: u64 = pid.parse().unwrap_or(0);
+                Ok(IpcCall {
+                    method: "kernel/proc/kill".into(),
+                    params: json!({ "pid": pid_u64 }),
+                })
+            }
             ATPCommand::AgentList => Ok(IpcCall {
                 method: "kernel/proc/list".into(),
                 params: json!({}),
             }),
-            ATPCommand::AgentStatus { pid } => Ok(IpcCall {
-                method: "kernel/proc/info".into(),
-                params: json!({ "pid": pid }),
-            }),
+            ATPCommand::AgentStatus { pid } => {
+                let pid_u64: u64 = pid.parse().unwrap_or(0);
+                Ok(IpcCall {
+                    method: "kernel/proc/info".into(),
+                    params: json!({ "pid": pid_u64 }),
+                })
+            }
             ATPCommand::FsRead { path } => Ok(IpcCall {
                 method: "kernel/fs/read".into(),
                 params: json!({ "path": path }),
@@ -152,10 +158,10 @@ mod tests {
     #[test]
     fn test_agent_kill_translates() {
         let translator = ATPTranslator;
-        let cmd = ATPCommand::AgentKill { pid: 42 };
+        let cmd = ATPCommand::AgentKill { pid: "42".to_string() };
         let call = translator.translate(&cmd, &Role::Admin).unwrap();
         assert_eq!(call.method, "kernel/proc/kill");
-        assert_eq!(call.params["pid"], 42);
+        assert_eq!(call.params["pid"], 42u64);
     }
 
     #[test]
@@ -169,10 +175,10 @@ mod tests {
     #[test]
     fn test_agent_status_translates() {
         let translator = ATPTranslator;
-        let cmd = ATPCommand::AgentStatus { pid: 7 };
+        let cmd = ATPCommand::AgentStatus { pid: "7".to_string() };
         let call = translator.translate(&cmd, &Role::User).unwrap();
         assert_eq!(call.method, "kernel/proc/info");
-        assert_eq!(call.params["pid"], 7);
+        assert_eq!(call.params["pid"], 7u64);
     }
 
     #[test]

@@ -37,10 +37,10 @@ pub struct SessionRecord {
     pub primary_agent: String,
     pub participants: Vec<String>,
     /// PID that created this session. Always set to a valid (non-zero) PID at creation.
-    pub owner_pid: u32,
+    pub owner_pid: u64,
     /// All currently active PIDs contributing to this session.
     #[serde(default)]
-    pub pids: Vec<u32>,
+    pub pids: Vec<u64>,
 }
 
 impl SessionRecord {
@@ -50,7 +50,7 @@ impl SessionRecord {
         origin_agent: String,
         title: String,
         goal: String,
-        owner_pid: u32,
+        owner_pid: u64,
     ) -> Self {
         let now = Utc::now();
         Self {
@@ -100,7 +100,7 @@ impl SessionRecord {
 
     /// Register an additional PID as active in this session (e.g. a child agent).
     /// `owner_pid` is immutable after construction.
-    pub fn add_pid(&mut self, pid: u32) {
+    pub fn add_pid(&mut self, pid: u64) {
         if !self.pids.contains(&pid) {
             self.pids.push(pid);
         }
@@ -108,7 +108,7 @@ impl SessionRecord {
     }
 
     /// Remove a PID from the active set (called on agent exit).
-    pub fn remove_pid(&mut self, pid: u32) {
+    pub fn remove_pid(&mut self, pid: u64) {
         self.pids.retain(|&p| p != pid);
         self.last_updated = Utc::now();
     }

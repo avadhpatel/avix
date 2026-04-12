@@ -28,10 +28,10 @@ fn minimal_params(goal: &str) -> SnapshotFile {
     })
 }
 
-async fn spawn_test_executor(username: &str, pid: u32) -> RuntimeExecutor {
+async fn spawn_test_executor(username: &str, pid: u64) -> RuntimeExecutor {
     let registry = Arc::new(MockToolRegistry::new());
     let params = SpawnParams {
-        pid: Pid::new(pid),
+        pid: Pid::from_u64(pid),
         agent_name: "researcher".into(),
         goal: "Research quantum computing".into(),
         spawned_by: username.into(),

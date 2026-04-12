@@ -95,7 +95,7 @@ mod tests {
         SnapshotSpec, SnapshotTrigger,
     };
 
-    fn make_snap(agent_name: &str, source_pid: u32) -> SnapshotFile {
+    fn make_snap(agent_name: &str, source_pid: u64) -> SnapshotFile {
         let captured_at = chrono::Utc::now();
         let name = SnapshotFile::make_name(agent_name, &captured_at);
         SnapshotFile::new(

@@ -32,7 +32,7 @@ pub struct InvocationRecord {
     pub agent_name: String,
     pub username: String,
     /// Runtime PID at the time of spawn (informational only; not stable).
-    pub pid: u32,
+    pub pid: u64,
     pub goal: String,
     pub session_id: String,
     pub spawned_at: DateTime<Utc>,
@@ -52,7 +52,7 @@ impl InvocationRecord {
         id: String,
         agent_name: String,
         username: String,
-        pid: u32,
+        pid: u64,
         goal: String,
         session_id: String,
     ) -> Self {

@@ -14,7 +14,7 @@ use crate::types::Pid;
 /// Shared registry mapping agent PIDs to their inbound signal senders.
 #[derive(Clone, Default)]
 pub struct SignalChannelRegistry {
-    inner: Arc<Mutex<HashMap<u32, mpsc::Sender<Signal>>>>,
+    inner: Arc<Mutex<HashMap<u64, mpsc::Sender<Signal>>>>,
 }
 
 impl SignalChannelRegistry {
@@ -24,12 +24,12 @@ impl SignalChannelRegistry {
 
     /// Register the sender for `pid`.  Overwrites any previous registration.
     pub async fn register(&self, pid: Pid, tx: mpsc::Sender<Signal>) {
-        self.inner.lock().await.insert(pid.as_u32(), tx);
+        self.inner.lock().await.insert(pid.as_u64(), tx);
     }
 
     /// Deregister a previously registered PID (called at executor exit).
     pub async fn unregister(&self, pid: Pid) {
-        self.inner.lock().await.remove(&pid.as_u32());
+        self.inner.lock().await.remove(&pid.as_u64());
     }
 
     /// Send a signal to the registered executor for `pid`.
@@ -38,7 +38,7 @@ impl SignalChannelRegistry {
     /// (agent not yet registered or has already exited).
     pub async fn send(&self, pid: Pid, signal: Signal) -> bool {
         let guard = self.inner.lock().await;
-        if let Some(tx) = guard.get(&pid.as_u32()) {
+        if let Some(tx) = guard.get(&pid.as_u64()) {
             tx.send(signal).await.is_ok()
         } else {
             false
@@ -52,9 +52,9 @@ mod tests {
     use crate::signal::kind::{Signal, SignalKind};
     use std::time::Duration;
 
-    fn make_signal(pid: u32) -> Signal {
+    fn make_signal(pid: u64) -> Signal {
         Signal {
-            target: Pid::new(pid),
+            target: Pid::from_u64(pid),
             kind: SignalKind::Kill,
             payload: serde_json::Value::Null,
         }
@@ -64,7 +64,7 @@ mod tests {
     async fn register_and_send_reaches_receiver() {
         let reg = SignalChannelRegistry::new();
         let (tx, mut rx) = mpsc::channel(8);
-        let pid = Pid::new(10);
+        let pid = Pid::from_u64(10);
 
         reg.register(pid, tx).await;
         let sent = reg.send(pid, make_signal(10)).await;
@@ -80,7 +80,7 @@ mod tests {
     #[tokio::test]
     async fn send_returns_false_for_unknown_pid() {
         let reg = SignalChannelRegistry::new();
-        let sent = reg.send(Pid::new(99), make_signal(99)).await;
+        let sent = reg.send(Pid::from_u64(99), make_signal(99)).await;
         assert!(!sent);
     }
 
@@ -88,7 +88,7 @@ mod tests {
     async fn unregister_removes_entry() {
         let reg = SignalChannelRegistry::new();
         let (tx, _rx) = mpsc::channel(8);
-        let pid = Pid::new(20);
+        let pid = Pid::from_u64(20);
 
         reg.register(pid, tx).await;
         reg.unregister(pid).await;
@@ -101,7 +101,7 @@ mod tests {
     async fn send_returns_false_when_receiver_dropped() {
         let reg = SignalChannelRegistry::new();
         let (tx, rx) = mpsc::channel(8);
-        let pid = Pid::new(30);
+        let pid = Pid::from_u64(30);
 
         reg.register(pid, tx).await;
         drop(rx); // simulate executor exit before deregister

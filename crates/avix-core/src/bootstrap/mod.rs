@@ -436,7 +436,7 @@ impl Runtime {
                         Ok(process) => {
                             tracing::info!(
                                 name = %unit.name,
-                                pid = token.pid.as_u32(),
+                                pid = token.pid.as_u64(),
                                 "installed service started"
                             );
                             watchdog_entries.write().await.insert(

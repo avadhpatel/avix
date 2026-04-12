@@ -37,7 +37,7 @@ pub async fn phase3_re_adopt(
     for record in &agents_yaml.agents {
         // Liveness check: consult the kernel process table, not the host OS.
         // Avix PIDs are virtual — they have no meaning as host OS process IDs.
-        if process_table.get(Pid::new(record.pid)).await.is_some() {
+        if process_table.get(Pid::from_u64(record.pid)).await.is_some() {
             info!(pid = record.pid, name = %record.name, "agent already registered, skipping re-adopt");
             continue;
         }
@@ -45,7 +45,7 @@ pub async fn phase3_re_adopt(
         info!(pid = record.pid, name = %record.name, "re-adopting agent from agents.yaml");
 
         let entry = ProcessEntry {
-            pid: Pid::new(record.pid),
+            pid: Pid::from_u64(record.pid),
             name: record.name.clone(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Running,
@@ -158,7 +158,7 @@ mod tests {
         crate::kernel::proc::AgentsYaml { agents }
     }
 
-    fn make_record(pid: u32, name: &str) -> crate::kernel::proc::AgentRecord {
+    fn make_record(pid: u64, name: &str) -> crate::kernel::proc::AgentRecord {
         crate::kernel::proc::AgentRecord {
             pid,
             name: name.to_string(),
@@ -189,10 +189,10 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert!(entries
             .iter()
-            .any(|e| e.pid.as_u32() == 10 && e.name == "agent-a"));
+            .any(|e| e.pid.as_u64() == 10 && e.name == "agent-a"));
         assert!(entries
             .iter()
-            .any(|e| e.pid.as_u32() == 11 && e.name == "agent-b"));
+            .any(|e| e.pid.as_u64() == 11 && e.name == "agent-b"));
         assert!(entries.iter().all(|e| e.status == ProcessStatus::Running));
     }
 
@@ -205,7 +205,7 @@ mod tests {
         // Pre-register PID 20 so it's already in the table
         table
             .insert(ProcessEntry {
-                pid: Pid::new(20),
+                pid: Pid::from_u64(20),
                 name: "already-running".to_string(),
                 kind: ProcessKind::Agent,
                 status: ProcessStatus::Running,
@@ -231,9 +231,9 @@ mod tests {
         let entries = table.list_by_kind(ProcessKind::Agent).await;
         assert_eq!(entries.len(), 2);
         // PID 20 keeps its original entry (not replaced)
-        let e20 = entries.iter().find(|e| e.pid.as_u32() == 20).unwrap();
+        let e20 = entries.iter().find(|e| e.pid.as_u64() == 20).unwrap();
         assert_eq!(e20.name, "already-running");
-        assert!(entries.iter().any(|e| e.pid.as_u32() == 21));
+        assert!(entries.iter().any(|e| e.pid.as_u64() == 21));
     }
 
     #[tokio::test]

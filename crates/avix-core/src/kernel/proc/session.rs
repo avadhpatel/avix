@@ -25,7 +25,7 @@ impl SessionManager {
         origin_agent: &str,
         title: &str,
         goal: &str,
-        owner_pid: u32,
+        owner_pid: u64,
     ) -> Result<SessionRecord, AvixError> {
         let store = self.store.as_ref()
             .ok_or_else(|| AvixError::NotFound("session store not configured".into()))?;

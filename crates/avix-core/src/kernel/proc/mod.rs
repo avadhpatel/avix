@@ -52,12 +52,12 @@ pub struct ProcHandler {
     master_key: Vec<u8>,
     runtime_dir: PathBuf,
     executor_factory: Option<Arc<dyn AgentExecutorFactory>>,
-    task_handles: Arc<Mutex<HashMap<u32, tokio::task::AbortHandle>>>,
+    task_handles: Arc<Mutex<HashMap<u64, tokio::task::AbortHandle>>>,
     invocation_store: Option<Arc<InvocationStore>>,
     session_store: Option<Arc<PersistentSessionStore>>,
     manifest_scanner: Option<Arc<ManifestScanner>>,
-    active_invocations: Arc<Mutex<HashMap<u32, String>>>,
-    active_sessions: Arc<Mutex<HashMap<u32, String>>>,
+    active_invocations: Arc<Mutex<HashMap<u64, String>>>,
+    active_sessions: Arc<Mutex<HashMap<u64, String>>>,
     service_manager: Arc<Mutex<Option<Arc<ServiceManager>>>>,
     tool_registry: Arc<Mutex<Option<Arc<ToolRegistry>>>>,
     tracer: Arc<Tracer>,
@@ -323,19 +323,19 @@ impl ProcHandler {
         }
     }
 
-    pub async fn abort_agent(&self, pid: u32) {
+    pub async fn abort_agent(&self, pid: u64) {
         self.agent_manager.abort_agent(pid).await;
         let mut handles = self.task_handles.lock().await;
         if let Some(handle) = handles.remove(&pid) {
             handle.abort();
         }
-        let _ = self.process_table.set_status(Pid::new(pid), ProcessStatus::Stopped).await;
+        let _ = self.process_table.set_status(Pid::from_u64(pid), ProcessStatus::Stopped).await;
         self.finalize_invocation(pid, InvocationStatus::Killed, Some("killed".into())).await;
     }
 
     async fn finalize_invocation(
         &self,
-        pid: u32,
+        pid: u64,
         status: InvocationStatus,
         exit_reason: Option<String>,
     ) {
@@ -357,7 +357,7 @@ impl ProcHandler {
                 return;
             }
         };
-        let (tokens, tool_calls) = match self.process_table.get(Pid::new(pid)).await {
+        let (tokens, tool_calls) = match self.process_table.get(Pid::from_u64(pid)).await {
             Some(entry) => (entry.tokens_consumed, entry.tool_calls_total),
             None => (0, 0),
         };
@@ -374,7 +374,7 @@ impl ProcHandler {
         self.finalize_session_for_pid(pid, &status).await;
     }
 
-    pub async fn finalize_session_for_pid(&self, pid: u32, status: &InvocationStatus) {
+    pub async fn finalize_session_for_pid(&self, pid: u64, status: &InvocationStatus) {
         let session_id_str = self.active_sessions.lock().await.remove(&pid);
         let sid = match session_id_str {
             Some(s) => s,
@@ -407,8 +407,8 @@ impl ProcHandler {
         goal: &str,
         session_id: &str,
         caller_identity: &str,
-        parent_pid: Option<u32>,
-    ) -> Result<u32, AvixError> {
+        parent_pid: Option<u64>,
+    ) -> Result<u64, AvixError> {
         let pid = self.agent_manager.spawn(name, goal, session_id, caller_identity, parent_pid).await?;
 
         persist_agent(&self.agents_yaml_path, pid, name, goal, session_id).await?;
@@ -570,7 +570,7 @@ impl ProcHandler {
         origin_agent: &str,
         title: &str,
         goal: &str,
-        owner_pid: u32,
+        owner_pid: u64,
     ) -> Result<SessionRecord, AvixError> {
         let store = match &self.session_store {
             Some(s) => s,
@@ -607,7 +607,7 @@ impl ProcHandler {
         &self,
         session_id: &Uuid,
         input: Option<&str>,
-    ) -> Result<u32, AvixError> {
+    ) -> Result<u64, AvixError> {
         let store = match &self.session_store {
             Some(s) => s,
             None => return Err(AvixError::NotFound("session store not configured".into())),
@@ -644,17 +644,17 @@ impl ProcHandler {
         Ok(pid)
     }
 
-    pub async fn pause_agent(&self, pid: u32) -> Result<(), AvixError> {
+    pub async fn pause_agent(&self, pid: u64) -> Result<(), AvixError> {
         self.signal_handler.pause_agent(pid).await
     }
 
-    pub async fn resume_agent(&self, pid: u32) -> Result<(), AvixError> {
+    pub async fn resume_agent(&self, pid: u64) -> Result<(), AvixError> {
         self.signal_handler.resume_agent(pid).await
     }
 
     pub async fn send_signal(
         &self,
-        pid: u32,
+        pid: u64,
         signal: &str,
         payload: serde_json::Value,
     ) -> Result<(), AvixError> {
@@ -665,7 +665,7 @@ impl ProcHandler {
         load_agents_yaml(&self.agents_yaml_path).await
     }
 
-    pub async fn remove_agent_record(&self, pid: u32) -> Result<(), AvixError> {
+    pub async fn remove_agent_record(&self, pid: u64) -> Result<(), AvixError> {
         let mut agents = load_agents_yaml(&self.agents_yaml_path).await.unwrap_or_default();
         agents.agents.retain(|a| a.pid != pid);
         save_agents_yaml(&self.agents_yaml_path, &agents).await?;
@@ -724,18 +724,18 @@ mod tests {
         assert_eq!(count.load(Ordering::SeqCst), 2);
 
         assert_eq!(
-            table.get(Pid::new(pid1)).await.unwrap().status,
+            table.get(Pid::from_u64(pid1)).await.unwrap().status,
             ProcessStatus::Running
         );
         assert_eq!(
-            table.get(Pid::new(pid2)).await.unwrap().status,
+            table.get(Pid::from_u64(pid2)).await.unwrap().status,
             ProcessStatus::Running
         );
 
         handler.abort_agent(pid1).await;
         
-        let p1_status = table.get(Pid::new(pid1)).await.unwrap().status;
-        let p2_status = table.get(Pid::new(pid2)).await.unwrap().status;
+        let p1_status = table.get(Pid::from_u64(pid1)).await.unwrap().status;
+        let p2_status = table.get(Pid::from_u64(pid2)).await.unwrap().status;
         assert_eq!(p1_status, ProcessStatus::Stopped);
         assert_eq!(p2_status, ProcessStatus::Running);
     }
@@ -751,7 +751,7 @@ mod tests {
             .spawn("agent", "goal", "sess", "kernel", None)
             .await
             .unwrap();
-        let entry = table.get(Pid::new(pid)).await.unwrap();
+        let entry = table.get(Pid::from_u64(pid)).await.unwrap();
         assert_eq!(entry.status, ProcessStatus::Running);
         assert!(handler.task_handles.lock().await.is_empty());
     }
@@ -769,7 +769,7 @@ mod tests {
             .await
             .unwrap();
 
-        let entry = table.get(Pid::new(pid)).await.unwrap();
+        let entry = table.get(Pid::from_u64(pid)).await.unwrap();
         assert_eq!(entry.name, "test_agent");
         assert_eq!(entry.goal, "test_goal");
         assert_eq!(entry.status, ProcessStatus::Running);

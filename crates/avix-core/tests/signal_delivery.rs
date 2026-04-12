@@ -20,10 +20,10 @@ fn signal_kind_usr1_usr2_exist() {
 
 // ── helper ──────────────────────────────────────────────────────────────────
 
-async fn make_executor(pid: u32) -> RuntimeExecutor {
+async fn make_executor(pid: u64) -> RuntimeExecutor {
     let registry = Arc::new(MockToolRegistry::new());
     let params = SpawnParams {
-        pid: Pid::new(pid),
+        pid: Pid::from_u64(pid),
         agent_name: "signal-test".into(),
         goal: "test".into(),
         spawned_by: "alice".into(),

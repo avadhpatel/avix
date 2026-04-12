@@ -3,23 +3,23 @@ use avix_core::types::*;
 
 #[test]
 fn pid_zero_is_kernel() {
-    let pid = Pid::new(0);
+    let pid = Pid::from_u64(0);
     assert!(pid.is_kernel());
 }
 
 #[test]
 fn pid_nonzero_is_not_kernel() {
-    assert!(!Pid::new(57).is_kernel());
+    assert!(!Pid::from_u64(57).is_kernel());
 }
 
 #[test]
 fn pid_display() {
-    assert_eq!(Pid::new(42).to_string(), "42");
+    assert_eq!(Pid::from_u64(42).to_string(), "42");
 }
 
 #[test]
 fn pid_ordering() {
-    assert!(Pid::new(1) < Pid::new(2));
+    assert!(Pid::from_u64(1) < Pid::from_u64(2));
 }
 
 #[test]
@@ -31,7 +31,7 @@ fn ipc_addr_kernel_unix() {
 
 #[test]
 fn ipc_addr_agent_unix() {
-    let addr = IpcAddr::for_agent(std::path::Path::new("/run/avix"), Pid::new(57));
+    let addr = IpcAddr::for_agent(std::path::Path::new("/run/avix"), Pid::from_u64(57));
     #[cfg(unix)]
     assert_eq!(addr.os_path(), "/run/avix/agents/57.sock");
 }

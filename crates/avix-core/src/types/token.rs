@@ -15,7 +15,7 @@ pub struct SessionToken {
 /// Who the token was issued to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssuedTo {
-    pub pid: u32,
+    pub pid: u64,
     pub agent_name: String,
     pub spawned_by: String,
 }

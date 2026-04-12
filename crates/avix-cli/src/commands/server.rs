@@ -224,7 +224,7 @@ pub async fn run(sub: ServerCmd) -> Result<()> {
                 "job/watch",
             ]);
             let params = SpawnParams {
-                pid: Pid::new(100),
+                pid: Pid::from_u64(100),
                 agent_name: name.clone(),
                 goal: goal.clone(),
                 spawned_by: "cli".into(),

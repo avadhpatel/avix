@@ -21,7 +21,7 @@ pub struct ServiceListResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRecord {
-    pub pid: u32,
+    pub pid: u64,
     pub name: String,
     pub goal: String,
     pub session_id: String,
@@ -35,7 +35,7 @@ pub struct AgentsYaml {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActiveAgent {
-    pub pid: u32,
+    pub pid: u64,
     pub name: String,
     pub status: String,
     pub goal: String,

@@ -32,18 +32,18 @@ use super::tool_registration::compute_cat2_tools;
 pub trait ToolRegistryHandle: Send + Sync {
     fn register_tool(
         &self,
-        pid: u32,
+        pid: u64,
         name: &str,
         visibility: ToolVisibility,
     ) -> impl std::future::Future<Output = ()> + Send;
 
-    fn deregister_tool(&self, pid: u32, name: &str)
+    fn deregister_tool(&self, pid: u64, name: &str)
         -> impl std::future::Future<Output = ()> + Send;
 }
 
 /// Concrete: the mock registry used in tests
 pub struct MockToolRegistry {
-    pub registered: Arc<Mutex<Vec<(u32, String, ToolVisibility)>>>,
+    pub registered: Arc<Mutex<Vec<(u64, String, ToolVisibility)>>>,
 }
 
 impl MockToolRegistry {
@@ -53,7 +53,7 @@ impl MockToolRegistry {
         }
     }
 
-    pub async fn tools_registered_by_pid(&self, pid: u32) -> HashSet<String> {
+    pub async fn tools_registered_by_pid(&self, pid: u64) -> HashSet<String> {
         self.registered
             .lock()
             .await
@@ -63,7 +63,7 @@ impl MockToolRegistry {
             .collect()
     }
 
-    pub async fn all_registered(&self) -> Vec<(u32, String)> {
+    pub async fn all_registered(&self) -> Vec<(u64, String)> {
         self.registered
             .lock()
             .await
@@ -80,14 +80,14 @@ impl Default for MockToolRegistry {
 }
 
 impl ToolRegistryHandle for Arc<MockToolRegistry> {
-    async fn register_tool(&self, pid: u32, name: &str, visibility: ToolVisibility) {
+    async fn register_tool(&self, pid: u64, name: &str, visibility: ToolVisibility) {
         self.registered
             .lock()
             .await
             .push((pid, name.to_string(), visibility));
     }
 
-    async fn deregister_tool(&self, pid: u32, name: &str) {
+    async fn deregister_tool(&self, pid: u64, name: &str) {
         self.registered
             .lock()
             .await
@@ -178,7 +178,7 @@ impl RuntimeExecutor {
 
         for (name, visibility) in &cat2_tools {
             registry
-                .register_tool(params.pid.as_u32(), name, visibility.clone())
+                .register_tool(params.pid.as_u64(), name, visibility.clone())
                 .await;
             registered_cat2.push(name.clone());
         }
@@ -316,7 +316,7 @@ impl RuntimeExecutor {
             return;
         }
         if let Err(e) = init_user_memory_tree(&vfs, &self.spawned_by, &self.agent_name).await {
-            tracing::warn!(pid = self.pid.as_u32(), err = ?e, "memory tree init failed");
+            tracing::warn!(pid = self.pid.as_u64(), err = ?e, "memory tree init failed");
         }
     }
 
@@ -372,7 +372,7 @@ impl RuntimeExecutor {
     pub fn build_system_prompt_str(&self) -> String {
         let tool_list = self.current_tool_list();
         let base = build_system_prompt(
-            self.pid.as_u32(),
+            self.pid.as_u64(),
             &self.agent_name,
             &self.goal,
             &self.spawned_by,
@@ -483,7 +483,7 @@ impl RuntimeExecutor {
     /// Unlike `shutdown_with_status`, this does NOT deregister Cat2 tools — the executor
     /// stays alive and can accept another goal via `wait_for_next_goal`.
     pub async fn idle(&mut self) {
-        tracing::debug!(pid = self.pid.as_u32(), "executor transitioning to idle");
+        tracing::debug!(pid = self.pid.as_u64(), "executor transitioning to idle");
 
         if !self.invocation_id.is_empty() {
             if let Some(store) = &self.invocation_store {
@@ -524,7 +524,7 @@ impl RuntimeExecutor {
                         crate::signal::kind::SignalKind::Start => {
                             let goal = sig.payload["goal"].as_str().unwrap_or("").to_string();
                             tracing::info!(
-                                pid = self.pid.as_u32(),
+                                pid = self.pid.as_u64(),
                                 "SIGSTART received; resuming executor with new goal"
                             );
                             self.signal_rx = Some(signal_rx);
@@ -534,7 +534,7 @@ impl RuntimeExecutor {
                         | crate::signal::kind::SignalKind::Stop => {
                             self.killed.store(true, Ordering::Release);
                             tracing::info!(
-                                pid = self.pid.as_u32(),
+                                pid = self.pid.as_u64(),
                                 signal = ?sig.kind,
                                 "executor killed while idle"
                             );
@@ -552,7 +552,7 @@ impl RuntimeExecutor {
                 }
                 None => {
                     tracing::debug!(
-                        pid = self.pid.as_u32(),
+                        pid = self.pid.as_u64(),
                         "signal channel closed while waiting for next goal"
                     );
                     self.signal_rx = Some(signal_rx);
@@ -572,7 +572,7 @@ impl RuntimeExecutor {
         match &self.registry_ref {
             RegistryRef::Mock(reg) => {
                 for name in self.tools.registered_cat2.clone() {
-                    reg.deregister_tool(self.pid.as_u32(), &name).await;
+                    reg.deregister_tool(self.pid.as_u64(), &name).await;
                 }
                 self.tools.registered_cat2.clear();
             }
@@ -646,9 +646,9 @@ mod tests {
     use super::*;
     use crate::executor::MockKernelHandle;
 
-    fn make_params(pid_val: u32, caps: &[&str]) -> SpawnParams {
+    fn make_params(pid_val: u64, caps: &[&str]) -> SpawnParams {
         SpawnParams {
-            pid: Pid::new(pid_val),
+            pid: Pid::from_u64(pid_val),
             agent_name: "test-agent".into(),
             goal: "test goal".into(),
             spawned_by: "kernel".into(),
@@ -663,7 +663,7 @@ mod tests {
         }
     }
 
-    async fn make_executor(pid_val: u32, caps: &[&str]) -> RuntimeExecutor {
+    async fn make_executor(pid_val: u64, caps: &[&str]) -> RuntimeExecutor {
         let registry = Arc::new(MockToolRegistry::new());
         RuntimeExecutor::spawn_with_registry(make_params(pid_val, caps), registry)
             .await

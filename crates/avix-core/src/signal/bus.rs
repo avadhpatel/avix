@@ -32,7 +32,7 @@ struct PidEntry {
 
 #[derive(Default)]
 pub struct SignalBus {
-    table: Arc<RwLock<HashMap<u32, PidEntry>>>,
+    table: Arc<RwLock<HashMap<u64, PidEntry>>>,
     next_id: Arc<std::sync::atomic::AtomicU64>,
 }
 
@@ -47,7 +47,7 @@ impl SignalBus {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         );
         let mut table = self.table.write().await;
-        let entry = table.entry(pid.as_u32()).or_insert_with(|| PidEntry {
+        let entry = table.entry(pid.as_u64()).or_insert_with(|| PidEntry {
             sender: broadcast::channel(CHANNEL_CAPACITY).0,
             sub_count: 0,
         });
@@ -58,17 +58,17 @@ impl SignalBus {
 
     pub async fn unsubscribe(&self, pid: Pid, _id: SubscriptionId) {
         let mut table = self.table.write().await;
-        if let Some(entry) = table.get_mut(&pid.as_u32()) {
+        if let Some(entry) = table.get_mut(&pid.as_u64()) {
             entry.sub_count = entry.sub_count.saturating_sub(1);
             if entry.sub_count == 0 {
-                table.remove(&pid.as_u32());
+                table.remove(&pid.as_u64());
             }
         }
     }
 
     pub async fn send(&self, signal: Signal) -> Result<(), ()> {
         let table = self.table.read().await;
-        if let Some(entry) = table.get(&signal.target.as_u32()) {
+        if let Some(entry) = table.get(&signal.target.as_u64()) {
             let _ = entry.sender.send(signal);
         }
         Ok(())
@@ -78,7 +78,7 @@ impl SignalBus {
         let table = self.table.read().await;
         for (pid_u32, entry) in table.iter() {
             let sig = Signal {
-                target: crate::types::Pid::new(*pid_u32),
+                target: crate::types::Pid::from_u64(*pid_u32),
                 kind: kind.clone(),
                 payload: payload.clone(),
             };
@@ -90,7 +90,7 @@ impl SignalBus {
         self.table
             .read()
             .await
-            .get(&pid.as_u32())
+            .get(&pid.as_u64())
             .map(|e| e.sub_count)
             .unwrap_or(0)
     }

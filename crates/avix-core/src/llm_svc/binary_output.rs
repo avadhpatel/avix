@@ -22,7 +22,7 @@ pub fn write_binary_output(
 /// Uses the provided `write_fn` closure to perform the actual write (injected dependency).
 /// Returns the VFS path string.
 pub fn write_binary_to_vfs(
-    agent_pid: u32,
+    agent_pid: u64,
     kind: &str,
     data: &[u8],
     ext: &str,

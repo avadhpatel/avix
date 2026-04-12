@@ -297,7 +297,7 @@ impl LlmService {
             style: params["style"].as_str().map(str::to_string),
             n: params["n"].as_u64().map(|n| n as u32),
             metadata: crate::llm_svc::adapter::CompleteMetadata {
-                agent_pid: params["metadata"]["agent_pid"].as_u64().unwrap_or(0) as u32,
+                agent_pid: params["metadata"]["agent_pid"].as_u64().unwrap_or(0),
                 session_id: params["metadata"]["session_id"]
                     .as_str()
                     .unwrap_or("")
@@ -391,7 +391,7 @@ impl LlmService {
             speed: params["speed"].as_f64().map(|s| s as f32),
             stream: params["stream"].as_bool(),
             metadata: crate::llm_svc::adapter::CompleteMetadata {
-                agent_pid: params["metadata"]["agent_pid"].as_u64().unwrap_or(0) as u32,
+                agent_pid: params["metadata"]["agent_pid"].as_u64().unwrap_or(0),
                 session_id: params["metadata"]["session_id"]
                     .as_str()
                     .unwrap_or("")
@@ -473,7 +473,7 @@ impl LlmService {
             prompt: params["prompt"].as_str().map(str::to_string),
             granularity: params["granularity"].as_str().map(str::to_string),
             metadata: crate::llm_svc::adapter::CompleteMetadata {
-                agent_pid: params["metadata"]["agent_pid"].as_u64().unwrap_or(0) as u32,
+                agent_pid: params["metadata"]["agent_pid"].as_u64().unwrap_or(0),
                 session_id: params["metadata"]["session_id"]
                     .as_str()
                     .unwrap_or("")
@@ -565,7 +565,7 @@ impl LlmService {
                 .to_string(),
             input,
             metadata: crate::llm_svc::adapter::CompleteMetadata {
-                agent_pid: params["metadata"]["agent_pid"].as_u64().unwrap_or(0) as u32,
+                agent_pid: params["metadata"]["agent_pid"].as_u64().unwrap_or(0),
                 session_id: params["metadata"]["session_id"]
                     .as_str()
                     .unwrap_or("")

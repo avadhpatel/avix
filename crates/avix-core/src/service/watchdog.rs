@@ -132,7 +132,7 @@ async fn check_and_restart(
 
         match ServiceProcess::spawn(&unit, &token, kernel_sock, router_sock, run_dir).await {
             Ok(new_proc) => {
-                info!(service = %name, pid = new_proc.pid.as_u32(), "service restarted");
+                info!(service = %name, pid = new_proc.pid.as_u64(), "service restarted");
                 let mut guard = entries.write().await;
                 if let Some(entry) = guard.get_mut(&name) {
                     entry.process = new_proc;

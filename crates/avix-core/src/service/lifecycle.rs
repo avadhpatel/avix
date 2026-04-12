@@ -148,9 +148,9 @@ impl ServiceManager {
         &self,
         req: ServiceSpawnRequest,
     ) -> Result<ServiceToken, AvixError> {
-        let pid = Pid::new(
+        let pid = Pid::from_u64(
             self.pid_counter
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u64,
         );
         let token_str = format!("svc-token-{}", Uuid::new_v4());
         let token = ServiceToken {
@@ -239,7 +239,7 @@ impl ServiceManager {
             .ok_or_else(|| AvixError::ConfigParse(format!("service not found: {name}")))?;
 
         let token = guard[name].token.token_str.clone();
-        let pid = guard[name].token.pid.as_u32();
+        let pid = guard[name].token.pid.as_u64();
 
         let mut env = HashMap::new();
         #[cfg(unix)]
@@ -370,7 +370,7 @@ impl ServiceManager {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ServiceSummary {
     pub name: String,
-    pub pid: u32,
+    pub pid: u64,
     /// `"running"` once the service has registered its endpoint; `"starting"` before that.
     pub status: String,
     pub registered_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -385,7 +385,7 @@ impl ServiceManager {
             .iter()
             .map(|(name, rec)| ServiceSummary {
                 name: name.clone(),
-                pid: rec.token.pid.as_u32(),
+                pid: rec.token.pid.as_u64(),
                 status: if rec.endpoint.is_some() {
                     "running".into()
                 } else {

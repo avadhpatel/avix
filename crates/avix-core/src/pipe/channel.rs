@@ -13,14 +13,14 @@ pub enum PipeError {
 
 pub struct Pipe {
     pub id: String,
-    pub owner_pid: u32,
+    pub owner_pid: u64,
     tx: mpsc::Sender<String>,
     rx: Mutex<mpsc::Receiver<String>>,
     closed: AtomicBool,
 }
 
 impl Pipe {
-    pub fn new(owner_pid: u32, capacity: usize) -> Self {
+    pub fn new(owner_pid: u64, capacity: usize) -> Self {
         let (tx, rx) = mpsc::channel(capacity);
         Self {
             id: Uuid::new_v4().to_string(),

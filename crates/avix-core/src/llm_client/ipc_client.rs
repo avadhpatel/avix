@@ -10,14 +10,14 @@ use tokio::net::UnixStream;
 pub struct IpcLlmClient {
     /// Path to the llm.svc Unix socket
     pub socket_path: String,
-    pub agent_pid: u32,
+    pub agent_pid: u64,
     pub session_id: String,
 }
 
 impl IpcLlmClient {
     pub fn new(
         socket_path: impl Into<String>,
-        agent_pid: u32,
+        agent_pid: u64,
         session_id: impl Into<String>,
     ) -> Self {
         Self {

@@ -106,7 +106,7 @@ impl Default for ProcessEntry {
     fn default() -> Self {
         let now = Utc::now();
         Self {
-            pid: Pid::new(0),
+            pid: Pid::from_u64(0),
             name: String::new(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Pending,

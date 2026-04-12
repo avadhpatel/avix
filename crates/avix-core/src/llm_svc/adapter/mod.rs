@@ -45,7 +45,7 @@ pub struct AvixToolDescriptor {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompleteMetadata {
-    pub agent_pid: u32,
+    pub agent_pid: u64,
     pub session_id: String,
 }
 

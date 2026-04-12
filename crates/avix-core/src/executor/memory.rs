@@ -136,7 +136,7 @@ impl MemoryManager {
     /// Write a session summary to episodic memory when SIGSTOP fires.
     pub async fn auto_log_session_end(
         &self,
-        pid: u32,
+        pid: u64,
         agent_name: &str,
         spawned_by: &str,
         session_id: &str,

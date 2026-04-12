@@ -91,7 +91,7 @@ async fn dispatch_request(
             let goal = params["goal"].as_str().unwrap_or("");
             let session_id = params["session_id"].as_str().unwrap_or("");
             let caller = params["caller"].as_str().unwrap_or("gateway");
-            let parent_pid = params["parent_pid"].as_u64().map(|v| v as u32);
+            let parent_pid = params["parent_pid"].as_u64();
 
             match proc_handler
                 .spawn(name, goal, session_id, caller, parent_pid)
@@ -134,7 +134,7 @@ async fn dispatch_request(
             let pid_val = params["id"]
                 .as_u64()
                 .or_else(|| params["pid"].as_u64())
-                .unwrap_or(0) as u32;
+                .unwrap_or(0);
 
             match method {
                 "kernel/proc/kill" => {
@@ -545,7 +545,7 @@ async fn dispatch_request(
         "kernel/signal/send" => {
             let pid_val = params["pid"]
                 .as_u64()
-                .unwrap_or(0) as u32;
+                .unwrap_or(0);
             if pid_val == 0 {
                 return JsonRpcResponse::err(id, -32602, "missing pid", None);
             }
@@ -572,9 +572,9 @@ async fn dispatch_request(
     }
 }
 
-async fn kill_proc(id: &str, pid: u32, table: &Arc<ProcessTable>) -> JsonRpcResponse {
+async fn kill_proc(id: &str, pid: u64, table: &Arc<ProcessTable>) -> JsonRpcResponse {
     match table
-        .set_status(Pid::new(pid), ProcessStatus::Stopped)
+        .set_status(Pid::from_u64(pid), ProcessStatus::Stopped)
         .await
     {
         Ok(_) => {
@@ -585,8 +585,8 @@ async fn kill_proc(id: &str, pid: u32, table: &Arc<ProcessTable>) -> JsonRpcResp
     }
 }
 
-async fn stat_proc(id: &str, pid: u32, table: &Arc<ProcessTable>) -> JsonRpcResponse {
-    match table.get(Pid::new(pid)).await {
+async fn stat_proc(id: &str, pid: u64, table: &Arc<ProcessTable>) -> JsonRpcResponse {
+    match table.get(Pid::from_u64(pid)).await {
         Some(entry) => {
             let status = match entry.status {
                 ProcessStatus::Running => "running",

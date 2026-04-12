@@ -140,7 +140,7 @@ impl RouterDispatcher {
         let svc_name = tool_entry.owner.clone();
         if self.service_registry.is_caller_scoped(&svc_name).await {
             CallerInfo {
-                pid: caller_pid.as_u32() as u64,
+                pid: caller_pid.as_u64() as u64,
                 user: caller_user.to_string(),
                 token: _caller_token.to_string(),
             }

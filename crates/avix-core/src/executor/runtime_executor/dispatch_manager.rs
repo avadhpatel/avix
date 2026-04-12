@@ -46,7 +46,7 @@ impl RuntimeExecutor {
             "SIGSTOP" => {
                 self.memory
                     .auto_log_session_end(
-                        self.pid.as_u32(),
+                        self.pid.as_u64(),
                         &self.agent_name,
                         &self.spawned_by,
                         &self.session_id,
@@ -102,7 +102,7 @@ impl RuntimeExecutor {
                 self.take_interim_snapshot().await;
             }
             _ => {
-                tracing::debug!(pid = self.pid.as_u32(), signal, "signal received");
+                tracing::debug!(pid = self.pid.as_u64(), signal, "signal received");
                 if let Some(vfs) = &self.vfs {
                     self.write_status_yaml(vfs).await;
                 }
@@ -119,14 +119,14 @@ impl RuntimeExecutor {
         let vfs = match &self.vfs {
             Some(v) => Arc::clone(v),
             None => {
-                tracing::debug!(pid = self.pid.as_u32(), "snapshot skipped: no VFS attached");
+                tracing::debug!(pid = self.pid.as_u64(), "snapshot skipped: no VFS attached");
                 return;
             }
         };
 
         let snap = capture(CaptureParams {
             agent_name: &self.agent_name,
-            pid: self.pid.as_u32(),
+            pid: self.pid.as_u64(),
             username: &self.spawned_by,
             goal: &self.goal,
             message_history: &self.memory.conversation_history,
@@ -145,25 +145,25 @@ impl RuntimeExecutor {
                 Ok(path) => {
                     if let Err(e) = vfs.write(&path, yaml.into_bytes()).await {
                         tracing::warn!(
-                            pid = self.pid.as_u32(),
+                            pid = self.pid.as_u64(),
                             path = vfs_path_str,
                             err = ?e,
                             "snapshot VFS write failed"
                         );
                     } else {
                         tracing::info!(
-                            pid = self.pid.as_u32(),
+                            pid = self.pid.as_u64(),
                             path = vfs_path_str,
                             "snapshot written"
                         );
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(pid = self.pid.as_u32(), err = ?e, "invalid snapshot VFS path")
+                    tracing::warn!(pid = self.pid.as_u64(), err = ?e, "invalid snapshot VFS path")
                 }
             },
             Err(e) => {
-                tracing::warn!(pid = self.pid.as_u32(), err = ?e, "snapshot serialisation failed")
+                tracing::warn!(pid = self.pid.as_u64(), err = ?e, "snapshot serialisation failed")
             }
         }
     }
@@ -188,9 +188,9 @@ impl RuntimeExecutor {
             )
             .await
         {
-            tracing::warn!(pid = self.pid.as_u32(), id = %id, err = ?e, "interim snapshot failed");
+            tracing::warn!(pid = self.pid.as_u64(), id = %id, err = ?e, "interim snapshot failed");
         } else {
-            tracing::debug!(pid = self.pid.as_u32(), id = %id, "interim snapshot saved");
+            tracing::debug!(pid = self.pid.as_u64(), id = %id, "interim snapshot saved");
         }
     }
 
@@ -258,7 +258,7 @@ impl RuntimeExecutor {
             .collect();
 
         tracing::info!(
-            pid = self.pid.as_u32(),
+            pid = self.pid.as_u64(),
             snapshot = %file.metadata.name,
             reissued = ?reissued_requests,
             sigpipe = ?sigpipe_pipes,
@@ -298,7 +298,7 @@ impl RuntimeExecutor {
             }
             "agent/kill" => {
                 if let Some(kernel) = &self.kernel {
-                    let pid = call.args["pid"].as_u64().unwrap_or(0) as u32;
+                    let pid = call.args["pid"].as_u64().unwrap_or(0);
                     kernel.record_proc_kill(pid).await;
                 }
                 Ok(serde_json::json!({"killed": true}))
@@ -309,7 +309,7 @@ impl RuntimeExecutor {
 
                 if let Some(handler) = &self.resource_handler {
                     let req = ResourceRequest::new(
-                        self.pid.as_u32(),
+                        self.pid.as_u64(),
                         self.token.signature.clone(),
                         vec![ResourceItem::Tool {
                             name: tool_name.clone(),
@@ -397,7 +397,7 @@ impl RuntimeExecutor {
             })),
             "agent/send-message" => Ok(serde_json::json!({ "delivered": true })),
             "pipe/open" => {
-                let target_pid = call.args["targetPid"].as_u64().unwrap_or(0) as u32;
+                let target_pid = call.args["targetPid"].as_u64().unwrap_or(0);
                 let direction = call.args["direction"].as_str().unwrap_or("out").to_string();
                 let buffer_tokens = call.args["bufferTokens"].as_u64().unwrap_or(8192) as u32;
 
@@ -410,7 +410,7 @@ impl RuntimeExecutor {
                         _ => crate::kernel::resource_request::PipeDirection::Out,
                     };
                     let req = ResourceRequest::new(
-                        self.pid.as_u32(),
+                        self.pid.as_u64(),
                         self.token.signature.clone(),
                         vec![ResourceItem::Pipe {
                             target_pid,
@@ -428,7 +428,7 @@ impl RuntimeExecutor {
                             }) = resp.grants.into_iter().next()
                             {
                                 if let Some(vfs) = &self.vfs {
-                                    let pid = self.pid.as_u32();
+                                    let pid = self.pid.as_u64();
                                     let entry = serde_yaml::to_string(&serde_json::json!({
                                         "pipe_id": pipe_id,
                                         "target_pid": target_pid,
@@ -486,7 +486,7 @@ impl RuntimeExecutor {
 
         if let Some(handler) = self.resource_handler.clone() {
             let req = ResourceRequest::new(
-                self.pid.as_u32(),
+                self.pid.as_u64(),
                 self.token.signature.clone(),
                 vec![ResourceItem::TokenRenewal {
                     reason: "auto-renewal within 5 min window".into(),
@@ -558,7 +558,7 @@ impl RuntimeExecutor {
                     if let Some(bus) = &self.event_bus {
                         bus.agent_output_chunk(
                             &self.session_id,
-                            self.pid.as_u32(),
+                            self.pid.as_u64(),
                             &turn_id_str,
                             &pending_text,
                             seq,
@@ -622,7 +622,7 @@ impl RuntimeExecutor {
         if let Some(bus) = &self.event_bus {
             bus.agent_output_chunk(
                 &self.session_id,
-                self.pid.as_u32(),
+                self.pid.as_u64(),
                 &turn_id_str,
                 "",
                 seq,
@@ -666,7 +666,7 @@ impl RuntimeExecutor {
             "SIGKILL" | "SIGSTOP" => {
                 self.memory
                     .auto_log_session_end(
-                        self.pid.as_u32(),
+                        self.pid.as_u64(),
                         &self.agent_name,
                         &self.spawned_by,
                         &self.session_id,
@@ -722,7 +722,7 @@ impl RuntimeExecutor {
             }
             _ => {
                 tracing::debug!(
-                    pid = self.pid.as_u32(),
+                    pid = self.pid.as_u64(),
                     signal = name,
                     "unhandled signal between turns"
                 );
@@ -740,7 +740,7 @@ impl RuntimeExecutor {
             "SIGKILL" | "SIGSTOP" => {
                 self.memory
                     .auto_log_session_end(
-                        self.pid.as_u32(),
+                        self.pid.as_u64(),
                         &self.agent_name,
                         &self.spawned_by,
                         &self.session_id,
@@ -784,7 +784,7 @@ impl RuntimeExecutor {
             }
             _ => {
                 tracing::debug!(
-                    pid = self.pid.as_u32(),
+                    pid = self.pid.as_u64(),
                     signal = name,
                     "unhandled signal during LLM"
                 );
@@ -805,7 +805,7 @@ impl RuntimeExecutor {
         use crate::executor::stop_reason::{interpret_stop_reason, TurnAction};
 
         tracing::info!(
-            pid = self.pid.as_u32(),
+            pid = self.pid.as_u64(),
             agent = %self.agent_name,
             goal = %goal,
             "executor starting turn loop"
@@ -830,7 +830,7 @@ impl RuntimeExecutor {
         loop {
             turn_num += 1;
             tracing::debug!(
-                pid = self.pid.as_u32(),
+                pid = self.pid.as_u64(),
                 turn = turn_num,
                 tokens_consumed = self.tokens_consumed,
                 tool_calls = self.tool_calls_total,
@@ -854,7 +854,7 @@ impl RuntimeExecutor {
                 }
             }
             if self.paused.load(Ordering::Acquire) {
-                tracing::debug!(pid = self.pid.as_u32(), "executor paused; waiting for SIGRESUME");
+                tracing::debug!(pid = self.pid.as_u64(), "executor paused; waiting for SIGRESUME");
                 loop {
                     match signal_rx.recv().await {
                         Some(sig) => {
@@ -864,7 +864,7 @@ impl RuntimeExecutor {
                                 return Err(AvixError::Cancelled("killed while paused".into()));
                             }
                             if !self.paused.load(Ordering::Acquire) {
-                                tracing::debug!(pid = self.pid.as_u32(), "executor resumed");
+                                tracing::debug!(pid = self.pid.as_u64(), "executor resumed");
                                 break;
                             }
                         }
@@ -893,7 +893,7 @@ impl RuntimeExecutor {
             };
 
             tracing::debug!(
-                pid = self.pid.as_u32(),
+                pid = self.pid.as_u64(),
                 turn = turn_num,
                 messages = messages.len(),
                 tools = req.tools.len(),
@@ -902,7 +902,7 @@ impl RuntimeExecutor {
 
             if let Some(t) = &self.tracer {
                 t.agent_llm_call(
-                    self.pid.as_u32(),
+                    self.pid.as_u64(),
                     turn_num,
                     "",
                     messages.len(),
@@ -950,7 +950,7 @@ impl RuntimeExecutor {
             };
 
             tracing::debug!(
-                pid = self.pid.as_u32(),
+                pid = self.pid.as_u64(),
                 stop_reason = ?response.stop_reason,
                 input_tokens = response.input_tokens,
                 output_tokens = response.output_tokens,
@@ -960,7 +960,7 @@ impl RuntimeExecutor {
             if let Some(t) = &self.tracer {
                 let stop = format!("{:?}", response.stop_reason);
                 t.agent_llm_response(
-                    self.pid.as_u32(),
+                    self.pid.as_u64(),
                     turn_num,
                     &stop,
                     response.input_tokens as u64,
@@ -980,7 +980,7 @@ impl RuntimeExecutor {
             match interpret_stop_reason(&response) {
                 TurnAction::ReturnResult(text) => {
                     tracing::info!(
-                        pid = self.pid.as_u32(),
+                        pid = self.pid.as_u64(),
                         turn = turn_num,
                         tokens_consumed = self.tokens_consumed,
                         tool_calls = self.tool_calls_total,
@@ -1001,7 +1001,7 @@ impl RuntimeExecutor {
                         .collect::<Vec<_>>()
                         .join("");
                     tracing::info!(
-                        pid = self.pid.as_u32(),
+                        pid = self.pid.as_u64(),
                         turn = turn_num,
                         "context summarised; persisting invocation state"
                     );
@@ -1026,7 +1026,7 @@ impl RuntimeExecutor {
                         "content": response.content
                     }));
                     tracing::debug!(
-                        pid = self.pid.as_u32(),
+                        pid = self.pid.as_u64(),
                         tool_count = calls.len(),
                         "dispatching tool calls"
                     );
@@ -1041,7 +1041,7 @@ impl RuntimeExecutor {
                             &mut self.tools.tool_budgets,
                         ) {
                             tracing::warn!(
-                                pid = self.pid.as_u32(),
+                                pid = self.pid.as_u64(),
                                 tool = %call.name,
                                 error = %e,
                                 "tool call validation failed"
@@ -1058,7 +1058,7 @@ impl RuntimeExecutor {
                             if let Some(kernel) = &self.kernel {
                                 if !kernel.is_auto_approve().await {
                                     tracing::debug!(
-                                        pid = self.pid.as_u32(),
+                                        pid = self.pid.as_u64(),
                                         tool = %call.name,
                                         "HIL gate blocked tool call"
                                     );
@@ -1085,7 +1085,7 @@ impl RuntimeExecutor {
 
                         self.tool_calls_total = self.tool_calls_total.saturating_add(1);
                         tracing::debug!(
-                            pid = self.pid.as_u32(),
+                            pid = self.pid.as_u64(),
                             tool = %call.name,
                             call_id = %call.call_id,
                             tool_calls_total = self.tool_calls_total,
@@ -1103,7 +1103,7 @@ impl RuntimeExecutor {
                         if let Some(bus) = &self.event_bus {
                             bus.agent_tool_call(
                                 &self.session_id,
-                                self.pid.as_u32(),
+                                self.pid.as_u64(),
                                 &call.call_id,
                                 &call.name,
                                 &call.args,
@@ -1111,7 +1111,7 @@ impl RuntimeExecutor {
                         }
                         if let Some(t) = &self.tracer {
                             t.agent_tool_call(
-                                self.pid.as_u32(),
+                                self.pid.as_u64(),
                                 &call.call_id,
                                 &call.name,
                                 &call.args,
@@ -1125,7 +1125,7 @@ impl RuntimeExecutor {
                         };
 
                         tracing::debug!(
-                            pid = self.pid.as_u32(),
+                            pid = self.pid.as_u64(),
                             tool = %call.name,
                             call_id = %call.call_id,
                             "tool call completed"
@@ -1134,7 +1134,7 @@ impl RuntimeExecutor {
                         if let Some(bus) = &self.event_bus {
                             bus.agent_tool_result(
                                 &self.session_id,
-                                self.pid.as_u32(),
+                                self.pid.as_u64(),
                                 &call.call_id,
                                 &call.name,
                                 &result.to_string(),
@@ -1142,7 +1142,7 @@ impl RuntimeExecutor {
                         }
                         if let Some(t) = &self.tracer {
                             t.agent_tool_result(
-                                self.pid.as_u32(),
+                                self.pid.as_u64(),
                                 &call.call_id,
                                 &call.name,
                                 &result,
@@ -1232,7 +1232,7 @@ impl RuntimeExecutor {
                 session.summary = Some(response_text[..preview_len].to_string());
                 session.last_updated = chrono::Utc::now();
                 tracing::debug!(
-                    pid = self.pid.as_u32(),
+                    pid = self.pid.as_u64(),
                     session_id = %self.session_id,
                     "updating session response summary"
                 );
@@ -1326,9 +1326,9 @@ mod tests {
     use crate::types::{token::CapabilityToken, Pid};
     use serde_json::json;
 
-    fn make_params(pid_val: u32, caps: &[&str]) -> SpawnParams {
+    fn make_params(pid_val: u64, caps: &[&str]) -> SpawnParams {
         SpawnParams {
-            pid: Pid::new(pid_val),
+            pid: Pid::from_u64(pid_val),
             agent_name: "test-agent".into(),
             goal: "test goal".into(),
             spawned_by: "kernel".into(),
@@ -1343,7 +1343,7 @@ mod tests {
         }
     }
 
-    async fn make_executor(pid_val: u32, caps: &[&str]) -> RuntimeExecutor {
+    async fn make_executor(pid_val: u64, caps: &[&str]) -> RuntimeExecutor {
         let registry = Arc::new(MockToolRegistry::new());
         RuntimeExecutor::spawn_with_registry(make_params(pid_val, caps), registry)
             .await
@@ -1578,7 +1578,7 @@ mod tests {
     async fn test_run_with_client_rejects_ungranted_tool() {
         let registry = Arc::new(MockToolRegistry::new());
         let params = SpawnParams {
-            pid: Pid::new(3260),
+            pid: Pid::from_u64(3260),
             agent_name: "agent".into(),
             goal: "goal".into(),
             spawned_by: "kernel".into(),

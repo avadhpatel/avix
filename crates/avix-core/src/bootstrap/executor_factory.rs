@@ -89,23 +89,23 @@ impl AgentExecutorFactory for IpcExecutorFactory {
         let signal_channels = self.signal_channels.clone();
 
         let handle = tokio::spawn(async move {
-            tracer.agent_spawn(pid.as_u32(), &agent_name, &goal, &session_id);
+            tracer.agent_spawn(pid.as_u64(), &agent_name, &goal, &session_id);
 
             let registry = Arc::new(MockToolRegistry::new());
             let llm_client = IpcLlmClient::new(
                 llm_sock.to_string_lossy().to_string(),
-                pid.as_u32(),
+                pid.as_u64(),
                 session_id.clone(),
             );
 
             let mut executor = match RuntimeExecutor::spawn_with_registry(params, registry).await {
                 Ok(e) => e,
                 Err(err) => {
-                    warn!(pid = pid.as_u32(), error = %err, "executor spawn failed");
-                    tracer.agent_exit(pid.as_u32(), "crashed", Some("spawn failed"));
+                    warn!(pid = pid.as_u64(), error = %err, "executor spawn failed");
+                    tracer.agent_exit(pid.as_u64(), "crashed", Some("spawn failed"));
                     let _ = process_table.set_status(pid, ProcessStatus::Crashed).await;
-                    event_bus.agent_status(&session_id, pid.as_u32(), "crashed");
-                    event_bus.agent_exit(&session_id, pid.as_u32(), 1);
+                    event_bus.agent_status(&session_id, pid.as_u64(), "crashed");
+                    event_bus.agent_exit(&session_id, pid.as_u64(), 1);
                     return;
                 }
             };
@@ -119,7 +119,7 @@ impl AgentExecutorFactory for IpcExecutorFactory {
             executor = executor.with_invocation_store(invocation_store, invocation_id);
             executor = executor.with_session_store(session_store);
 
-            info!(pid = pid.as_u32(), "executor started");
+            info!(pid = pid.as_u64(), "executor started");
 
             let mut current_goal = goal;
 
@@ -128,45 +128,45 @@ impl AgentExecutorFactory for IpcExecutorFactory {
             // turn the executor idles and waits for SIGSTART (next message).
             // The loop exits on SIGKILL, SIGSTOP, or an unrecoverable error.
             loop {
-                event_bus.agent_status(&session_id, pid.as_u32(), "running");
+                event_bus.agent_status(&session_id, pid.as_u64(), "running");
 
                 match executor.run_with_client(&current_goal, &llm_client).await {
                     Ok(_result) => {
-                        info!(pid = pid.as_u32(), "executor turn finished; transitioning to idle");
+                        info!(pid = pid.as_u64(), "executor turn finished; transitioning to idle");
 
                         // Persist idle state — invocation + session status → Idle.
                         executor.idle().await;
 
-                        event_bus.agent_status(&session_id, pid.as_u32(), "waiting");
+                        event_bus.agent_status(&session_id, pid.as_u64(), "waiting");
                         let _ = process_table.set_status(pid, ProcessStatus::Waiting).await;
 
-                        info!(pid = pid.as_u32(), "executor waiting for next goal (SIGSTART)");
+                        info!(pid = pid.as_u64(), "executor waiting for next goal (SIGSTART)");
 
                         // Block until a new goal arrives via SIGSTART or a kill signal.
                         match executor.wait_for_next_goal().await {
                             Some(next_goal) => {
-                                info!(pid = pid.as_u32(), "received next goal; resuming");
+                                info!(pid = pid.as_u64(), "received next goal; resuming");
                                 current_goal = next_goal;
                             }
                             None => {
-                                info!(pid = pid.as_u32(), "executor shutting down after idle wait");
+                                info!(pid = pid.as_u64(), "executor shutting down after idle wait");
                                 break;
                             }
                         }
                     }
                     Err(err) => {
-                        warn!(pid = pid.as_u32(), error = %err, "executor crashed");
+                        warn!(pid = pid.as_u64(), error = %err, "executor crashed");
                         executor
                             .shutdown_with_status(
                                 InvocationStatus::Failed,
                                 Some(err.to_string()),
                             )
                             .await;
-                        tracer.agent_exit(pid.as_u32(), "crashed", Some(&err.to_string()));
-                        event_bus.agent_status(&session_id, pid.as_u32(), "crashed");
-                        event_bus.agent_exit(&session_id, pid.as_u32(), 1);
+                        tracer.agent_exit(pid.as_u64(), "crashed", Some(&err.to_string()));
+                        event_bus.agent_status(&session_id, pid.as_u64(), "crashed");
+                        event_bus.agent_exit(&session_id, pid.as_u64(), 1);
                         let _ = process_table
-                            .set_status(Pid::new(pid.as_u32()), ProcessStatus::Crashed)
+                            .set_status(Pid::from_u64(pid.as_u64()), ProcessStatus::Crashed)
                             .await;
                         break;
                     }

@@ -86,8 +86,8 @@ pub struct SessionRecord {
     pub origin_agent: String,         // agent_name that started the session
     pub primary_agent: String,        // agent_name currently in control
     pub participants: Vec<String>,    // all agent_names involved
-    pub owner_pid: u32,               // PID that created the session — required, always non-zero
-    pub pids: Vec<u32>,               // all currently active PIDs in this session
+    pub owner_pid: u64,               // PID that created the session — required, always non-zero; time-seeded u64 (Pid::generate())
+    pub pids: Vec<u64>,               // all currently active PIDs in this session
 }
 
 pub enum SessionStatus {
@@ -175,7 +175,7 @@ pub struct InvocationRecord {
     pub id: String,                   // UUID v4
     pub agent_name: String,
     pub username: String,
-    pub pid: u32,
+    pub pid: u64,                     // time-seeded u64 PID — informational only; not stable across reboots within a session
     pub goal: String,
     pub session_id: String,          // REQUIRED - links to parent session
     pub spawned_at: DateTime<Utc>,
@@ -228,7 +228,7 @@ Sessions transitioned to `Idle` remain available for resumption.
 
 ```
 ProcHandler::spawn(name, goal, session_id?, parent_pid?)
-  1. Allocate PID (must happen first — used as owner_pid at session creation)
+  1. Generate PID via `Pid::generate()` — u64 time-seeded (42-bit ms since 2025-01-01 | 22-bit random salt), collision-free across reboots (used as owner_pid at session creation)
   2. Session resolution:
      - If parent_pid provided → inherit parent's session (attach as participant; add_pid(pid))
      - Else if session_id provided → attach to that session (add_pid(pid))

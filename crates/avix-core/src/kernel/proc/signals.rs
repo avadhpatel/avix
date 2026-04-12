@@ -17,8 +17,8 @@ pub struct SignalHandler {
     process_table: Arc<ProcessTable>,
     invocation_store: Option<Arc<InvocationStore>>,
     session_store: Option<Arc<PersistentSessionStore>>,
-    active_invocations: Arc<Mutex<HashMap<u32, String>>>,
-    active_sessions: Arc<Mutex<HashMap<u32, String>>>,
+    active_invocations: Arc<Mutex<HashMap<u64, String>>>,
+    active_sessions: Arc<Mutex<HashMap<u64, String>>>,
 }
 
 impl SignalHandler {
@@ -27,8 +27,8 @@ impl SignalHandler {
         process_table: Arc<ProcessTable>,
         invocation_store: Option<Arc<InvocationStore>>,
         session_store: Option<Arc<PersistentSessionStore>>,
-        active_invocations: Arc<Mutex<HashMap<u32, String>>>,
-        active_sessions: Arc<Mutex<HashMap<u32, String>>>,
+        active_invocations: Arc<Mutex<HashMap<u64, String>>>,
+        active_sessions: Arc<Mutex<HashMap<u64, String>>>,
     ) -> Self {
         Self {
             channels,
@@ -44,7 +44,7 @@ impl SignalHandler {
     async fn deliver_to(&self, pid: Pid, kind: SignalKind, payload: serde_json::Value) {
         let sig = Signal { target: pid, kind, payload };
         if !self.channels.send(pid, sig).await {
-            warn!(pid = pid.as_u32(), "no signal channel registered for agent (not running?)");
+            warn!(pid = pid.as_u64(), "no signal channel registered for agent (not running?)");
         }
     }
 
@@ -65,12 +65,12 @@ impl SignalHandler {
         futures::future::join_all(futs).await;
     }
 
-    pub async fn pause_agent(&self, pid: u32) -> Result<(), AvixError> {
+    pub async fn pause_agent(&self, pid: u64) -> Result<(), AvixError> {
         info!(pid, "pausing agent");
 
         let _ = self
             .process_table
-            .set_status(Pid::new(pid), ProcessStatus::Paused)
+            .set_status(Pid::from_u64(pid), ProcessStatus::Paused)
             .await;
         debug!(pid, "set process status to Paused");
 
@@ -82,7 +82,7 @@ impl SignalHandler {
             debug!(pid, "updated invocation status to Paused");
         }
 
-        self.deliver_to(Pid::new(pid), SignalKind::Pause, serde_json::Value::Null).await;
+        self.deliver_to(Pid::from_u64(pid), SignalKind::Pause, serde_json::Value::Null).await;
         debug!(pid, "delivered SIGPAUSE");
 
         let session_id_str = self.active_sessions.lock().await.get(&pid).cloned();
@@ -94,7 +94,7 @@ impl SignalHandler {
                             .pids
                             .iter()
                             .filter(|&&p| p != pid)
-                            .map(|&p| Pid::new(p))
+                            .map(|&p| Pid::from_u64(p))
                             .collect();
                         if !other_pids.is_empty() {
                             info!(pid, sibling_count = other_pids.len(), "cascading pause to session participants");
@@ -108,7 +108,7 @@ impl SignalHandler {
                                     .active_invocations
                                     .lock()
                                     .await
-                                    .get(&sibling.as_u32())
+                                    .get(&sibling.as_u64())
                                     .cloned();
                                 if let (Some(iid), Some(istore)) =
                                     (sibling_inv, &self.invocation_store)
@@ -129,12 +129,12 @@ impl SignalHandler {
         Ok(())
     }
 
-    pub async fn resume_agent(&self, pid: u32) -> Result<(), AvixError> {
+    pub async fn resume_agent(&self, pid: u64) -> Result<(), AvixError> {
         info!(pid, "resuming agent");
 
         let _ = self
             .process_table
-            .set_status(Pid::new(pid), ProcessStatus::Running)
+            .set_status(Pid::from_u64(pid), ProcessStatus::Running)
             .await;
         debug!(pid, "set process status to Running");
 
@@ -146,7 +146,7 @@ impl SignalHandler {
             debug!(pid, "updated invocation status to Running");
         }
 
-        self.deliver_to(Pid::new(pid), SignalKind::Resume, serde_json::Value::Null).await;
+        self.deliver_to(Pid::from_u64(pid), SignalKind::Resume, serde_json::Value::Null).await;
         debug!(pid, "delivered SIGRESUME");
 
         let session_id_str = self.active_sessions.lock().await.get(&pid).cloned();
@@ -158,7 +158,7 @@ impl SignalHandler {
                             .pids
                             .iter()
                             .filter(|&&p| p != pid)
-                            .map(|&p| Pid::new(p))
+                            .map(|&p| Pid::from_u64(p))
                             .collect();
                         if !other_pids.is_empty() {
                             info!(pid, sibling_count = other_pids.len(), "cascading resume to session participants");
@@ -172,7 +172,7 @@ impl SignalHandler {
                                     .active_invocations
                                     .lock()
                                     .await
-                                    .get(&sibling.as_u32())
+                                    .get(&sibling.as_u64())
                                     .cloned();
                                 if let (Some(iid), Some(istore)) =
                                     (sibling_inv, &self.invocation_store)
@@ -194,7 +194,7 @@ impl SignalHandler {
 
     pub async fn send_signal(
         &self,
-        pid: u32,
+        pid: u64,
         signal: &str,
         payload: serde_json::Value,
     ) -> Result<(), AvixError> {
@@ -217,7 +217,7 @@ impl SignalHandler {
                 return Err(AvixError::ConfigParse(format!("unknown signal: {other}")));
             }
         };
-        self.deliver_to(Pid::new(pid), kind, payload).await;
+        self.deliver_to(Pid::from_u64(pid), kind, payload).await;
         debug!(pid, signal, "signal delivered successfully");
         Ok(())
     }

@@ -216,7 +216,7 @@ mod tests {
             api_version: "avix/v1".into(),
             kind: "HilRequest".into(),
             hil_id: hil_id.into(),
-            pid: Pid::new(57),
+            pid: Pid::from_u64(57),
             agent_name: "researcher".into(),
             hil_type: HilType::ToolCallApproval,
             tool: Some("send_email".into()),

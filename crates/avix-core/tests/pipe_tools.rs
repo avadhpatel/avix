@@ -9,11 +9,11 @@ use avix_core::{
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
 
-fn pid(n: u32) -> Pid {
-    Pid::new(n)
+fn pid(n: u64) -> Pid {
+    Pid::from_u64(n)
 }
 
-fn out_config(src: u32, tgt: u32) -> PipeConfig {
+fn out_config(src: u64, tgt: u64) -> PipeConfig {
     PipeConfig::new(pid(src), pid(tgt))
 }
 

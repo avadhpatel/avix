@@ -33,7 +33,7 @@ All agents live in `/bin/<name>@<version>/` (system) or `/users/<username>/bin/<
 
 An agent is spawned via the `kernel/proc/spawn` syscall. The kernel:
 
-1. Assigns a PID from the process table
+1. Generates a **time-seeded u64 PID** via `Pid::generate()` (42-bit ms timestamp since 2025-01-01 | 22-bit random salt — collision-free across reboots)
 2. Issues a `CapabilityToken` (tool grants from crew + user ACL intersection)
 3. Creates the `RuntimeExecutor` with the token
 4. **Writes `/proc/<pid>/status.yaml` to VFS**
@@ -42,8 +42,10 @@ An agent is spawned via the `kernel/proc/spawn` syscall. The kernel:
 
 **Session resolution** (in `ProcHandler::spawn`):
 
-The PID is **allocated before session resolution** so it can be recorded as `owner_pid` at
-session creation time.
+The PID is **generated before session resolution** so it can be recorded as `owner_pid` at
+session creation time. PIDs are `u64` time-seeded values that survive kernel reboots — old
+persisted sessions can never collide with new agents. On the ATP wire format, `pid` fields
+are serialised as **JSON strings** to avoid JavaScript float precision loss (`u64 > 2^53`).
 
 | Spawn params | Behavior |
 |---|---|

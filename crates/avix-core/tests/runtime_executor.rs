@@ -17,10 +17,10 @@ fn token_with_caps(caps: &[&str]) -> CapabilityToken {
     CapabilityToken::test_token(caps)
 }
 
-async fn spawn_with_caps(pid_val: u32, caps: &[&str]) -> (RuntimeExecutor, Arc<MockToolRegistry>) {
+async fn spawn_with_caps(pid_val: u64, caps: &[&str]) -> (RuntimeExecutor, Arc<MockToolRegistry>) {
     let registry = Arc::new(MockToolRegistry::new());
     let params = SpawnParams {
-        pid: Pid::new(pid_val),
+        pid: Pid::from_u64(pid_val),
         agent_name: "test-agent".into(),
         goal: "do something".into(),
         spawned_by: "kernel".into(),
@@ -44,7 +44,7 @@ async fn spawn_with_caps(pid_val: u32, caps: &[&str]) -> (RuntimeExecutor, Arc<M
 #[tokio::test]
 async fn executor_spawns_with_correct_pid_and_token() {
     let (executor, _registry) = spawn_with_caps(42, &["agent/spawn"]).await;
-    assert_eq!(executor.pid().as_u32(), 42);
+    assert_eq!(executor.pid().as_u64(), 42);
 }
 
 #[tokio::test]
@@ -100,7 +100,7 @@ async fn absent_spawn_cap_does_not_register_agent_tools() {
 async fn shutdown_deregisters_all_category2_tools() {
     let registry = Arc::new(MockToolRegistry::new());
     let params = SpawnParams {
-        pid: Pid::new(14),
+        pid: Pid::from_u64(14),
         agent_name: "test".into(),
         goal: "test".into(),
         spawned_by: "kernel".into(),
@@ -139,7 +139,7 @@ async fn shutdown_deregisters_all_category2_tools() {
 async fn category2_tools_registered_with_user_visibility() {
     let registry = Arc::new(MockToolRegistry::new());
     let params = SpawnParams {
-        pid: Pid::new(15),
+        pid: Pid::from_u64(15),
         agent_name: "test".into(),
         goal: "test".into(),
         spawned_by: "kernel".into(),
@@ -368,7 +368,7 @@ async fn agent_spawn_translates_to_kernel_proc_spawn() {
     let registry = Arc::new(MockToolRegistry::new());
     let kernel = Arc::new(MockKernelHandle::new());
     let params = SpawnParams {
-        pid: Pid::new(40),
+        pid: Pid::from_u64(40),
         agent_name: "orchestrator".into(),
         goal: "spawn subagents".into(),
         spawned_by: "kernel".into(),
@@ -408,7 +408,7 @@ async fn agent_kill_records_in_kernel() {
     let registry = Arc::new(MockToolRegistry::new());
     let kernel = Arc::new(MockKernelHandle::new());
     let params = SpawnParams {
-        pid: Pid::new(42),
+        pid: Pid::from_u64(42),
         agent_name: "orchestrator".into(),
         goal: "kill subagent".into(),
         spawned_by: "kernel".into(),
@@ -451,7 +451,7 @@ async fn cap_request_tool_triggers_resource_request() {
     kernel.auto_approve_resource_request().await;
 
     let params = SpawnParams {
-        pid: Pid::new(41),
+        pid: Pid::from_u64(41),
         agent_name: "worker".into(),
         goal: "request caps".into(),
         spawned_by: "kernel".into(),
@@ -483,7 +483,7 @@ async fn cap_request_tool_triggers_resource_request() {
 async fn build_test_executor_with_mocks() -> RuntimeExecutor {
     let registry = Arc::new(MockToolRegistry::new());
     let params = SpawnParams {
-        pid: Pid::new(100),
+        pid: Pid::from_u64(100),
         agent_name: "test-agent".into(),
         goal: "test goal".into(),
         spawned_by: "kernel".into(),
@@ -514,7 +514,7 @@ async fn build_test_executor_with_mocks() -> RuntimeExecutor {
 async fn build_test_executor_with_max_chain(max: usize) -> RuntimeExecutor {
     let registry = Arc::new(MockToolRegistry::new());
     let params = SpawnParams {
-        pid: Pid::new(101),
+        pid: Pid::from_u64(101),
         agent_name: "chain-agent".into(),
         goal: "chain test".into(),
         spawned_by: "kernel".into(),
@@ -836,7 +836,7 @@ async fn cap_escalate_returns_guidance_in_response() {
 // ── Resource handler wiring tests ──────────────────────────────────────────
 
 async fn spawn_with_signed_token(
-    pid_val: u32,
+    pid_val: u64,
     tools: &[&str],
 ) -> (RuntimeExecutor, Arc<MockToolRegistry>) {
     let registry = Arc::new(MockToolRegistry::new());
@@ -847,7 +847,7 @@ async fn spawn_with_signed_token(
         TEST_KEY,
     );
     let params = SpawnParams {
-        pid: Pid::new(pid_val),
+        pid: Pid::from_u64(pid_val),
         agent_name: "test-agent".into(),
         goal: "do something".into(),
         spawned_by: "kernel".into(),
@@ -1016,7 +1016,7 @@ async fn spawn_status_yaml_contains_pid_and_name() {
     let vfs = Arc::new(VfsRouter::new());
     let registry = Arc::new(MockToolRegistry::new());
     let params = SpawnParams {
-        pid: Pid::new(601),
+        pid: Pid::from_u64(601),
         agent_name: "my-researcher".into(),
         goal: "do research".into(),
         spawned_by: "alice".into(),
@@ -1057,7 +1057,7 @@ async fn spawn_writes_resolved_yaml_to_vfs() {
     let vfs = Arc::new(VfsRouter::new());
     let registry = Arc::new(MockToolRegistry::new());
     let params = SpawnParams {
-        pid: Pid::new(602),
+        pid: Pid::from_u64(602),
         agent_name: "writer".into(),
         goal: "write report".into(),
         spawned_by: "kernel".into(),
@@ -1096,5 +1096,5 @@ async fn spawn_writes_resolved_yaml_to_vfs() {
 #[tokio::test]
 async fn spawn_without_vfs_does_not_panic() {
     let (executor, _reg) = spawn_with_caps(603, &["fs/read"]).await;
-    assert_eq!(executor.pid().as_u32(), 603);
+    assert_eq!(executor.pid().as_u64(), 603);
 }

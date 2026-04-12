@@ -18,7 +18,7 @@ fn make_test_memory_svc() -> (MemoryService, Arc<VfsRouter>) {
     (svc, vfs)
 }
 
-fn make_caller(owner: &str, agent_name: &str, pid: u32) -> CallerContext {
+fn make_caller(owner: &str, agent_name: &str, pid: u64) -> CallerContext {
     CallerContext {
         pid,
         agent_name: agent_name.to_string(),

@@ -16,7 +16,7 @@ pub enum AgentRole {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRef {
-    pub pid: u32,
+    pub pid: u64,
     pub name: String,
     pub role: AgentRole,
 }
@@ -123,7 +123,7 @@ impl SessionEntry {
     }
 
     /// Attach an agent to this session.
-    pub fn add_agent(&mut self, pid: u32, name: String, role: AgentRole) {
+    pub fn add_agent(&mut self, pid: u64, name: String, role: AgentRole) {
         self.agents.push(AgentRef { pid, name, role });
         self.last_activity_at = Utc::now();
     }

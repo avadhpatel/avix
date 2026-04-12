@@ -229,7 +229,7 @@ pub async fn run(sub: ServiceCmd, json: bool) -> Result<()> {
                         "name:          {}\nversion:       {}\npid:           {}\nstate:         {:?}\nendpoint:      {}\ntools:         {}\nrestart_count: {}",
                         s.name,
                         s.version,
-                        s.pid.as_u32(),
+                        s.pid.as_u64(),
                         s.state,
                         s.endpoint.as_deref().unwrap_or("-"),
                         s.tools.join(", "),

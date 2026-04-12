@@ -60,7 +60,7 @@ pub struct MemoryRecordMetadata {
     pub record_type: MemoryRecordType,
     pub agent_name: String,
     /// Informational only — not used for access control.
-    pub agent_pid: u32,
+    pub agent_pid: u64,
     /// Username of the owning user.
     pub owner: String,
     pub created_at: DateTime<Utc>,

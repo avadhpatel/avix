@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 pub struct ResolvedFor {
     pub username: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pid: Option<u32>,
+    pub pid: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,7 +49,7 @@ impl ResolvedFile {
     /// Build a new `ResolvedFile`.
     pub fn new(
         username: impl Into<String>,
-        pid: Option<u32>,
+        pid: Option<u64>,
         crews: Vec<String>,
         resolved: ResolvedConfig,
         granted_tools: Vec<String>,

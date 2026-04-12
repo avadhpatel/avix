@@ -9,10 +9,10 @@ use avix_core::{
 };
 use std::{sync::Arc, sync::atomic::Ordering};
 
-async fn make_executor(pid: u32) -> RuntimeExecutor {
+async fn make_executor(pid: u64) -> RuntimeExecutor {
     let registry = Arc::new(MockToolRegistry::new());
     let params = SpawnParams {
-        pid: Pid::new(pid),
+        pid: Pid::from_u64(pid),
         agent_name: "interruption-test".into(),
         goal: "test".into(),
         spawned_by: "alice".into(),
@@ -36,15 +36,15 @@ async fn make_executor(pid: u32) -> RuntimeExecutor {
 async fn registry_delivers_to_registered_executor() {
     let executor = make_executor(100).await;
     let channels = SignalChannelRegistry::new();
-    channels.register(Pid::new(100), executor.signal_sender()).await;
+    channels.register(Pid::from_u64(100), executor.signal_sender()).await;
 
     assert!(!executor.paused.load(Ordering::Acquire));
 
     let sent = channels
         .send(
-            Pid::new(100),
+            Pid::from_u64(100),
             avix_core::signal::kind::Signal {
-                target: Pid::new(100),
+                target: Pid::from_u64(100),
                 kind: SignalKind::Pause,
                 payload: serde_json::Value::Null,
             },
@@ -65,9 +65,9 @@ async fn registry_returns_false_for_unregistered_pid() {
     let channels = SignalChannelRegistry::new();
     let sent = channels
         .send(
-            Pid::new(999),
+            Pid::from_u64(999),
             avix_core::signal::kind::Signal {
-                target: Pid::new(999),
+                target: Pid::from_u64(999),
                 kind: SignalKind::Kill,
                 payload: serde_json::Value::Null,
             },
@@ -82,15 +82,15 @@ async fn registry_returns_false_for_unregistered_pid() {
 async fn registry_unregister_removes_channel() {
     let executor = make_executor(101).await;
     let channels = SignalChannelRegistry::new();
-    channels.register(Pid::new(101), executor.signal_sender()).await;
+    channels.register(Pid::from_u64(101), executor.signal_sender()).await;
 
-    channels.unregister(Pid::new(101)).await;
+    channels.unregister(Pid::from_u64(101)).await;
 
     let sent = channels
         .send(
-            Pid::new(101),
+            Pid::from_u64(101),
             avix_core::signal::kind::Signal {
-                target: Pid::new(101),
+                target: Pid::from_u64(101),
                 kind: SignalKind::Pause,
                 payload: serde_json::Value::Null,
             },
@@ -130,15 +130,15 @@ async fn registry_delivers_independently_to_multiple_executors() {
     let ex2 = make_executor(201).await;
     let channels = SignalChannelRegistry::new();
 
-    channels.register(Pid::new(200), ex1.signal_sender()).await;
-    channels.register(Pid::new(201), ex2.signal_sender()).await;
+    channels.register(Pid::from_u64(200), ex1.signal_sender()).await;
+    channels.register(Pid::from_u64(201), ex2.signal_sender()).await;
 
     // Send SIGKILL to ex1 only.
     channels
         .send(
-            Pid::new(200),
+            Pid::from_u64(200),
             avix_core::signal::kind::Signal {
-                target: Pid::new(200),
+                target: Pid::from_u64(200),
                 kind: SignalKind::Kill,
                 payload: serde_json::Value::Null,
             },
@@ -162,7 +162,7 @@ async fn signal_sender_works_across_tasks() {
     let task = tokio::spawn(async move {
         let _ = sender
             .send(avix_core::signal::kind::Signal {
-                target: Pid::new(104),
+                target: Pid::from_u64(104),
                 kind: SignalKind::Pause,
                 payload: serde_json::Value::Null,
             })

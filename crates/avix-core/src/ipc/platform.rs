@@ -18,7 +18,7 @@ pub fn router_sock_path(run_dir: &Path) -> PathBuf {
 pub fn agent_sock_path(run_dir: &Path, pid: Pid) -> PathBuf {
     run_dir
         .join("agents")
-        .join(format!("{}.sock", pid.as_u32()))
+        .join(format!("{}.sock", pid.as_u64()))
 }
 
 /// Resolved OS path for a named service socket.
@@ -53,7 +53,7 @@ mod tests {
     #[test]
     fn agent_sock_path_uses_pid() {
         let dir = std::path::Path::new("/run/avix");
-        let pid = Pid::new(57);
+        let pid = Pid::from_u64(57);
         assert_eq!(
             agent_sock_path(dir, pid),
             PathBuf::from("/run/avix/agents/57.sock")

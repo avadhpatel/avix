@@ -124,10 +124,10 @@ async fn dispatch_request(
                 .await
             {
                 Ok(result) => {
-                    info!(pid = result.pid.as_u32(), "service registered via IPC");
+                    info!(pid = result.pid.as_u64(), "service registered via IPC");
                     JsonRpcResponse::ok(
                         id,
-                        json!({ "registered": result.registered, "pid": result.pid.as_u32() }),
+                        json!({ "registered": result.registered, "pid": result.pid.as_u64() }),
                     )
                 }
                 Err(e) => {

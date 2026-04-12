@@ -19,11 +19,11 @@ impl ServiceProcess {
     pub fn socket_path_for(run_dir: &Path, name: &str, pid: Pid) -> PathBuf {
         #[cfg(unix)]
         {
-            run_dir.join(format!("{name}-{}.sock", pid.as_u32()))
+            run_dir.join(format!("{name}-{}.sock", pid.as_u64()))
         }
         #[cfg(windows)]
         {
-            PathBuf::from(format!(r"\\.\pipe\avix-svc-{name}-{}", pid.as_u32()))
+            PathBuf::from(format!(r"\\.\pipe\avix-svc-{name}-{}", pid.as_u64()))
         }
     }
 
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn socket_path_contains_name_and_pid() {
         let run_dir = Path::new("/run/avix");
-        let path = ServiceProcess::socket_path_for(run_dir, "github-svc", Pid::new(42));
+        let path = ServiceProcess::socket_path_for(run_dir, "github-svc", Pid::from_u64(42));
         let s = path.to_string_lossy();
         assert!(s.contains("github-svc"));
         assert!(s.contains("42"));
@@ -128,7 +128,7 @@ mod tests {
         let token = ServiceToken {
             token_str: "tok-123".into(),
             service_name: "echo-svc".into(),
-            pid: Pid::new(5),
+            pid: Pid::from_u64(5),
         };
         let env = build_env(
             &unit,

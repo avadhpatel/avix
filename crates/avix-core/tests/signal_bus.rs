@@ -3,17 +3,17 @@ use avix_core::types::Pid;
 use std::sync::Arc;
 use std::time::Duration;
 
-fn sigpause(pid: u32) -> Signal {
+fn sigpause(pid: u64) -> Signal {
     Signal {
-        target: Pid::new(pid),
+        target: Pid::from_u64(pid),
         kind: SignalKind::Pause,
         payload: serde_json::Value::Null,
     }
 }
 
-fn sigresume(pid: u32, payload: serde_json::Value) -> Signal {
+fn sigresume(pid: u64, payload: serde_json::Value) -> Signal {
     Signal {
-        target: Pid::new(pid),
+        target: Pid::from_u64(pid),
         kind: SignalKind::Resume,
         payload,
     }
@@ -22,21 +22,21 @@ fn sigresume(pid: u32, payload: serde_json::Value) -> Signal {
 #[tokio::test]
 async fn subscribe_and_receive_signal() {
     let bus = SignalBus::new();
-    let mut rx = bus.subscribe(Pid::new(57)).await;
+    let mut rx = bus.subscribe(Pid::from_u64(57)).await;
     bus.send(sigpause(57)).await.unwrap();
     let sig = tokio::time::timeout(Duration::from_millis(100), rx.recv())
         .await
         .expect("timeout")
         .expect("channel closed");
     assert_eq!(sig.kind, SignalKind::Pause);
-    assert_eq!(sig.target, Pid::new(57));
+    assert_eq!(sig.target, Pid::from_u64(57));
 }
 
 #[tokio::test]
 async fn multiple_subscribers_all_receive() {
     let bus = SignalBus::new();
-    let mut rx1 = bus.subscribe(Pid::new(57)).await;
-    let mut rx2 = bus.subscribe(Pid::new(57)).await;
+    let mut rx1 = bus.subscribe(Pid::from_u64(57)).await;
+    let mut rx2 = bus.subscribe(Pid::from_u64(57)).await;
     bus.send(sigpause(57)).await.unwrap();
     let s1 = tokio::time::timeout(Duration::from_millis(100), rx1.recv())
         .await
@@ -53,8 +53,8 @@ async fn multiple_subscribers_all_receive() {
 #[tokio::test]
 async fn signal_not_delivered_to_wrong_pid() {
     let bus = SignalBus::new();
-    let mut rx_57 = bus.subscribe(Pid::new(57)).await;
-    let mut rx_58 = bus.subscribe(Pid::new(58)).await;
+    let mut rx_57 = bus.subscribe(Pid::from_u64(57)).await;
+    let mut rx_58 = bus.subscribe(Pid::from_u64(58)).await;
     bus.send(sigpause(57)).await.unwrap();
     let s = tokio::time::timeout(Duration::from_millis(100), rx_57.recv())
         .await
@@ -71,7 +71,7 @@ async fn signal_not_delivered_to_wrong_pid() {
 #[tokio::test]
 async fn sigresume_carries_payload() {
     let bus = SignalBus::new();
-    let mut rx = bus.subscribe(Pid::new(57)).await;
+    let mut rx = bus.subscribe(Pid::from_u64(57)).await;
     let payload = serde_json::json!({ "hilId": "hil-001", "decision": "approved" });
     bus.send(sigresume(57, payload.clone())).await.unwrap();
     let sig = tokio::time::timeout(Duration::from_millis(100), rx.recv())
@@ -86,9 +86,9 @@ async fn sigresume_carries_payload() {
 #[tokio::test]
 async fn broadcast_reaches_all_subscribers() {
     let bus = SignalBus::new();
-    let mut rx57 = bus.subscribe(Pid::new(57)).await;
-    let mut rx58 = bus.subscribe(Pid::new(58)).await;
-    let mut rx59 = bus.subscribe(Pid::new(59)).await;
+    let mut rx57 = bus.subscribe(Pid::from_u64(57)).await;
+    let mut rx58 = bus.subscribe(Pid::from_u64(58)).await;
+    let mut rx59 = bus.subscribe(Pid::from_u64(59)).await;
     bus.broadcast(SignalKind::Kill, serde_json::Value::Null)
         .await;
     for rx in [&mut rx57, &mut rx58, &mut rx59] {
@@ -103,11 +103,11 @@ async fn broadcast_reaches_all_subscribers() {
 #[tokio::test]
 async fn unsubscribe_stops_delivery() {
     let bus = Arc::new(SignalBus::new());
-    let rx = bus.subscribe(Pid::new(57)).await;
+    let rx = bus.subscribe(Pid::from_u64(57)).await;
     let id = rx.id();
-    bus.unsubscribe(Pid::new(57), id).await;
+    bus.unsubscribe(Pid::from_u64(57), id).await;
     bus.send(sigpause(57)).await.unwrap();
-    assert_eq!(bus.subscriber_count(Pid::new(57)).await, 0);
+    assert_eq!(bus.subscriber_count(Pid::from_u64(57)).await, 0);
 }
 
 #[tokio::test]
@@ -131,7 +131,7 @@ fn signal_kind_names() {
 #[tokio::test]
 async fn concurrent_sends_all_received() {
     let bus = Arc::new(SignalBus::new());
-    let mut rx = bus.subscribe(Pid::new(57)).await;
+    let mut rx = bus.subscribe(Pid::from_u64(57)).await;
     let mut senders = Vec::new();
     for _ in 0..20 {
         let b = Arc::clone(&bus);

@@ -1,6 +1,6 @@
 #[allow(clippy::too_many_arguments)]
 pub fn build_system_prompt(
-    pid: u32,
+    pid: u64,
     agent_name: &str,
     goal: &str,
     spawned_by: &str,

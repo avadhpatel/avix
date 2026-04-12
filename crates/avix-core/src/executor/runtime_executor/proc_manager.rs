@@ -27,7 +27,7 @@ impl RuntimeExecutor {
         use crate::process::status_file::AgentStatusFile;
         use std::sync::atomic::Ordering;
 
-        let pid = self.pid.as_u32();
+        let pid = self.pid.as_u64();
 
         let state = if self.killed.load(Ordering::Acquire) {
             crate::process::entry::ProcessStatus::Stopped
@@ -85,7 +85,7 @@ impl RuntimeExecutor {
         use crate::params::resolved_file::ResolvedFile;
         use crate::params::resolver::{ParamResolver, ResolverInput, ResolverInputLoader};
 
-        let pid = self.pid.as_u32();
+        let pid = self.pid.as_u64();
 
         let loader = ResolverInputLoader::new(vfs);
         let mut input = match loader.load(username, crews).await {
@@ -143,10 +143,10 @@ mod tests {
     use crate::memfs::VfsRouter;
     use crate::types::{token::CapabilityToken, Pid};
 
-    async fn make_executor_with_vfs(pid_val: u32) -> (RuntimeExecutor, Arc<VfsRouter>) {
+    async fn make_executor_with_vfs(pid_val: u64) -> (RuntimeExecutor, Arc<VfsRouter>) {
         let registry = Arc::new(MockToolRegistry::new());
         let params = SpawnParams {
-            pid: Pid::new(pid_val),
+            pid: Pid::from_u64(pid_val),
             agent_name: "proc-test-agent".into(),
             goal: "proc test".into(),
             spawned_by: "kernel".into(),
@@ -181,7 +181,7 @@ mod tests {
     async fn init_proc_files_no_vfs_no_panic() {
         let registry = Arc::new(MockToolRegistry::new());
         let params = SpawnParams {
-            pid: Pid::new(901),
+            pid: Pid::from_u64(901),
             agent_name: "no-vfs".into(),
             goal: "g".into(),
             spawned_by: "kernel".into(),

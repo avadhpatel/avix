@@ -36,7 +36,7 @@ pub enum ResourceItem {
     },
     /// Request a pipe to another agent.
     Pipe {
-        target_pid: u32,
+        target_pid: u64,
         #[serde(default = "default_direction")]
         direction: PipeDirection,
         #[serde(default = "default_buffer_tokens")]
@@ -80,7 +80,7 @@ fn default_buffer_tokens() -> u32 {
 /// The full ResourceRequest envelope from agent → kernel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceRequest {
-    pub agent_pid: u32,
+    pub agent_pid: u64,
     pub request_id: String,
     pub timestamp: DateTime<Utc>,
     /// The HMAC signature from the agent's current CapabilityToken.
@@ -91,7 +91,7 @@ pub struct ResourceRequest {
 
 impl ResourceRequest {
     pub fn new(
-        agent_pid: u32,
+        agent_pid: u64,
         capability_token_signature: String,
         requests: Vec<ResourceItem>,
     ) -> Self {
@@ -132,7 +132,7 @@ pub enum ResourceGrant {
     },
     Pipe {
         granted: bool,
-        target_pid: u32,
+        target_pid: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         pipe_id: Option<String>,
         direction: PipeDirection,

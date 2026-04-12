@@ -16,7 +16,7 @@ fn make_registry() -> Arc<RwLock<JobRegistry>> {
 #[tokio::test]
 async fn create_job_is_pending() {
     let reg = make_registry();
-    let id = reg.write().await.create("fs/write", Pid::new(10));
+    let id = reg.write().await.create("fs/write", Pid::from_u64(10));
     assert_eq!(reg.read().await.get(&id).unwrap().state, JobState::Pending);
 }
 
@@ -25,7 +25,7 @@ async fn create_job_is_pending() {
 #[tokio::test]
 async fn start_job_transitions_to_running() {
     let (mut reg, mut rx) = JobRegistry::new();
-    let id = reg.create("fs/write", Pid::new(10));
+    let id = reg.create("fs/write", Pid::from_u64(10));
     reg.start(&id).unwrap();
 
     assert_eq!(reg.get(&id).unwrap().state, JobState::Running);
@@ -49,7 +49,7 @@ async fn start_job_transitions_to_running() {
 #[tokio::test]
 async fn progress_event_emitted() {
     let (mut reg, mut rx) = JobRegistry::new();
-    let id = reg.create("fs/write", Pid::new(10));
+    let id = reg.create("fs/write", Pid::from_u64(10));
     reg.start(&id).unwrap();
     let _ = rx.0.try_recv(); // consume StatusChange
 
@@ -75,7 +75,7 @@ async fn progress_event_emitted() {
 #[tokio::test]
 async fn complete_job_transitions_to_done() {
     let (mut reg, mut rx) = JobRegistry::new();
-    let id = reg.create("tool", Pid::new(10));
+    let id = reg.create("tool", Pid::from_u64(10));
     reg.start(&id).unwrap();
     let _ = rx.0.try_recv();
 
@@ -101,7 +101,7 @@ async fn complete_job_transitions_to_done() {
 #[tokio::test]
 async fn fail_job_transitions_to_failed() {
     let (mut reg, mut rx) = JobRegistry::new();
-    let id = reg.create("tool", Pid::new(10));
+    let id = reg.create("tool", Pid::from_u64(10));
     reg.start(&id).unwrap();
     let _ = rx.0.try_recv();
 
@@ -134,7 +134,7 @@ async fn complete_done_job_returns_error() {
     let reg = make_registry();
     let id = {
         let mut r = reg.write().await;
-        let id = r.create("tool", Pid::new(10));
+        let id = r.create("tool", Pid::from_u64(10));
         r.start(&id).unwrap();
         r.complete(&id, json!({})).unwrap();
         id
@@ -151,7 +151,7 @@ async fn cancel_running_job() {
     let reg = make_registry();
     let id = {
         let mut r = reg.write().await;
-        let id = r.create("tool", Pid::new(10));
+        let id = r.create("tool", Pid::from_u64(10));
         r.start(&id).unwrap();
         id
     };
@@ -170,7 +170,7 @@ async fn job_watch_returns_next_event() {
     let reg = make_registry();
     let id = {
         let mut r = reg.write().await;
-        let id = r.create("fs/write", Pid::new(10));
+        let id = r.create("fs/write", Pid::from_u64(10));
         r.start(&id).unwrap();
         id
     };
@@ -202,7 +202,7 @@ async fn job_watch_times_out() {
     let reg = make_registry();
     let id = {
         let mut r = reg.write().await;
-        let id = r.create("fs/write", Pid::new(10));
+        let id = r.create("fs/write", Pid::from_u64(10));
         r.start(&id).unwrap();
         id
     };
@@ -231,7 +231,7 @@ async fn start_job_helper_runs_to_completion() {
 
     let id = start_job(
         "fs/write",
-        Pid::new(10),
+        Pid::from_u64(10),
         reg.clone(),
         |job_id, registry| async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -270,10 +270,10 @@ async fn concurrent_jobs_are_independent() {
     let reg = make_registry();
 
     let mut ids = Vec::new();
-    for i in 0..5u32 {
+    for i in 0..5u64 {
         let id = start_job(
             "concurrent/op",
-            Pid::new(i),
+            Pid::from_u64(i),
             reg.clone(),
             |job_id, registry| async move {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;

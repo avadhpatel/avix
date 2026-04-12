@@ -21,12 +21,12 @@ pub struct AgentManager {
     runtime_dir: PathBuf,
     master_key: Vec<u8>,
     executor_factory: Option<Arc<dyn AgentExecutorFactory>>,
-    task_handles: Arc<Mutex<HashMap<u32, tokio::task::AbortHandle>>>,
+    task_handles: Arc<Mutex<HashMap<u64, tokio::task::AbortHandle>>>,
     invocation_store: Option<Arc<InvocationStore>>,
     session_store: Option<Arc<PersistentSessionStore>>,
     manifest_scanner: Option<Arc<ManifestScanner>>,
-    active_invocations: Arc<Mutex<HashMap<u32, String>>>,
-    active_sessions: Arc<Mutex<HashMap<u32, String>>>,
+    active_invocations: Arc<Mutex<HashMap<u64, String>>>,
+    active_sessions: Arc<Mutex<HashMap<u64, String>>>,
 }
 
 impl AgentManager {
@@ -38,8 +38,8 @@ impl AgentManager {
         invocation_store: Option<Arc<InvocationStore>>,
         session_store: Option<Arc<PersistentSessionStore>>,
         manifest_scanner: Option<Arc<ManifestScanner>>,
-        active_invocations: Arc<Mutex<HashMap<u32, String>>>,
-        active_sessions: Arc<Mutex<HashMap<u32, String>>>,
+        active_invocations: Arc<Mutex<HashMap<u64, String>>>,
+        active_sessions: Arc<Mutex<HashMap<u64, String>>>,
     ) -> Self {
         Self {
             process_table,
@@ -61,11 +61,11 @@ impl AgentManager {
         goal: &str,
         session_id: &str,
         caller_identity: &str,
-        parent_pid: Option<u32>,
-    ) -> Result<u32, AvixError> {
+        parent_pid: Option<u64>,
+    ) -> Result<u64, AvixError> {
         info!(name, goal, session_id, ?parent_pid, "spawning agent");
 
-        let pid = self.allocate_pid().await?;
+        let pid = Pid::generate().as_u64();
         debug!(pid, "allocated PID");
 
         let effective_session_id = if let Some(ppid) = parent_pid {
@@ -90,11 +90,11 @@ impl AgentManager {
         };
 
         let entry = ProcessEntry {
-            pid: Pid::new(pid),
+            pid: Pid::from_u64(pid),
             name: name.to_string(),
             kind: ProcessKind::Agent,
             status: ProcessStatus::Pending,
-            parent: parent_pid.map(Pid::new),
+            parent: parent_pid.map(Pid::from_u64),
             spawned_by_user: caller_identity.to_string(),
             goal: goal.to_string(),
             spawned_at: chrono::Utc::now(),
@@ -152,7 +152,7 @@ impl AgentManager {
 
         if let Some(factory) = &self.executor_factory {
             let spawn_params = SpawnParams {
-                pid: Pid::new(pid),
+                pid: Pid::from_u64(pid),
                 agent_name: name.to_string(),
                 goal: goal.to_string(),
                 spawned_by: caller_identity.to_string(),
@@ -170,7 +170,7 @@ impl AgentManager {
             info!(pid, "executor task launched");
         }
 
-        self.process_table.set_status(Pid::new(pid), ProcessStatus::Running).await?;
+        self.process_table.set_status(Pid::from_u64(pid), ProcessStatus::Running).await?;
         info!(pid, name, "agent spawned successfully");
 
         Ok(pid)
@@ -191,7 +191,7 @@ impl AgentManager {
                 ProcessStatus::Pending => "pending",
             }.to_string();
             active.push(super::types::ActiveAgent {
-                pid: entry.pid.as_u32(),
+                pid: entry.pid.as_u64(),
                 name: entry.name,
                 status,
                 goal: entry.goal,
@@ -200,7 +200,7 @@ impl AgentManager {
         Ok(active)
     }
 
-    pub async fn abort_agent(&self, pid: u32) {
+    pub async fn abort_agent(&self, pid: u64) {
         info!(pid, "aborting agent");
 
         let mut handles = self.task_handles.lock().await;
@@ -212,7 +212,7 @@ impl AgentManager {
         }
         drop(handles);
 
-        let _ = self.process_table.set_status(Pid::new(pid), ProcessStatus::Stopped).await;
+        let _ = self.process_table.set_status(Pid::from_u64(pid), ProcessStatus::Stopped).await;
         debug!(pid, "set process status to Stopped");
 
         self.finalize_invocation(pid, InvocationStatus::Killed, Some("killed".into())).await;
@@ -229,15 +229,15 @@ impl AgentManager {
         &self.process_table
     }
 
-    pub fn task_handles(&self) -> &Arc<Mutex<HashMap<u32, tokio::task::AbortHandle>>> {
+    pub fn task_handles(&self) -> &Arc<Mutex<HashMap<u64, tokio::task::AbortHandle>>> {
         &self.task_handles
     }
 
-    pub fn active_invocations(&self) -> &Arc<Mutex<HashMap<u32, String>>> {
+    pub fn active_invocations(&self) -> &Arc<Mutex<HashMap<u64, String>>> {
         &self.active_invocations
     }
 
-    pub fn active_sessions(&self) -> &Arc<Mutex<HashMap<u32, String>>> {
+    pub fn active_sessions(&self) -> &Arc<Mutex<HashMap<u64, String>>> {
         &self.active_sessions
     }
 
@@ -249,15 +249,9 @@ impl AgentManager {
         self.session_store.as_ref()
     }
 
-    async fn allocate_pid(&self) -> Result<u32, AvixError> {
-        let entries = self.process_table.list_all().await;
-        let max_pid = entries.iter().map(|e| e.pid.as_u32()).max().unwrap_or(1);
-        Ok(max_pid + 1)
-    }
-
     async fn finalize_invocation(
         &self,
-        pid: u32,
+        pid: u64,
         status: InvocationStatus,
         exit_reason: Option<String>,
     ) {
@@ -270,7 +264,7 @@ impl AgentManager {
             Some(s) => s,
             None => return,
         };
-        let (tokens, tool_calls) = match self.process_table.get(Pid::new(pid)).await {
+        let (tokens, tool_calls) = match self.process_table.get(Pid::from_u64(pid)).await {
             Some(entry) => (entry.tokens_consumed, entry.tool_calls_total),
             None => (0, 0),
         };
@@ -283,7 +277,7 @@ impl AgentManager {
         goal: &str,
         session_id: &str,
         caller_identity: &str,
-        owner_pid: u32,
+        owner_pid: u64,
     ) -> Result<String, AvixError> {
         if session_id.is_empty() {
             if let Some(store) = &self.session_store {
@@ -357,8 +351,8 @@ mod tests {
         let pid2 = manager.spawn("agent-b", "goal-b", "sess-1", "kernel", None).await.unwrap();
 
         assert_eq!(count.load(Ordering::SeqCst), 2);
-        assert_eq!(table.get(Pid::new(pid1)).await.unwrap().status, ProcessStatus::Running);
-        assert_eq!(table.get(Pid::new(pid2)).await.unwrap().status, ProcessStatus::Running);
+        assert_eq!(table.get(Pid::from_u64(pid1)).await.unwrap().status, ProcessStatus::Running);
+        assert_eq!(table.get(Pid::from_u64(pid2)).await.unwrap().status, ProcessStatus::Running);
 
         manager.abort_agent(pid1).await;
         let handles = manager.task_handles.lock().await;
@@ -387,7 +381,7 @@ mod tests {
         );
 
         let pid = manager.spawn("agent", "goal", "sess", "kernel", None).await.unwrap();
-        let entry = table.get(Pid::new(pid)).await.unwrap();
+        let entry = table.get(Pid::from_u64(pid)).await.unwrap();
         assert_eq!(entry.status, ProcessStatus::Running);
         assert!(manager.task_handles.lock().await.is_empty());
     }

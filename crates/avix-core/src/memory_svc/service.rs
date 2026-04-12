@@ -67,7 +67,7 @@ impl MemoryService {
 
 #[derive(Debug, Clone)]
 pub struct CallerContext {
-    pub pid: u32,
+    pub pid: u64,
     pub agent_name: String,
     pub owner: String,
     pub session_id: String,

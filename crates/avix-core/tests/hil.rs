@@ -7,9 +7,9 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 
-fn make_signal(pid_val: u32, hil_id: &str, decision: &str) -> Signal {
+fn make_signal(pid_val: u64, hil_id: &str, decision: &str) -> Signal {
     Signal {
-        target: Pid::new(pid_val),
+        target: Pid::from_u64(pid_val),
         kind: SignalKind::Resume,
         payload: json!({
             "hilId": hil_id,
@@ -23,7 +23,7 @@ fn make_signal(pid_val: u32, hil_id: &str, decision: &str) -> Signal {
 #[tokio::test]
 async fn hil_approval_approved() {
     let bus = Arc::new(SignalBus::new());
-    let approver = HilApprover::new(Pid::new(1), Arc::clone(&bus));
+    let approver = HilApprover::new(Pid::from_u64(1), Arc::clone(&bus));
 
     let bus2 = Arc::clone(&bus);
     tokio::spawn(async move {
@@ -43,7 +43,7 @@ async fn hil_approval_approved() {
 #[tokio::test]
 async fn hil_approval_denied() {
     let bus = Arc::new(SignalBus::new());
-    let approver = HilApprover::new(Pid::new(2), Arc::clone(&bus));
+    let approver = HilApprover::new(Pid::from_u64(2), Arc::clone(&bus));
 
     let bus2 = Arc::clone(&bus);
     tokio::spawn(async move {
@@ -61,7 +61,7 @@ async fn hil_approval_denied() {
 #[tokio::test]
 async fn hil_approval_timeout() {
     let bus = Arc::new(SignalBus::new());
-    let approver = HilApprover::new(Pid::new(3), Arc::clone(&bus));
+    let approver = HilApprover::new(Pid::from_u64(3), Arc::clone(&bus));
     // No signal sent — should timeout
     let result = approver
         .await_approval("hil-timeout", Duration::from_millis(50))
@@ -73,7 +73,7 @@ async fn hil_approval_timeout() {
 #[tokio::test]
 async fn hil_approval_wrong_hil_id_ignored() {
     let bus = Arc::new(SignalBus::new());
-    let approver = HilApprover::new(Pid::new(4), Arc::clone(&bus));
+    let approver = HilApprover::new(Pid::from_u64(4), Arc::clone(&bus));
 
     let bus2 = Arc::clone(&bus);
     tokio::spawn(async move {
@@ -99,13 +99,13 @@ async fn hil_approval_wrong_hil_id_ignored() {
 #[tokio::test]
 async fn hil_approval_note_and_reason_passed_through() {
     let bus = Arc::new(SignalBus::new());
-    let approver = HilApprover::new(Pid::new(5), Arc::clone(&bus));
+    let approver = HilApprover::new(Pid::from_u64(5), Arc::clone(&bus));
 
     let bus2 = Arc::clone(&bus);
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(10)).await;
         bus2.send(Signal {
-            target: Pid::new(5),
+            target: Pid::from_u64(5),
             kind: SignalKind::Resume,
             payload: json!({
                 "hilId": "hil-5",
@@ -133,7 +133,7 @@ async fn hil_approval_note_and_reason_passed_through() {
 async fn cap_upgrade_approved_updates_token() {
     let bus = Arc::new(SignalBus::new());
     let initial_token = CapabilityToken::test_token(&["fs/read"]);
-    let mut upgrader = CapabilityUpgrader::new(Pid::new(10), initial_token, Arc::clone(&bus));
+    let mut upgrader = CapabilityUpgrader::new(Pid::from_u64(10), initial_token, Arc::clone(&bus));
 
     let new_token = CapabilityToken::test_token(&["fs/read", "fs/write"]);
 
@@ -142,7 +142,7 @@ async fn cap_upgrade_approved_updates_token() {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(10)).await;
         bus2.send(Signal {
-            target: Pid::new(10),
+            target: Pid::from_u64(10),
             kind: SignalKind::Resume,
             payload: json!({
                 "hilId": "cap-1",
@@ -170,7 +170,7 @@ async fn cap_upgrade_approved_updates_token() {
 async fn cap_upgrade_denied_returns_error() {
     let bus = Arc::new(SignalBus::new());
     let token = CapabilityToken::test_token(&[]);
-    let mut upgrader = CapabilityUpgrader::new(Pid::new(11), token, Arc::clone(&bus));
+    let mut upgrader = CapabilityUpgrader::new(Pid::from_u64(11), token, Arc::clone(&bus));
 
     let bus2 = Arc::clone(&bus);
     tokio::spawn(async move {
@@ -196,7 +196,7 @@ async fn cap_upgrade_denied_returns_error() {
 async fn cap_upgrade_timeout_returns_error() {
     let bus = Arc::new(SignalBus::new());
     let token = CapabilityToken::test_token(&[]);
-    let mut upgrader = CapabilityUpgrader::new(Pid::new(12), token, Arc::clone(&bus));
+    let mut upgrader = CapabilityUpgrader::new(Pid::from_u64(12), token, Arc::clone(&bus));
     let result = upgrader
         .request_tool(
             "fs/write",
@@ -213,13 +213,13 @@ async fn cap_upgrade_timeout_returns_error() {
 #[tokio::test]
 async fn escalation_returns_selected_option() {
     let bus = Arc::new(SignalBus::new());
-    let mut escalator = Escalator::new(Pid::new(20), Arc::clone(&bus));
+    let mut escalator = Escalator::new(Pid::from_u64(20), Arc::clone(&bus));
 
     let bus2 = Arc::clone(&bus);
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(10)).await;
         bus2.send(Signal {
-            target: Pid::new(20),
+            target: Pid::from_u64(20),
             kind: SignalKind::Resume,
             payload: json!({
                 "hilId": "esc-1",
@@ -252,13 +252,13 @@ async fn escalation_returns_selected_option() {
 #[tokio::test]
 async fn escalation_guidance_added_to_pending_messages() {
     let bus = Arc::new(SignalBus::new());
-    let mut escalator = Escalator::new(Pid::new(21), Arc::clone(&bus));
+    let mut escalator = Escalator::new(Pid::from_u64(21), Arc::clone(&bus));
 
     let bus2 = Arc::clone(&bus);
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(10)).await;
         bus2.send(Signal {
-            target: Pid::new(21),
+            target: Pid::from_u64(21),
             kind: SignalKind::Resume,
             payload: json!({
                 "hilId": "esc-2",
@@ -283,7 +283,7 @@ async fn escalation_guidance_added_to_pending_messages() {
 #[tokio::test]
 async fn escalation_timeout_returns_error() {
     let bus = Arc::new(SignalBus::new());
-    let mut escalator = Escalator::new(Pid::new(22), Arc::clone(&bus));
+    let mut escalator = Escalator::new(Pid::from_u64(22), Arc::clone(&bus));
     let result = escalator
         .escalate(
             "situation",

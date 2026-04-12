@@ -89,8 +89,8 @@ impl AgentExecutorFactory for TestExecutorFactory {
                     Ok(e) => e,
                     Err(err) => {
                         let _ = table.set_status(pid, ProcessStatus::Crashed).await;
-                        bus.agent_status(&session_id, pid.as_u32(), "crashed");
-                        bus.agent_exit(&session_id, pid.as_u32(), 1);
+                        bus.agent_status(&session_id, pid.as_u64(), "crashed");
+                        bus.agent_exit(&session_id, pid.as_u64(), 1);
                         eprintln!("executor spawn failed: {err}");
                         return;
                     }
@@ -101,7 +101,7 @@ impl AgentExecutorFactory for TestExecutorFactory {
                 .with_invocation_store(Arc::clone(&istore), inv_id)
                 .with_session_store(Arc::clone(&sstore));
 
-            bus.agent_status(&session_id, pid.as_u32(), "running");
+            bus.agent_status(&session_id, pid.as_u64(), "running");
 
             match executor.run_with_client(&goal, &mock_llm).await {
                 Ok(result) => {
@@ -111,16 +111,16 @@ impl AgentExecutorFactory for TestExecutorFactory {
                             Some("waiting_for_input".into()),
                         )
                         .await;
-                    bus.agent_output(&session_id, pid.as_u32(), &result.text);
-                    bus.agent_status(&session_id, pid.as_u32(), "waiting");
+                    bus.agent_output(&session_id, pid.as_u64(), &result.text);
+                    bus.agent_status(&session_id, pid.as_u64(), "waiting");
                     let _ = table.set_status(pid, ProcessStatus::Waiting).await;
                 }
                 Err(err) => {
                     executor
                         .shutdown_with_status(InvocationStatus::Failed, Some(err.to_string()))
                         .await;
-                    bus.agent_status(&session_id, pid.as_u32(), "crashed");
-                    bus.agent_exit(&session_id, pid.as_u32(), 1);
+                    bus.agent_status(&session_id, pid.as_u64(), "crashed");
+                    bus.agent_exit(&session_id, pid.as_u64(), 1);
                     let _ = table.set_status(pid, ProcessStatus::Crashed).await;
                 }
             }
@@ -145,17 +145,18 @@ fn end_turn_response(text: &str) -> LlmCompleteResponse {
 /// for the given pid. Panics if the event doesn't arrive within 3 seconds.
 async fn wait_for_status(
     mut rx: tokio::sync::broadcast::Receiver<avix_core::gateway::event_bus::BusEvent>,
-    pid: u32,
+    pid: u64,
     status: &str,
 ) {
     let status = status.to_string();
+    let pid_str = pid.to_string();
     let status_for_err = status.clone();
     timeout(Duration::from_secs(3), async move {
         loop {
             match rx.recv().await {
                 Ok(ev) if ev.event.event == AtpEventKind::AgentStatus => {
                     let body = &ev.event.body;
-                    if body["pid"].as_u64() == Some(pid as u64)
+                    if body["pid"].as_str() == Some(&pid_str)
                         && body["status"].as_str() == Some(&status)
                     {
                         return;
@@ -272,7 +273,7 @@ async fn spawn_creates_records_and_first_turn_transitions_to_idle() {
     assert_eq!(sess.status, SessionStatus::Idle);
 
     // Process → Waiting.
-    let entry = table.get(Pid::new(pid)).await.unwrap();
+    let entry = table.get(Pid::from_u64(pid)).await.unwrap();
     assert_eq!(entry.status, ProcessStatus::Waiting);
 }
 
@@ -347,13 +348,14 @@ async fn atp_events_emitted_in_correct_order() {
 
     let mut statuses: Vec<String> = Vec::new();
     let mut output_text: Option<String> = None;
+    let pid_str = pid.to_string();
 
     timeout(Duration::from_secs(3), async {
         loop {
             match rx.recv().await {
                 Ok(ev) if ev.event.event == AtpEventKind::AgentStatus => {
                     let body = &ev.event.body;
-                    if body["pid"].as_u64() == Some(pid as u64) {
+                    if body["pid"].as_str() == Some(&pid_str) {
                         let s = body["status"].as_str().unwrap_or("").to_string();
                         statuses.push(s.clone());
                         if s == "waiting" {
@@ -363,7 +365,7 @@ async fn atp_events_emitted_in_correct_order() {
                 }
                 Ok(ev) if ev.event.event == AtpEventKind::AgentOutput => {
                     let body = &ev.event.body;
-                    if body["pid"].as_u64() == Some(pid as u64) {
+                    if body["pid"].as_str() == Some(&pid_str) {
                         output_text = body["text"].as_str().map(|s| s.to_string());
                     }
                 }
@@ -428,7 +430,7 @@ async fn abort_agent_kills_invocation_and_fails_session() {
     );
 
     // Process → Stopped.
-    let entry = table.get(Pid::new(pid)).await.unwrap();
+    let entry = table.get(Pid::from_u64(pid)).await.unwrap();
     assert_eq!(entry.status, ProcessStatus::Stopped);
 }
 
@@ -490,6 +492,6 @@ async fn full_lifecycle_spawn_followup_stop() {
     assert_eq!(sess.status, SessionStatus::Failed);
 
     // Process table reflects stopped for pid1.
-    let entry1 = table.get(Pid::new(pid1)).await.unwrap();
+    let entry1 = table.get(Pid::from_u64(pid1)).await.unwrap();
     assert_eq!(entry1.status, ProcessStatus::Stopped);
 }

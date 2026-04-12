@@ -10,7 +10,7 @@ use crate::types::Pid;
 
 #[derive(Debug, Default)]
 pub struct ProcessTable {
-    inner: Arc<RwLock<HashMap<u32, ProcessEntry>>>,
+    inner: Arc<RwLock<HashMap<u64, ProcessEntry>>>,
 }
 
 impl ProcessTable {
@@ -19,20 +19,20 @@ impl ProcessTable {
     }
 
     pub async fn insert(&self, entry: ProcessEntry) {
-        self.inner.write().await.insert(entry.pid.as_u32(), entry);
+        self.inner.write().await.insert(entry.pid.as_u64(), entry);
     }
 
     pub async fn remove(&self, pid: Pid) {
-        self.inner.write().await.remove(&pid.as_u32());
+        self.inner.write().await.remove(&pid.as_u64());
     }
 
     pub async fn get(&self, pid: Pid) -> Option<ProcessEntry> {
-        self.inner.read().await.get(&pid.as_u32()).cloned()
+        self.inner.read().await.get(&pid.as_u64()).cloned()
     }
 
     pub async fn set_status(&self, pid: Pid, status: ProcessStatus) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
-        match guard.get_mut(&pid.as_u32()) {
+        match guard.get_mut(&pid.as_u64()) {
             Some(e) => {
                 e.status = status;
                 Ok(())
@@ -97,7 +97,7 @@ impl ProcessTable {
         token_expires_at: Option<DateTime<Utc>>,
     ) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
-        match guard.get_mut(&pid.as_u32()) {
+        match guard.get_mut(&pid.as_u64()) {
             Some(e) => {
                 e.granted_tools = granted_tools;
                 e.token_expires_at = token_expires_at;
@@ -111,7 +111,7 @@ impl ProcessTable {
     /// Called each time a tool call is dispatched within a turn.
     pub async fn increment_chain_depth(&self, pid: Pid) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
-        match guard.get_mut(&pid.as_u32()) {
+        match guard.get_mut(&pid.as_u64()) {
             Some(e) => {
                 e.tool_chain_depth = e.tool_chain_depth.saturating_add(1);
                 Ok(())
@@ -123,7 +123,7 @@ impl ProcessTable {
     /// Reset the tool-chain depth to 0 at the start of each new turn.
     pub async fn reset_chain_depth(&self, pid: Pid) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
-        match guard.get_mut(&pid.as_u32()) {
+        match guard.get_mut(&pid.as_u64()) {
             Some(e) => {
                 e.tool_chain_depth = 0;
                 Ok(())
@@ -136,7 +136,7 @@ impl ProcessTable {
     /// Also refreshes `last_activity_at`.
     pub async fn record_tokens(&self, pid: Pid, tokens: u64) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
-        match guard.get_mut(&pid.as_u32()) {
+        match guard.get_mut(&pid.as_u64()) {
             Some(e) => {
                 e.tokens_consumed = e.tokens_consumed.saturating_add(tokens);
                 e.last_activity_at = chrono::Utc::now();
@@ -156,7 +156,7 @@ impl ProcessTable {
         waiting_on: Option<WaitingOn>,
     ) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
-        match guard.get_mut(&pid.as_u32()) {
+        match guard.get_mut(&pid.as_u64()) {
             Some(e) => {
                 e.status = status;
                 e.waiting_on = waiting_on;
@@ -170,7 +170,7 @@ impl ProcessTable {
     /// Also refreshes `last_activity_at`.
     pub async fn increment_tool_calls_total(&self, pid: Pid) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
-        match guard.get_mut(&pid.as_u32()) {
+        match guard.get_mut(&pid.as_u64()) {
             Some(e) => {
                 e.tool_calls_total = e.tool_calls_total.saturating_add(1);
                 e.last_activity_at = chrono::Utc::now();
@@ -183,7 +183,7 @@ impl ProcessTable {
     /// Update the agent's current context-window token usage.
     pub async fn update_context(&self, pid: Pid, used: u64) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
-        match guard.get_mut(&pid.as_u32()) {
+        match guard.get_mut(&pid.as_u64()) {
             Some(e) => {
                 e.context_used = used;
                 Ok(())
@@ -199,7 +199,7 @@ impl ProcessTable {
     /// once the signal has been handled.
     pub async fn record_signal(&self, pid: Pid, signal_name: &str) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
-        match guard.get_mut(&pid.as_u32()) {
+        match guard.get_mut(&pid.as_u64()) {
             Some(e) => {
                 e.last_signal_received = Some(signal_name.to_string());
                 e.pending_signal_count = e.pending_signal_count.saturating_add(1);
@@ -212,7 +212,7 @@ impl ProcessTable {
     /// Decrement `pending_signal_count` by one (floored at 0) after a signal is handled.
     pub async fn resolve_pending_signal(&self, pid: Pid) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
-        match guard.get_mut(&pid.as_u32()) {
+        match guard.get_mut(&pid.as_u64()) {
             Some(e) => {
                 e.pending_signal_count = e.pending_signal_count.saturating_sub(1);
                 Ok(())
@@ -224,7 +224,7 @@ impl ProcessTable {
     /// Refresh `last_activity_at` to now. Called after any agent action.
     pub async fn touch_activity(&self, pid: Pid) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
-        match guard.get_mut(&pid.as_u32()) {
+        match guard.get_mut(&pid.as_u64()) {
             Some(e) => {
                 e.last_activity_at = chrono::Utc::now();
                 Ok(())

@@ -26,7 +26,7 @@ async fn service_token_has_unique_pid() {
         .spawn_and_get_token(ServiceSpawnRequest::simple("svc-b", "/bin/b"))
         .await
         .unwrap();
-    assert_ne!(t1.pid.as_u32(), t2.pid.as_u32());
+    assert_ne!(t1.pid.as_u64(), t2.pid.as_u64());
 }
 
 #[tokio::test]
@@ -51,7 +51,7 @@ async fn ipc_register_with_valid_token() {
         .await
         .unwrap();
     assert!(result.registered);
-    assert_eq!(result.pid.as_u32(), token.pid.as_u32());
+    assert_eq!(result.pid.as_u64(), token.pid.as_u64());
 }
 
 #[tokio::test]
@@ -124,7 +124,7 @@ async fn service_env_sock_path_contains_name_and_pid() {
     let env = mgr.service_env("my.svc").await.unwrap();
     let svc_sock = &env["AVIX_SVC_SOCK"];
     assert!(svc_sock.contains("my.svc"));
-    assert!(svc_sock.contains(&token.pid.as_u32().to_string()));
+    assert!(svc_sock.contains(&token.pid.as_u64().to_string()));
 }
 
 #[tokio::test]

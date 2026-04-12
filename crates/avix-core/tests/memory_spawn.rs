@@ -21,13 +21,13 @@ fn token_with_caps(caps: &[&str]) -> CapabilityToken {
 async fn make_executor_with_vfs(
     owner: &str,
     agent: &str,
-    pid: u32,
+    pid: u64,
     caps: &[&str],
 ) -> (RuntimeExecutor, Arc<VfsRouter>) {
     let registry = Arc::new(MockToolRegistry::new());
     let vfs = Arc::new(VfsRouter::new());
     let params = SpawnParams {
-        pid: Pid::new(pid),
+        pid: Pid::from_u64(pid),
         agent_name: agent.to_string(),
         goal: "test goal".to_string(),
         spawned_by: owner.to_string(),
@@ -50,7 +50,7 @@ async fn make_executor_with_vfs(
 async fn make_executor_with_memory_svc(
     owner: &str,
     agent: &str,
-    pid: u32,
+    pid: u64,
     caps: &[&str],
 ) -> (RuntimeExecutor, Arc<VfsRouter>) {
     let (executor, vfs) = make_executor_with_vfs(owner, agent, pid, caps).await;
@@ -123,7 +123,7 @@ async fn memory_write_tools_registered_at_spawn() {
     let (_, registry) = {
         let reg = Arc::new(MockToolRegistry::new());
         let params = SpawnParams {
-            pid: Pid::new(200),
+            pid: Pid::from_u64(200),
             agent_name: "researcher".to_string(),
             goal: "test".to_string(),
             spawned_by: "alice".to_string(),

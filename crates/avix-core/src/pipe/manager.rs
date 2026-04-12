@@ -47,7 +47,7 @@ impl PipeManager {
     ) -> Result<String, AvixError> {
         let pipe_id = format!("pipe-{}", Uuid::new_v4());
         let buffer = config.buffer_tokens;
-        let pipe = Arc::new(Pipe::new(config.source_pid.as_u32(), buffer));
+        let pipe = Arc::new(Pipe::new(config.source_pid.as_u64(), buffer));
 
         if let Some(vfs) = vfs {
             write_pipe_manifest(vfs, &config, &pipe_id, "open").await?;
@@ -272,8 +272,8 @@ async fn write_pipe_manifest(
            tokensAcknowledged: 0\n\
            closedAt: null\n\
            closedReason: null\n",
-        src = config.source_pid.as_u32(),
-        tgt = config.target_pid.as_u32(),
+        src = config.source_pid.as_u64(),
+        tgt = config.target_pid.as_u64(),
         dir = config.direction.as_str(),
         buf = config.buffer_tokens,
         bp = config.backpressure.as_str(),
@@ -282,7 +282,7 @@ async fn write_pipe_manifest(
 
     let path = VfsPath::parse(&format!(
         "/proc/{}/pipes/{pipe_id}.yaml",
-        config.source_pid.as_u32()
+        config.source_pid.as_u64()
     ))
     .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
 

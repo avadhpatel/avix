@@ -38,7 +38,7 @@ pub enum CapturedBy {
     /// A specific human user (UID).
     User(u32),
     /// An agent (PID) triggered via `snap/save` syscall.
-    Agent(u32),
+    Agent(u64),
 }
 
 impl Serialize for CapturedBy {
@@ -62,7 +62,7 @@ impl<'de> Deserialize<'de> for CapturedBy {
             return Ok(CapturedBy::User(uid));
         }
         if let Some(rest) = s.strip_prefix("agent:") {
-            let pid = rest.parse::<u32>().map_err(serde::de::Error::custom)?;
+            let pid = rest.parse::<u64>().map_err(serde::de::Error::custom)?;
             return Ok(CapturedBy::Agent(pid));
         }
         Err(serde::de::Error::custom(format!(
@@ -80,7 +80,7 @@ pub struct SnapshotMetadata {
     pub name: String,
     pub agent_name: String,
     /// PID of the agent at capture time.
-    pub source_pid: u32,
+    pub source_pid: u64,
     pub captured_at: DateTime<Utc>,
     pub captured_by: CapturedBy,
     pub trigger: SnapshotTrigger,
@@ -190,7 +190,7 @@ impl SnapshotFile {
 /// Parameters needed to capture a snapshot from a live executor.
 pub struct CaptureParams<'a> {
     pub agent_name: &'a str,
-    pub pid: u32,
+    pub pid: u64,
     pub username: &'a str,
     pub goal: &'a str,
     pub message_history: &'a [ConversationEntry],
@@ -280,7 +280,7 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
-    fn make_test_snapshot(agent_name: &str, source_pid: u32) -> SnapshotFile {
+    fn make_test_snapshot(agent_name: &str, source_pid: u64) -> SnapshotFile {
         let captured_at = Utc::now();
         let name = SnapshotFile::make_name(agent_name, &captured_at);
         SnapshotFile::new(

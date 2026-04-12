@@ -3,9 +3,9 @@ use avix_core::types::Pid;
 use chrono::Utc;
 use std::sync::Arc;
 
-fn make_agent_entry(pid: u32, name: &str) -> ProcessEntry {
+fn make_agent_entry(pid: u64, name: &str) -> ProcessEntry {
     ProcessEntry {
-        pid: Pid::new(pid),
+        pid: Pid::from_u64(pid),
         name: name.to_string(),
         kind: ProcessKind::Agent,
         status: ProcessStatus::Running,
@@ -15,9 +15,9 @@ fn make_agent_entry(pid: u32, name: &str) -> ProcessEntry {
     }
 }
 
-fn make_service_entry(pid: u32, name: &str) -> ProcessEntry {
+fn make_service_entry(pid: u64, name: &str) -> ProcessEntry {
     ProcessEntry {
-        pid: Pid::new(pid),
+        pid: Pid::from_u64(pid),
         name: name.to_string(),
         kind: ProcessKind::Service,
         status: ProcessStatus::Running,
@@ -31,28 +31,28 @@ fn make_service_entry(pid: u32, name: &str) -> ProcessEntry {
 async fn insert_and_lookup_by_pid() {
     let table = ProcessTable::new();
     table.insert(make_agent_entry(57, "researcher")).await;
-    let entry = table.get(Pid::new(57)).await.unwrap();
+    let entry = table.get(Pid::from_u64(57)).await.unwrap();
     assert_eq!(entry.name, "researcher");
 }
 
 #[tokio::test]
 async fn lookup_missing_pid_returns_none() {
     let table = ProcessTable::new();
-    assert!(table.get(Pid::new(99)).await.is_none());
+    assert!(table.get(Pid::from_u64(99)).await.is_none());
 }
 
 #[tokio::test]
 async fn remove_entry() {
     let table = ProcessTable::new();
     table.insert(make_agent_entry(57, "researcher")).await;
-    table.remove(Pid::new(57)).await;
-    assert!(table.get(Pid::new(57)).await.is_none());
+    table.remove(Pid::from_u64(57)).await;
+    assert!(table.get(Pid::from_u64(57)).await.is_none());
 }
 
 #[tokio::test]
 async fn remove_nonexistent_is_noop() {
     let table = ProcessTable::new();
-    table.remove(Pid::new(999)).await;
+    table.remove(Pid::from_u64(999)).await;
 }
 
 #[tokio::test]
@@ -60,17 +60,17 @@ async fn update_status() {
     let table = ProcessTable::new();
     table.insert(make_agent_entry(57, "researcher")).await;
     table
-        .set_status(Pid::new(57), ProcessStatus::Paused)
+        .set_status(Pid::from_u64(57), ProcessStatus::Paused)
         .await
         .unwrap();
-    let entry = table.get(Pid::new(57)).await.unwrap();
+    let entry = table.get(Pid::from_u64(57)).await.unwrap();
     assert_eq!(entry.status, ProcessStatus::Paused);
 }
 
 #[tokio::test]
 async fn update_status_missing_pid_returns_err() {
     let table = ProcessTable::new();
-    let result = table.set_status(Pid::new(99), ProcessStatus::Paused).await;
+    let result = table.set_status(Pid::from_u64(99), ProcessStatus::Paused).await;
     assert!(result.is_err());
 }
 
@@ -98,12 +98,12 @@ async fn list_agents_only() {
 async fn list_by_parent() {
     let table = ProcessTable::new();
     let mut child = make_agent_entry(58, "child");
-    child.parent = Some(Pid::new(57));
+    child.parent = Some(Pid::from_u64(57));
     table.insert(make_agent_entry(57, "parent")).await;
     table.insert(child).await;
-    let children = table.list_children(Pid::new(57)).await;
+    let children = table.list_children(Pid::from_u64(57)).await;
     assert_eq!(children.len(), 1);
-    assert_eq!(children[0].pid, Pid::new(58));
+    assert_eq!(children[0].pid, Pid::from_u64(58));
 }
 
 #[tokio::test]
@@ -123,7 +123,7 @@ async fn find_by_name() {
     let table = ProcessTable::new();
     table.insert(make_agent_entry(57, "researcher")).await;
     let found = table.find_by_name("researcher").await.unwrap();
-    assert_eq!(found.pid, Pid::new(57));
+    assert_eq!(found.pid, Pid::from_u64(57));
 }
 
 #[tokio::test]
@@ -136,7 +136,7 @@ async fn find_by_name_missing_returns_none() {
 async fn concurrent_inserts_all_visible() {
     let table = Arc::new(ProcessTable::new());
     let mut handles = Vec::new();
-    for i in 0..100u32 {
+    for i in 0..100u64 {
         let t = Arc::clone(&table);
         handles.push(tokio::spawn(async move {
             t.insert(make_agent_entry(i + 100, &format!("agent-{i}")))
@@ -157,7 +157,7 @@ async fn concurrent_reads_do_not_block_each_other() {
     for _ in 0..50 {
         let t = Arc::clone(&table);
         handles.push(tokio::spawn(
-            async move { t.get(Pid::new(57)).await.is_some() },
+            async move { t.get(Pid::from_u64(57)).await.is_some() },
         ));
     }
     let results: Vec<_> = futures::future::join_all(handles).await;
@@ -170,7 +170,7 @@ async fn count_is_accurate() {
     assert_eq!(table.count().await, 0);
     table.insert(make_agent_entry(57, "a")).await;
     assert_eq!(table.count().await, 1);
-    table.remove(Pid::new(57)).await;
+    table.remove(Pid::from_u64(57)).await;
     assert_eq!(table.count().await, 0);
 }
 
@@ -183,14 +183,14 @@ async fn set_token_stores_granted_tools_and_expiry() {
     let expires = Utc::now() + chrono::Duration::hours(1);
     table
         .set_token(
-            Pid::new(70),
+            Pid::from_u64(70),
             vec!["fs/read".into(), "agent/spawn".into()],
             Some(expires),
         )
         .await
         .unwrap();
 
-    let entry = table.get(Pid::new(70)).await.unwrap();
+    let entry = table.get(Pid::from_u64(70)).await.unwrap();
     assert_eq!(entry.granted_tools, vec!["fs/read", "agent/spawn"]);
     assert!(entry.token_expires_at.is_some());
 }
@@ -198,7 +198,7 @@ async fn set_token_stores_granted_tools_and_expiry() {
 #[tokio::test]
 async fn set_token_missing_pid_returns_err() {
     let table = ProcessTable::new();
-    let result = table.set_token(Pid::new(99), vec![], None).await;
+    let result = table.set_token(Pid::from_u64(99), vec![], None).await;
     assert!(result.is_err());
 }
 
@@ -206,10 +206,10 @@ async fn set_token_missing_pid_returns_err() {
 async fn increment_chain_depth_counts_up() {
     let table = ProcessTable::new();
     table.insert(make_agent_entry(71, "agent")).await;
-    table.increment_chain_depth(Pid::new(71)).await.unwrap();
-    table.increment_chain_depth(Pid::new(71)).await.unwrap();
-    table.increment_chain_depth(Pid::new(71)).await.unwrap();
-    let entry = table.get(Pid::new(71)).await.unwrap();
+    table.increment_chain_depth(Pid::from_u64(71)).await.unwrap();
+    table.increment_chain_depth(Pid::from_u64(71)).await.unwrap();
+    table.increment_chain_depth(Pid::from_u64(71)).await.unwrap();
+    let entry = table.get(Pid::from_u64(71)).await.unwrap();
     assert_eq!(entry.tool_chain_depth, 3);
 }
 
@@ -217,10 +217,10 @@ async fn increment_chain_depth_counts_up() {
 async fn reset_chain_depth_sets_to_zero() {
     let table = ProcessTable::new();
     table.insert(make_agent_entry(72, "agent")).await;
-    table.increment_chain_depth(Pid::new(72)).await.unwrap();
-    table.increment_chain_depth(Pid::new(72)).await.unwrap();
-    table.reset_chain_depth(Pid::new(72)).await.unwrap();
-    let entry = table.get(Pid::new(72)).await.unwrap();
+    table.increment_chain_depth(Pid::from_u64(72)).await.unwrap();
+    table.increment_chain_depth(Pid::from_u64(72)).await.unwrap();
+    table.reset_chain_depth(Pid::from_u64(72)).await.unwrap();
+    let entry = table.get(Pid::from_u64(72)).await.unwrap();
     assert_eq!(entry.tool_chain_depth, 0);
 }
 

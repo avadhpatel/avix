@@ -52,7 +52,7 @@ mod tests {
         let table = Arc::new(ProcessTable::new());
         table
             .insert(ProcessEntry {
-                pid: Pid::new(10),
+                pid: Pid::from_u64(10),
                 name: "test-agent".into(),
                 kind: ProcessKind::Agent,
                 status: ProcessStatus::Running,
@@ -67,7 +67,7 @@ mod tests {
     #[tokio::test]
     async fn granted_tool_is_allowed() {
         let table = table_with_entry(vec!["fs/read".into()]).await;
-        check_capability("fs/read", Pid::new(10), &table)
+        check_capability("fs/read", Pid::from_u64(10), &table)
             .await
             .unwrap();
     }
@@ -75,7 +75,7 @@ mod tests {
     #[tokio::test]
     async fn ungranted_tool_is_denied() {
         let table = table_with_entry(vec!["fs/read".into()]).await;
-        let result = check_capability("fs/write", Pid::new(10), &table).await;
+        let result = check_capability("fs/write", Pid::from_u64(10), &table).await;
         assert!(matches!(result, Err(AvixError::CapabilityDenied(_))));
     }
 
@@ -84,14 +84,14 @@ mod tests {
         // Process with no granted tools at all.
         let table = table_with_entry(vec![]).await;
         for tool in ALWAYS_PRESENT {
-            check_capability(tool, Pid::new(10), &table).await.unwrap();
+            check_capability(tool, Pid::from_u64(10), &table).await.unwrap();
         }
     }
 
     #[tokio::test]
     async fn missing_process_returns_denied() {
         let table = Arc::new(ProcessTable::new());
-        let result = check_capability("fs/read", Pid::new(99), &table).await;
+        let result = check_capability("fs/read", Pid::from_u64(99), &table).await;
         assert!(matches!(result, Err(AvixError::CapabilityDenied(_))));
     }
 }

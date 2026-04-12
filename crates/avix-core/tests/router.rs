@@ -125,9 +125,9 @@ async fn caller_scoped_limiter_tracks_per_caller() {
     use avix_core::router::concurrency::CallerScopedLimiter;
     use avix_core::types::Pid;
     let limiter = CallerScopedLimiter::new(2);
-    let g1 = limiter.acquire(Pid::new(57)).await.unwrap();
-    let g2 = limiter.acquire(Pid::new(57)).await.unwrap();
-    let g3 = limiter.acquire(Pid::new(58)).await.unwrap();
+    let g1 = limiter.acquire(Pid::from_u64(57)).await.unwrap();
+    let g2 = limiter.acquire(Pid::from_u64(57)).await.unwrap();
+    let g3 = limiter.acquire(Pid::from_u64(58)).await.unwrap();
     assert!(g3.is_valid());
     drop(g1);
     drop(g2);

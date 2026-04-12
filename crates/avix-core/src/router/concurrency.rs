@@ -76,7 +76,7 @@ struct PerPidEntry {
 
 pub struct CallerScopedLimiter {
     max_per_pid: usize,
-    limits: Arc<RwLock<HashMap<u32, PerPidEntry>>>,
+    limits: Arc<RwLock<HashMap<u64, PerPidEntry>>>,
 }
 
 impl CallerScopedLimiter {
@@ -90,11 +90,11 @@ impl CallerScopedLimiter {
     pub async fn acquire(&self, pid: Pid) -> Result<ConcurrencyGuard, AvixError> {
         let entry = {
             let mut map = self.limits.write().await;
-            map.entry(pid.as_u32()).or_insert_with(|| PerPidEntry {
+            map.entry(pid.as_u64()).or_insert_with(|| PerPidEntry {
                 semaphore: Arc::new(Semaphore::new(self.max_per_pid)),
                 active: Arc::new(AtomicUsize::new(0)),
             });
-            let e = map.get(&pid.as_u32()).unwrap();
+            let e = map.get(&pid.as_u64()).unwrap();
             (Arc::clone(&e.semaphore), Arc::clone(&e.active))
         };
         let permit = entry

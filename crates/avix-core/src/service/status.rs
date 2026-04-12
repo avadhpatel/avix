@@ -52,7 +52,7 @@ mod tests {
         let status = ServiceStatus {
             name: "test-svc".into(),
             version: "1.0.0".into(),
-            pid: Pid::new(42),
+            pid: Pid::from_u64(42),
             state: ServiceState::Running,
             endpoint: Some("/run/avix/test-svc-42.sock".into()),
             started_at: None,

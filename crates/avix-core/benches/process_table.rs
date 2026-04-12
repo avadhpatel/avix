@@ -4,7 +4,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 
 fn entry(pid: u32) -> ProcessEntry {
     ProcessEntry {
-        pid: Pid::new(pid),
+        pid: Pid::from_u64(pid),
         name: format!("agent-{pid}"),
         kind: ProcessKind::Agent,
         status: ProcessStatus::Running,
@@ -22,7 +22,7 @@ fn bench_process_table(c: &mut Criterion) {
         }
     });
     c.bench_function("process_table_get", |b| {
-        b.iter(|| rt.block_on(async { table.get(Pid::new(42)).await }));
+        b.iter(|| rt.block_on(async { table.get(Pid::from_u64(42)).await }));
     });
 }
 

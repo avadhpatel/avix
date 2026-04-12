@@ -5,9 +5,9 @@ use serde_json::Value;
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 pub enum ATPCommand {
     AgentSpawn { name: String, goal: String },
-    AgentKill { pid: u32 },
+    AgentKill { pid: String },
     AgentList,
-    AgentStatus { pid: u32 },
+    AgentStatus { pid: String },
     FsRead { path: String },
     FsWrite { path: String, content: String },
     LlmStatus,
