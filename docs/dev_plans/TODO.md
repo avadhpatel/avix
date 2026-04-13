@@ -1,7 +1,7 @@
 # Tool Registry Unification - Remaining Items
 
-**Status**: Phase 3 complete, Phase 4+ pending  
-**Last Updated**: 2026-04-01
+**Status**: Phase 5 partial — tool visibility complete, VFS permission wiring pending  
+**Last Updated**: 2026-04-13
 
 ---
 
@@ -12,6 +12,9 @@
 | Phase 1 | ✅ Done | Kernel Syscall Registry - `SyscallDescriptor` + `SyscallRegistry` with 26 syscalls |
 | Phase 2 | ✅ Done | ToolRegistry Unification - kernel syscalls in registry, capabilities_required field |
 | Phase 3 | ✅ Done | /tools VFS Mount - lazy population, tool YAML descriptors |
+| gap-A | ✅ Done | Registry wiring & discovery — real `ToolRegistry` wired into `IpcExecutorFactory`, Cat1 descriptors merged into `current_tool_list()`, `sys/tools` Cat2 discovery tool, `llm/*` removed from `CapabilityToolMap` ([plan](tool-visibility-gap-A-registry-wiring-and-discovery.md)) |
+| gap-B | ✅ Done | Cat1 IPC dispatch — `dispatch_via_router` fully wired, `dispatch_cat1_tool` + `dispatch_kernel_syscall` over fresh Unix sockets, execute permission check ([plan](tool-visibility-gap-B-cat1-ipc-dispatch.md)) |
+| Phase 4a | ✅ Done | `ToolPermissions` struct with owner/crew/all fields — implemented as part of gap-B permission check |
 
 ---
 
@@ -331,50 +334,15 @@ Workaround: stop kernel, delete `<root>/data/sessions.redb`.
 
 ---
 
-## Agent Tool Visibility — Cat1 Tools Not Sent to LLM
+## Agent Tool Visibility — ✅ RESOLVED (gap-A + gap-B)
 
-**Problem**: The LLM only receives tool descriptors for Cat2 tools (`agent/`, `pipe/`, `cap/`,
-`job/`). Cat1 service tools (`fs/read`, `fs/write`, etc.) are granted in the capability token
-but never appear in the tool list sent to Claude each turn. The agent cannot use them — the LLM
-doesn't know they exist as callable tools.
+All items below were fixed as part of gap-A and gap-B (2026-04-12/13).
 
-**Root cause**: `current_tool_list()` is built solely from `compute_cat2_tools()`. Cat1 tool
-descriptors are never fetched or stored by `RuntimeExecutor`.
-
-**Related bugs discovered during investigation**:
-
-1. **`llm/*` tools incorrectly classified as Cat2** (`src/types/capability_map.rs:40`)  
-   `llm/complete`, `llm/generate-image`, etc. are listed in `CapabilityToolMap` under
-   `"llm:inference"` etc., making `is_cat2_tool("llm/complete")` return `true` at runtime.
-   They should be Cat1 service tools dispatched via `router.svc → llm.svc`. Consequence:
-   `dispatch_category2` is called but has no handler for them — hits the `_` catch-all stub.
-
-2. **`llm/complete` gets an empty descriptor** (`src/executor/tool_registration.rs`)  
-   `cat2_tool_descriptor("llm/complete")` falls to the `_ =>` arm and returns `description: ""`
-   with an empty schema. The LLM sees a useless tool definition and calls it blindly.
-
-3. **`ipc.tool-add` discards the full descriptor** (`src/executor/tool_manager.rs`)  
-   When a service registers a tool via `ipc.tool-add`, only the tool name is tracked in
-   `registered_cat2`. The full JSON schema descriptor is discarded. There is nowhere to store
-   Cat1 tool descriptors received at runtime.
-
-4. **`dispatch_via_router` is a stub** (`dispatch_manager.rs:278`)  
-   Cat1 tool calls route to `dispatch_via_router`, which returns a placeholder. No IPC to
-   `router.svc` is wired.
-
-**Required fixes** (in implementation order):
-
-| # | File | Change |
-|---|------|--------|
-| 1 | `src/types/capability_map.rs` | Remove `llm/*` entries — they are Cat1 service tools, not Cat2 |
-| 2 | `src/executor/tool_manager.rs` | Add `cat1_descriptors: HashMap<String, serde_json::Value>` field; store full descriptor on `ipc.tool-add` |
-| 3 | `src/executor/runtime_executor.rs` / `dispatch_manager.rs` | In `current_tool_list()`, merge Cat2 descriptors + Cat1 descriptors filtered to token's `granted_tools` |
-| 4 | `src/executor/tool_registration.rs` | Remove dead `_ =>` fallback from `cat2_tool_descriptor` (or panic — unknown Cat2 names are a bug) |
-| 5 | `dispatch_manager.rs:dispatch_via_router` | Wire actual IPC call to `router.svc` socket for Cat1 dispatch |
-
-**Expected outcome**: When `fs.svc` and `llm.svc` are running and have called `ipc.tool-add`,
-the LLM receives complete tool descriptors for all granted tools and can call them. No special
-`proc/tools/list` discovery tool is needed — the standard tool interface is complete.
-
-**Note**: Fix 5 (router wiring) depends on `router.svc` being implemented. Fixes 1–4 are
-independent and unblock correct tool visibility immediately.
+| # | Bug | Fix | Commit |
+|---|-----|-----|--------|
+| 1 | `llm/*` incorrectly classified as Cat2 | Removed from `CapabilityToolMap` | gap-A |
+| 2 | `cat2_tool_descriptor` silent empty fallback | Replaced with `tracing::warn!` + descriptive message | gap-A |
+| 3 | Cat1 descriptors never in `current_tool_list()` | `refresh_tool_list` now fetches from real `ToolRegistry` + merges | gap-A |
+| 4 | `RuntimeExecutor` used `MockToolRegistry` in production | Real registry wired via deferred `Arc<Mutex<Option<Arc<ToolRegistry>>>>` injection | gap-A |
+| 5 | `dispatch_via_router` stub | Full IPC dispatch over Unix socket; permission check; kernel routing | gap-B |
+| 6 | No tool discovery for agents | `sys/tools` Cat2 tool added (always-present) | gap-A |
