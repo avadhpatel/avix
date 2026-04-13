@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::types::token::CapabilityToken;
 
 use super::tool_registration::{cat2_tool_descriptor, compute_cat2_tools};
@@ -15,6 +17,9 @@ pub struct ToolManager {
     pub removed_tools: Vec<String>,
     /// Cat2 tool names registered with the tool registry at spawn.
     pub registered_cat2: Vec<String>,
+    /// Cat1 tool descriptors fetched from the real ToolRegistry, keyed by tool name.
+    /// Populated by `RuntimeExecutor::refresh_tool_list` before each turn.
+    pub cat1_descriptors: HashMap<String, serde_json::Value>,
 }
 
 impl ToolManager {
@@ -25,18 +30,30 @@ impl ToolManager {
             hil_required_tools: Vec::new(),
             removed_tools: Vec::new(),
             registered_cat2,
+            cat1_descriptors: HashMap::new(),
         }
     }
 
-    /// Rebuild `tool_list` from current Cat2 tools, excluding removed tools.
+    /// Rebuild `tool_list` from Cat2 tools + Cat1 descriptors, excluding removed tools.
     pub fn refresh_tool_list(&mut self, token: &CapabilityToken, spawned_by: &str) {
         let cat2 = compute_cat2_tools(token, spawned_by);
         let removed = &self.removed_tools;
-        self.tool_list = cat2
+
+        // Cat2 descriptors
+        let mut list: Vec<serde_json::Value> = cat2
             .into_iter()
             .filter(|(name, _)| !removed.contains(name))
             .map(|(name, _)| cat2_tool_descriptor(&name))
             .collect();
+
+        // Cat1 descriptors from real registry (filtered by removed_tools)
+        for (name, descriptor) in &self.cat1_descriptors {
+            if !removed.contains(name) {
+                list.push(descriptor.clone());
+            }
+        }
+
+        self.tool_list = list;
     }
 
     /// Return tool descriptors filtered to exclude removed tools.

@@ -196,15 +196,31 @@ pub fn cat2_tool_descriptor(name: &str) -> serde_json::Value {
                 "required": ["pipeId"]
             }
         }),
-        other => serde_json::json!({
-            "name": other,
-            "description": "",
+        "sys/tools" => serde_json::json!({
+            "name": "sys/tools",
+            "description": "List tools available in the Avix runtime. Returns name, description, and state. Use namespace or keyword to filter. Call this to discover tools before requesting access.",
             "input_schema": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "namespace":    { "type": "string",  "description": "Filter by namespace prefix e.g. 'fs', 'llm'" },
+                    "keyword":      { "type": "string",  "description": "Filter by keyword in name or description" },
+                    "granted_only": { "type": "boolean", "description": "If true, only show tools already in your capability token" }
+                },
                 "required": []
             }
         }),
+        other => {
+            tracing::warn!(tool = other, "cat2_tool_descriptor called for unknown tool");
+            serde_json::json!({
+                "name": other,
+                "description": format!("Unknown Cat2 tool: {other}"),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            })
+        }
     }
 }
 
@@ -252,6 +268,7 @@ mod tests {
             "pipe/write",
             "pipe/read",
             "pipe/close",
+            "sys/tools",
         ];
         for name in &known {
             let desc = cat2_tool_descriptor(name);
@@ -312,11 +329,14 @@ mod tests {
 
     #[test]
     fn test_compute_cat2_tools_no_cat1_tools_registered() {
-        // Cat1 tools in token (fs/read) should NOT appear in Cat2 registration
-        let token = token_with_tools(&["fs/read", "agent/spawn"]);
+        // Cat1 tools in token (fs/read, llm/complete) should NOT appear in Cat2 registration
+        let token = token_with_tools(&["fs/read", "agent/spawn", "llm/complete"]);
         let tools = compute_cat2_tools(&token, "alice");
         let names: Vec<_> = tools.iter().map(|(n, _)| n.as_str()).collect();
         assert!(!names.contains(&"fs/read"));
+        assert!(!names.contains(&"llm/complete"));
         assert!(names.contains(&"agent/spawn"));
+        // sys/tools is always-present
+        assert!(names.contains(&"sys/tools"));
     }
 }

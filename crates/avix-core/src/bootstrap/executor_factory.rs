@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
+use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::executor::factory::AgentExecutorFactory;
-use crate::executor::runtime_executor::MockToolRegistry;
 use crate::executor::runtime_executor::RuntimeExecutor;
+use crate::tool_registry::ToolRegistry;
 use crate::executor::spawn::SpawnParams;
 use crate::gateway::event_bus::AtpEventBus;
 use crate::invocation::{InvocationStatus, InvocationStore};
@@ -40,6 +41,8 @@ pub struct IpcExecutorFactory {
     session_store: Arc<PersistentSessionStore>,
     /// In-process signal channel registry — used to wire signals to running executor tasks.
     signal_channels: SignalChannelRegistry,
+    /// Real kernel tool registry — injected in phase3 via `set_tool_registry`.
+    tool_registry: Arc<Mutex<Option<Arc<ToolRegistry>>>>,
 }
 
 impl IpcExecutorFactory {
@@ -56,7 +59,13 @@ impl IpcExecutorFactory {
             invocation_store,
             session_store,
             signal_channels: SignalChannelRegistry::new(),
+            tool_registry: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Wire in the real `ToolRegistry` after phase3 construction.
+    pub async fn set_tool_registry(&self, registry: Arc<ToolRegistry>) {
+        *self.tool_registry.lock().await = Some(registry);
     }
 
     pub fn with_tracer(mut self, tracer: Arc<Tracer>) -> Self {
@@ -87,18 +96,31 @@ impl AgentExecutorFactory for IpcExecutorFactory {
         let session_id = params.session_id.clone();
         let invocation_id = params.invocation_id.clone();
         let signal_channels = self.signal_channels.clone();
+        let tool_registry_handle = Arc::clone(&self.tool_registry);
 
         let handle = tokio::spawn(async move {
             tracer.agent_spawn(pid.as_u64(), &agent_name, &goal, &session_id);
 
-            let registry = Arc::new(MockToolRegistry::new());
             let llm_client = IpcLlmClient::new(
                 llm_sock.to_string_lossy().to_string(),
                 pid.as_u64(),
                 session_id.clone(),
             );
 
-            let mut executor = match RuntimeExecutor::spawn_with_registry(params, registry).await {
+            // Resolve real ToolRegistry if available, otherwise fall back to mock.
+            let registry_opt = tool_registry_handle.lock().await.clone();
+            let spawn_result = match registry_opt {
+                Some(registry) => {
+                    RuntimeExecutor::spawn_with_real_registry(params, registry).await
+                }
+                None => {
+                    use crate::executor::runtime_executor::MockToolRegistry;
+                    let mock = Arc::new(MockToolRegistry::new());
+                    RuntimeExecutor::spawn_with_registry(params, mock).await
+                }
+            };
+
+            let mut executor = match spawn_result {
                 Ok(e) => e,
                 Err(err) => {
                     warn!(pid = pid.as_u64(), error = %err, "executor spawn failed");

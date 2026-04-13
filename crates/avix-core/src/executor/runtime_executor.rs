@@ -18,6 +18,7 @@ use crate::llm_client::LlmCompleteResponse;
 use crate::memfs::VfsRouter;
 use crate::memory_svc::vfs_layout::init_user_memory_tree;
 use crate::signal::kind::Signal;
+use crate::tool_registry::ToolRegistry;
 use crate::trace::Tracer;
 use crate::types::{token::CapabilityToken, tool::ToolVisibility, Pid};
 
@@ -39,6 +40,12 @@ pub trait ToolRegistryHandle: Send + Sync {
 
     fn deregister_tool(&self, pid: u64, name: &str)
         -> impl std::future::Future<Output = ()> + Send;
+
+    /// Look up a tool descriptor by name. Returns `None` if not found.
+    fn lookup_descriptor(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = Option<serde_json::Value>> + Send;
 }
 
 /// Concrete: the mock registry used in tests
@@ -79,6 +86,20 @@ impl Default for MockToolRegistry {
     }
 }
 
+impl ToolRegistryHandle for Arc<ToolRegistry> {
+    async fn register_tool(&self, _pid: u64, _name: &str, _visibility: ToolVisibility) {
+        // No-op: real ToolRegistry manages registration via ipc.tool-add at kernel level.
+    }
+
+    async fn deregister_tool(&self, _pid: u64, _name: &str) {
+        // No-op: real ToolRegistry manages deregistration via ipc.tool-remove at kernel level.
+    }
+
+    async fn lookup_descriptor(&self, name: &str) -> Option<serde_json::Value> {
+        self.lookup(name).await.ok().map(|e| e.descriptor)
+    }
+}
+
 impl ToolRegistryHandle for Arc<MockToolRegistry> {
     async fn register_tool(&self, pid: u64, name: &str, visibility: ToolVisibility) {
         self.registered
@@ -92,6 +113,10 @@ impl ToolRegistryHandle for Arc<MockToolRegistry> {
             .lock()
             .await
             .retain(|(p, n, _)| !(*p == pid && n == name));
+    }
+
+    async fn lookup_descriptor(&self, _name: &str) -> Option<serde_json::Value> {
+        None
     }
 }
 
@@ -164,22 +189,31 @@ pub struct RuntimeExecutor {
     pub(self) signal_rx: Option<mpsc::Receiver<Signal>>,
 }
 
-enum RegistryRef {
+pub(crate) enum RegistryRef {
     Mock(Arc<MockToolRegistry>),
+    Real(Arc<ToolRegistry>),
 }
 
 impl RuntimeExecutor {
-    pub async fn spawn_with_registry(
+    /// Internal constructor accepting any `RegistryRef` variant.
+    pub(crate) async fn spawn_with_registry_ref(
         params: SpawnParams,
-        registry: Arc<MockToolRegistry>,
+        registry_ref: RegistryRef,
     ) -> Result<Self, AvixError> {
         let cat2_tools = compute_cat2_tools(&params.token, &params.spawned_by);
         let mut registered_cat2 = Vec::new();
 
+        // Register Cat2 tools with the mock registry (no-op for Real registry).
         for (name, visibility) in &cat2_tools {
-            registry
-                .register_tool(params.pid.as_u64(), name, visibility.clone())
-                .await;
+            match &registry_ref {
+                RegistryRef::Mock(reg) => {
+                    reg.register_tool(params.pid.as_u64(), name, visibility.clone())
+                        .await;
+                }
+                RegistryRef::Real(_) => {
+                    // Real registry manages tool registration via ipc.tool-add at agent spawn.
+                }
+            }
             registered_cat2.push(name.clone());
         }
 
@@ -203,7 +237,7 @@ impl RuntimeExecutor {
             kernel: None,
             resource_handler: None,
             vfs: None,
-            registry_ref: RegistryRef::Mock(registry),
+            registry_ref,
             paused: Arc::new(AtomicBool::new(false)),
             killed: Arc::new(AtomicBool::new(false)),
             snapshot_requested: Arc::new(AtomicBool::new(false)),
@@ -228,9 +262,24 @@ impl RuntimeExecutor {
             signal_rx: Some(signal_rx),
         };
 
-        executor.refresh_tool_list();
+        executor.refresh_tool_list().await;
 
         Ok(executor)
+    }
+
+    pub async fn spawn_with_registry(
+        params: SpawnParams,
+        registry: Arc<MockToolRegistry>,
+    ) -> Result<Self, AvixError> {
+        Self::spawn_with_registry_ref(params, RegistryRef::Mock(registry)).await
+    }
+
+    /// Spawn with the real kernel `ToolRegistry` — used by `IpcExecutorFactory`.
+    pub async fn spawn_with_real_registry(
+        params: SpawnParams,
+        registry: Arc<ToolRegistry>,
+    ) -> Result<Self, AvixError> {
+        Self::spawn_with_registry_ref(params, RegistryRef::Real(registry)).await
     }
 
     pub async fn spawn_with_registry_and_kernel(
@@ -337,8 +386,31 @@ impl RuntimeExecutor {
 
     // ── Tool delegates ────────────────────────────────────────────────────────
 
-    /// Rebuild tool_list from current Cat2 tools, excluding removed tools.
-    pub fn refresh_tool_list(&mut self) {
+    /// Rebuild tool_list from Cat2 tools + Cat1 descriptors from registry, excluding removed tools.
+    pub async fn refresh_tool_list(&mut self) {
+        // Collect Cat1 tool names from the token (those not already registered as Cat2).
+        let granted_tools: Vec<String> = self.token.granted_tools.clone();
+        let registered_cat2: Vec<String> = self.tools.registered_cat2.clone();
+
+        let mut cat1_descriptors = HashMap::new();
+        for name in &granted_tools {
+            if registered_cat2.contains(name) {
+                continue; // Cat2 — descriptor comes from cat2_tool_descriptor
+            }
+            // Cat1 — look up descriptor from the real registry (mock always returns None).
+            let desc = match &self.registry_ref {
+                RegistryRef::Mock(_) => None,
+                RegistryRef::Real(reg) => {
+                    let reg = Arc::clone(reg);
+                    reg.lookup(name).await.ok().map(|e| e.descriptor)
+                }
+            };
+            if let Some(d) = desc {
+                cat1_descriptors.insert(name.clone(), d);
+            }
+        }
+        self.tools.cat1_descriptors = cat1_descriptors;
+
         let token = self.token.clone();
         let spawned_by = self.spawned_by.clone();
         self.tools.refresh_tool_list(&token, &spawned_by);
@@ -576,6 +648,10 @@ impl RuntimeExecutor {
                 }
                 self.tools.registered_cat2.clear();
             }
+            RegistryRef::Real(_) => {
+                // Real registry deregistration is handled by ipc.tool-remove at the kernel level.
+                self.tools.registered_cat2.clear();
+            }
         }
 
         // 2. Handle Idle transition
@@ -686,7 +762,7 @@ mod tests {
         executor
             .handle_tool_changed("removed", "cap/list", "")
             .await;
-        executor.refresh_tool_list();
+        executor.refresh_tool_list().await;
         let names: Vec<_> = executor
             .tools
             .tool_list
@@ -1004,5 +1080,74 @@ mod tests {
     async fn sigpause_without_invocation_store_does_not_panic() {
         let executor = make_executor(232, &[]).await;
         executor.deliver_signal("SIGPAUSE").await;
+    }
+
+    // GAP-A: lookup_descriptor on real registry returns stored descriptor
+    #[tokio::test]
+    async fn test_real_registry_lookup_descriptor_returns_descriptor() {
+        use crate::tool_registry::{ToolEntry, ToolRegistry, ToolState, ToolVisibility};
+        use crate::types::tool::ToolName;
+
+        let reg = Arc::new(ToolRegistry::new());
+        let descriptor = serde_json::json!({
+            "name": "fs/read",
+            "description": "Read a file from the virtual filesystem",
+            "input_schema": { "type": "object", "properties": {}, "required": [] }
+        });
+        reg.add(
+            "fs.svc",
+            vec![ToolEntry::new(
+                ToolName::parse("fs/read").unwrap(),
+                "fs.svc".into(),
+                ToolState::Available,
+                ToolVisibility::All,
+                descriptor.clone(),
+            )],
+        )
+        .await
+        .unwrap();
+
+        // lookup_descriptor via the ToolRegistryHandle impl
+        let result = reg.lookup_descriptor("fs/read").await;
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["description"], descriptor["description"]);
+    }
+
+    // GAP-A: executor with real registry and token granting fs/read includes fs/read in tool_list
+    #[tokio::test]
+    async fn test_cat1_descriptors_merged_into_tool_list_when_registry_has_entry() {
+        use crate::tool_registry::{ToolEntry, ToolRegistry, ToolState, ToolVisibility};
+        use crate::types::tool::ToolName;
+
+        let reg = Arc::new(ToolRegistry::new());
+        let descriptor = serde_json::json!({
+            "name": "fs/read",
+            "description": "Read a file",
+            "input_schema": { "type": "object", "properties": {}, "required": [] }
+        });
+        reg.add(
+            "fs.svc",
+            vec![ToolEntry::new(
+                ToolName::parse("fs/read").unwrap(),
+                "fs.svc".into(),
+                ToolState::Available,
+                ToolVisibility::All,
+                descriptor,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let params = make_params(900, &["fs/read"]);
+        let executor = RuntimeExecutor::spawn_with_real_registry(params, Arc::clone(&reg))
+            .await
+            .unwrap();
+
+        let tool_list = executor.current_tool_list();
+        let names: Vec<_> = tool_list
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(names.contains(&"fs/read"), "fs/read should appear in tool_list when registry holds it");
     }
 }

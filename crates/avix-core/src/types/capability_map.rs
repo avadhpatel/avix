@@ -5,16 +5,16 @@ use std::collections::HashMap;
 /// Capability names use `namespace:verb` format consistently:
 ///   "agent:spawn"     → agent orchestration tools
 ///   "pipe:use"        → inter-agent pipe tools
-///   "llm:inference"   → llm/complete
-///   "llm:image"       → llm/generate-image
-///   etc.
+///
+/// NOTE: `llm/*` tools are Cat1 service tools dispatched via router.svc → llm.svc.
+/// They are NOT listed here. This map is only for Cat2 gated tools.
 ///
 /// NOTE: `granted_tools` in a CapabilityToken stores *individual tool names*
 /// (e.g. "agent/spawn", "fs/read"), not capability group names. This map is used:
 ///   - By token issuers: tools_for_capability("agent:spawn") to know which tools to grant
 ///   - By compute_cat2_tools: all_gated_cat2_tools() to check which Cat2 tools are in a token
 ///
-/// `job/watch` is always-present and does NOT require a separate capability grant.
+/// `job/watch` and `sys/tools` are always-present and do NOT require a separate capability grant.
 pub struct CapabilityToolMap {
     map: HashMap<&'static str, Vec<&'static str>>,
     always: Vec<&'static str>,
@@ -37,12 +37,6 @@ impl Default for CapabilityToolMap {
             "pipe:use",
             vec!["pipe/open", "pipe/write", "pipe/read", "pipe/close"],
         );
-        map.insert("llm:inference", vec!["llm/complete"]);
-        map.insert("llm:image", vec!["llm/generate-image"]);
-        map.insert("llm:speech", vec!["llm/generate-speech"]);
-        map.insert("llm:transcription", vec!["llm/transcribe"]);
-        map.insert("llm:embedding", vec!["llm/embed"]);
-
         // Memory capability grants.
         // memory:write is a superset of memory:read — includes all read tools plus write tools.
         map.insert(
@@ -69,7 +63,7 @@ impl Default for CapabilityToolMap {
 
         Self {
             map,
-            always: vec!["cap/request-tool", "cap/escalate", "cap/list", "job/watch"],
+            always: vec!["cap/request-tool", "cap/escalate", "cap/list", "job/watch", "sys/tools"],
         }
     }
 }

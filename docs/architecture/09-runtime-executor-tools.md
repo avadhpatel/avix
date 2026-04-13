@@ -91,12 +91,33 @@ Full namespace reference:
 | Namespace       | Tools                                                        | Capability required                |
 |-----------------|--------------------------------------------------------------|------------------------------------|
 | `fs/`           | read, write, list, copy, move, watch, search                 | `fs:read`, `fs:write`              |
-| `llm/`          | complete, generate-image, generate-speech, transcribe, embed | `llm:inference`, `llm:image`, etc. |
+| `llm/`          | complete, generate-image, generate-speech, transcribe, embed | per-tool grant in `granted_tools`  |
 | `exec/`         | runtime/python/run, runtime/shell/run, tool/git/*, pkg/uv/* | `exec:python`, `exec:shell`        |
 | `mcp/<server>/` | any tool from a connected MCP server                         | per-tool grant                     |
 | `jobs/`         | watch, cancel                                                | (see Category 2)                   |
 
 Category 1 tools use `ToolVisibility::All` unless the owning service declares otherwise.
+
+#### Cat1 Descriptor Discovery
+
+At the start of each turn, `RuntimeExecutor::refresh_tool_list()` fetches descriptors
+for all Cat1 tools granted in the token (those not in the Cat2 set) by calling
+`ToolRegistry::lookup(name)` on the real kernel `ToolRegistry`. Found descriptors are
+merged into the LLM's `tools[]` array alongside Cat2 descriptors.
+
+This makes granted Cat1 tools (e.g. `fs/read`, `llm/complete`) automatically visible in
+the LLM context without having to flood every tool into every agent — only tools
+explicitly granted in the token are included.
+
+If the registry does not hold a descriptor for a granted Cat1 tool (e.g. the owning
+service has not yet registered it), the tool is simply omitted from `tools[]` that turn.
+The agent can still call it if it knows the name, but the LLM will not auto-suggest it.
+
+**Wiring:** `IpcExecutorFactory` holds `Arc<Mutex<Option<Arc<ToolRegistry>>>>`. The
+registry is `None` at factory construction (phase 2). Phase 3 calls
+`factory.set_tool_registry(registry)` after the real registry is built. Spawned
+executors receive `RegistryRef::Real(Arc<ToolRegistry>)` when the registry is
+available, or fall back to `RegistryRef::Mock` (no Cat1 lookups) otherwise.
 
 ### Category 2: Avix Behaviour Tools
 
@@ -124,12 +145,18 @@ The set of Category 2 tools granted to an agent depends on its `CapabilityToken`
 | `cap/escalate`       | *(always)*      | Escalate a decision to a human approver             |
 | `cap/list`           | *(always)*      | List all currently granted capabilities             |
 | `job/watch`          | *(always)*      | Subscribe to progress events for a job              |
+| `sys/tools`          | *(always)*      | Discover available tools by namespace or keyword    |
 
-The four always-present tools (`cap/request-tool`, `cap/escalate`, `cap/list`,
-`job/watch`) are registered regardless of the agent's capability grants (Architecture
-Invariant 13). They also **bypass the capability grant check** in `validate_tool_call` —
-an agent can always call them even if its `CapabilityToken.granted_tools` does not
-explicitly list them.
+The five always-present tools (`cap/request-tool`, `cap/escalate`, `cap/list`,
+`job/watch`, `sys/tools`) are registered regardless of the agent's capability grants
+(Architecture Invariant 13). They also **bypass the capability grant check** in
+`validate_tool_call` — an agent can always call them even if its
+`CapabilityToken.granted_tools` does not explicitly list them.
+
+`sys/tools` is a discovery tool: rather than flooding the LLM context with every
+registered tool on every turn, agents call `sys/tools` to list what is available
+(optionally filtered by namespace, keyword, or `granted_only: true`) before requesting
+access via `cap/request-tool`.
 
 ### Category 3: Transparent RuntimeExecutor Behaviours
 
@@ -163,33 +190,41 @@ them like any Cat1 tool; `RuntimeExecutor` routes them to `router.svc` → `mcp-
 `"fs/read"`). Capability group names like `agent:spawn` are used only by token issuers
 to expand into the individual tools to grant — they never appear in the token itself.
 
-`CapabilityToolMap` maps capability group names to individual tool names for issuers.
+`CapabilityToolMap` maps capability group names to Cat2 tool names for issuers.
 `compute_cat2_tools` uses `all_gated_cat2_tools()` to check which Cat2 tools are in a
 token, matching each tool name individually.
 
+**`CapabilityToolMap` is Cat2-only.** `llm/complete` and other `llm/*` tools are Cat1
+service tools dispatched via `router.svc → llm.svc`. They are granted individually in
+`CapabilityToken.granted_tools` but are NOT listed in `CapabilityToolMap` — listing
+them there would incorrectly treat them as Cat2 and register them via `ipc.tool-add`.
+
 ```
-Capability key       → Individual tool names stored in granted_tools
+Capability key       → Cat2 tool names stored in granted_tools
 ─────────────────────────────────────────────────────────────────────
 agent:spawn          → agent/spawn, agent/kill, agent/list, agent/wait, agent/send-message
 pipe:use             → pipe/open, pipe/write, pipe/read, pipe/close
-llm:inference        → llm/complete
-llm:image            → llm/generate-image
-llm:speech           → llm/generate-speech
-llm:transcription    → llm/transcribe
-llm:embedding        → llm/embed
-(always, no check)   → cap/request-tool, cap/escalate, cap/list, job/watch
+memory:read          → memory/retrieve, memory/get-fact, memory/get-preferences
+memory:write         → memory/retrieve, memory/get-fact, memory/get-preferences,
+                       memory/log-event, memory/store-fact, memory/update-preference,
+                       memory/forget
+memory:share         → memory/share-request
+(always, no check)   → cap/request-tool, cap/escalate, cap/list, job/watch, sys/tools
 ```
 
 At spawn, `RuntimeExecutor` iterates `all_gated_cat2_tools()` and checks
-`token.has_tool(name)` for each. Only matching names are registered.
+`token.has_tool(name)` for each. Only matching names are registered as Cat2.
+
+Cat1 tools (e.g. `fs/read`, `llm/complete`) in `granted_tools` that are NOT in the Cat2
+set are resolved differently — see "Cat1 Descriptor Discovery" below.
 
 ---
 
 ## Category 2 Registration Lifecycle
 
 ```
-1. RuntimeExecutor::spawn_with_registry(token, registry)
-   │
+1. RuntimeExecutor::spawn_with_registry_ref(params, RegistryRef::Real(registry))
+   │                                               (or RegistryRef::Mock for tests)
    ├─ compute Category 2 set from token + CapabilityToolMap
    │
    ├─ for each tool in set:
@@ -290,7 +325,9 @@ Populated at runtime when events occur mid-session:
 ```
 ┌─────────────────────────────────────────────────┐
 │  1. Refresh tool list                           │
-│     Category 1 (filtered by capability)         │
+│     Category 1: descriptors fetched from        │
+│       ToolRegistry for each granted_tools entry │
+│       not in the Cat2 set                       │
 │   + Category 2 (registered at spawn)            │
 │   + MCP tools (registered by mcp-bridge.svc)    │
 │     → exclude tools flagged unhealthy           │
@@ -496,6 +533,22 @@ Output:
 Input:  { "jobId": "job-7f3a9b", "timeoutSec": 300 }
 Output: { "jobId": "job-7f3a9b", "finalStatus": "done", "result": { ... }, "error": null }
 ```
+
+### `sys/tools`
+
+```json
+Input:  { "namespace": "fs", "keyword": "", "granted_only": false }
+Output:
+{
+  "tools": [
+    { "name": "fs/read",  "description": "Read the contents of a file", "state": "available" },
+    { "name": "fs/write", "description": "Write data to a file",        "state": "available" }
+  ]
+}
+```
+
+All three input fields are optional. Omitting them returns all registered tools.
+`granted_only: true` restricts results to tools in the caller's `CapabilityToken.granted_tools`.
 
 ---
 

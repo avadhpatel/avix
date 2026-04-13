@@ -326,7 +326,7 @@ impl RuntimeExecutor {
                                 if granted {
                                     if let Some(tok) = new_token {
                                         self.token = tok;
-                                        self.refresh_tool_list();
+                                        self.refresh_tool_list().await;
                                     }
                                     return Ok(
                                         serde_json::json!({"approved": true, "tool": tool_name}),
@@ -466,6 +466,19 @@ impl RuntimeExecutor {
                 "pipeState": "open"
             })),
             "pipe/close" => Ok(serde_json::json!({ "closed": true })),
+            "sys/tools" => {
+                let namespace = call.args["namespace"].as_str().unwrap_or("").to_string();
+                let keyword = call.args["keyword"].as_str().unwrap_or("").to_string();
+                let granted_only = call.args["granted_only"].as_bool().unwrap_or(false);
+
+                if let Some(kernel) = &self.kernel {
+                    let summaries = kernel
+                        .list_tools(namespace, keyword, granted_only, &self.token)
+                        .await;
+                    return Ok(serde_json::json!({ "tools": summaries }));
+                }
+                Ok(serde_json::json!({ "tools": [] }))
+            }
             _ => Ok(serde_json::json!({
                 "content": format!("Tool '{}' executed (IPC dispatch not yet wired)", call.name)
             })),
@@ -836,7 +849,7 @@ impl RuntimeExecutor {
                 tool_calls = self.tool_calls_total,
                 "starting LLM turn"
             );
-            self.refresh_tool_list();
+            self.refresh_tool_list().await;
             self.maybe_renew_token();
 
             if self.token.is_expired() {
@@ -1783,5 +1796,162 @@ mod tests {
         let initial = executor.current_tool_list().len();
         executor.handle_tool_changed("removed", "cap/list", "test").await;
         assert!(executor.current_tool_list().len() < initial);
+    }
+
+    // GAP-A: sys/tools returns all tools when no filter given
+    #[tokio::test]
+    async fn test_dispatch_sys_tools_no_filter_returns_tools() {
+        use crate::executor::MockKernelHandle;
+        use crate::tool_registry::{ToolEntry, ToolRegistry, ToolState, ToolVisibility};
+        use crate::types::tool::ToolName;
+
+        let mut kernel = MockKernelHandle::new();
+        let reg = Arc::new(ToolRegistry::new());
+        reg.add(
+            "kernel",
+            vec![ToolEntry::new(
+                ToolName::parse("kernel/proc/spawn").unwrap(),
+                "kernel".into(),
+                ToolState::Available,
+                ToolVisibility::All,
+                serde_json::json!({"name": "kernel/proc/spawn", "description": "Spawn agent"}),
+            )],
+        )
+        .await
+        .unwrap();
+        kernel.tool_registry = Some(reg);
+
+        let registry = Arc::new(MockToolRegistry::new());
+        let params = make_params(9001, &[]);
+        let mut executor = RuntimeExecutor::spawn_with_registry_and_kernel(
+            params,
+            registry,
+            Arc::new(kernel),
+        )
+        .await
+        .unwrap();
+
+        let call = AvixToolCall {
+            call_id: "st1".into(),
+            name: "sys/tools".into(),
+            args: json!({}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        let tools = result["tools"].as_array().unwrap();
+        assert!(!tools.is_empty(), "sys/tools should return registered tools");
+        let names: Vec<_> = tools
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(names.contains(&"kernel/proc/spawn"));
+    }
+
+    // GAP-A: sys/tools with namespace filter returns only matching tools
+    #[tokio::test]
+    async fn test_dispatch_sys_tools_namespace_filter() {
+        use crate::executor::MockKernelHandle;
+        use crate::tool_registry::{ToolEntry, ToolRegistry, ToolState, ToolVisibility};
+        use crate::types::tool::ToolName;
+
+        let mut kernel = MockKernelHandle::new();
+        let reg = Arc::new(ToolRegistry::new());
+        reg.add(
+            "kernel",
+            vec![
+                ToolEntry::new(
+                    ToolName::parse("fs/read").unwrap(),
+                    "fs.svc".into(),
+                    ToolState::Available,
+                    ToolVisibility::All,
+                    serde_json::json!({"name": "fs/read", "description": "Read file"}),
+                ),
+                ToolEntry::new(
+                    ToolName::parse("llm/complete").unwrap(),
+                    "llm.svc".into(),
+                    ToolState::Available,
+                    ToolVisibility::All,
+                    serde_json::json!({"name": "llm/complete", "description": "LLM call"}),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+        kernel.tool_registry = Some(reg);
+
+        let registry = Arc::new(MockToolRegistry::new());
+        let params = make_params(9002, &[]);
+        let mut executor = RuntimeExecutor::spawn_with_registry_and_kernel(
+            params,
+            registry,
+            Arc::new(kernel),
+        )
+        .await
+        .unwrap();
+
+        let call = AvixToolCall {
+            call_id: "st2".into(),
+            name: "sys/tools".into(),
+            args: json!({"namespace": "fs"}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        let tools = result["tools"].as_array().unwrap();
+        let names: Vec<_> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert!(names.contains(&"fs/read"), "should include fs/read");
+        assert!(!names.contains(&"llm/complete"), "should exclude llm/complete");
+    }
+
+    // GAP-A: sys/tools with granted_only=true returns only token-granted tools
+    #[tokio::test]
+    async fn test_dispatch_sys_tools_granted_only() {
+        use crate::executor::MockKernelHandle;
+        use crate::tool_registry::{ToolEntry, ToolRegistry, ToolState, ToolVisibility};
+        use crate::types::tool::ToolName;
+
+        let mut kernel = MockKernelHandle::new();
+        let reg = Arc::new(ToolRegistry::new());
+        reg.add(
+            "kernel",
+            vec![
+                ToolEntry::new(
+                    ToolName::parse("fs/read").unwrap(),
+                    "fs.svc".into(),
+                    ToolState::Available,
+                    ToolVisibility::All,
+                    serde_json::json!({"name": "fs/read", "description": "Read file"}),
+                ),
+                ToolEntry::new(
+                    ToolName::parse("fs/write").unwrap(),
+                    "fs.svc".into(),
+                    ToolState::Available,
+                    ToolVisibility::All,
+                    serde_json::json!({"name": "fs/write", "description": "Write file"}),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+        kernel.tool_registry = Some(reg);
+
+        // Token only grants fs/read, not fs/write
+        let registry = Arc::new(MockToolRegistry::new());
+        let params = make_params(9003, &["fs/read"]);
+        let mut executor = RuntimeExecutor::spawn_with_registry_and_kernel(
+            params,
+            registry,
+            Arc::new(kernel),
+        )
+        .await
+        .unwrap();
+
+        let call = AvixToolCall {
+            call_id: "st3".into(),
+            name: "sys/tools".into(),
+            args: json!({"granted_only": true}),
+        };
+        let result = executor.dispatch_category2(&call).await.unwrap();
+        let tools = result["tools"].as_array().unwrap();
+        let names: Vec<_> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert!(names.contains(&"fs/read"), "granted tool should appear");
+        assert!(!names.contains(&"fs/write"), "non-granted tool should be excluded");
     }
 }

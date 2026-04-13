@@ -57,6 +57,8 @@ pub struct Runtime {
     event_bus: Arc<AtpEventBus>,
     /// Proc handler retained so phase3 can wire in service_manager and tool_registry.
     proc_handler: Option<Arc<ProcHandler>>,
+    /// Executor factory retained so phase3 can inject the real ToolRegistry.
+    executor_factory: Option<Arc<executor_factory::IpcExecutorFactory>>,
     /// Trace flags set via `with_trace_flags()` before `start_daemon()`.
     trace_flags: TraceFlags,
     /// Active tracer — created at `start_daemon()` from `trace_flags`.
@@ -140,6 +142,7 @@ impl Runtime {
             kernel_sock,
             event_bus: Arc::new(AtpEventBus::default()),
             proc_handler: None,
+            executor_factory: None,
             trace_flags: TraceFlags::default(),
             tracer: Tracer::noop(),
             invocation_store: None,
@@ -261,6 +264,9 @@ impl Runtime {
             .with_signal_channels(signal_channels.clone()),
         );
 
+        // Retain so phase3 can inject the real ToolRegistry.
+        self.executor_factory = Some(Arc::clone(&factory));
+
         let scanner = Arc::new(ManifestScanner::new(Arc::clone(&self.vfs)));
 
         let proc_handler = Arc::new(
@@ -302,6 +308,11 @@ impl Runtime {
         if let Some(ph) = &self.proc_handler {
             ph.set_service_manager(Arc::clone(&service_manager)).await;
             ph.set_tool_registry(Arc::clone(&tool_registry)).await;
+        }
+
+        // Inject real ToolRegistry into executor factory so spawned agents discover Cat1 tools.
+        if let Some(factory) = &self.executor_factory {
+            factory.set_tool_registry(Arc::clone(&tool_registry)).await;
         }
 
         // Register kernel syscalls in the tool registry for tool discovery via /tools/
