@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::error::AvixError;
 use crate::tool_registry::entry::ToolEntry;
+use crate::tool_registry::permissions::ToolPermissions;
 use crate::types::tool::{ToolName, ToolState, ToolVisibility};
 
 use super::descriptor::{ToolDescriptor, ToolVisibilitySpec};
@@ -43,25 +44,74 @@ impl ToolScanner {
         let entries = Self::scan(service_dir)?
             .into_iter()
             .filter_map(|desc| {
-                ToolName::parse(&desc.name).ok().map(|name| {
-                    let caps = desc.capabilities_required.clone();
-                    ToolEntry::new(
-                        name,
-                        service_name.to_string(),
-                        match desc.status.state.as_str() {
-                            "available" => ToolState::Available,
-                            "degraded" => ToolState::Degraded,
-                            _ => ToolState::Unavailable,
-                        },
-                        match &desc.visibility {
-                            ToolVisibilitySpec::All => ToolVisibility::All,
-                            ToolVisibilitySpec::User(u) => ToolVisibility::User(u.clone()),
-                            ToolVisibilitySpec::Crew(c) => ToolVisibility::Crew(c.clone()),
-                        },
-                        serde_json::to_value(&desc).unwrap_or_default(),
-                    )
-                    .with_capabilities(caps)
-                })
+                let tool_name_str = desc.name.clone();
+                match ToolName::parse(&tool_name_str) {
+                    Err(_) => {
+                        tracing::warn!(
+                            service = service_name,
+                            tool = %tool_name_str,
+                            "tool descriptor has invalid name — skipped"
+                        );
+                        None
+                    }
+                    Ok(name) => {
+                        let caps = desc.capabilities_required.clone();
+
+                        // Derive permissions: explicit block wins; fall back to owner field; else default.
+                        let permissions = match desc.permissions.clone() {
+                            Some(p) => {
+                                tracing::debug!(
+                                    service = service_name,
+                                    tool = %tool_name_str,
+                                    owner = %p.owner,
+                                    crew = %p.crew,
+                                    all = %p.all,
+                                    "tool loaded with explicit permissions block"
+                                );
+                                p
+                            }
+                            None => {
+                                let mut p = ToolPermissions::default();
+                                if let Some(ref o) = desc.owner {
+                                    p.owner = o.clone();
+                                    tracing::debug!(
+                                        service = service_name,
+                                        tool = %tool_name_str,
+                                        owner = %o,
+                                        "tool permissions derived from owner field"
+                                    );
+                                } else {
+                                    tracing::debug!(
+                                        service = service_name,
+                                        tool = %tool_name_str,
+                                        "tool has no permissions or owner — using defaults (owner=root, all=r--)"
+                                    );
+                                }
+                                p
+                            }
+                        };
+
+                        let entry = ToolEntry::new(
+                            name,
+                            service_name.to_string(),
+                            match desc.status.state.as_str() {
+                                "available" => ToolState::Available,
+                                "degraded" => ToolState::Degraded,
+                                _ => ToolState::Unavailable,
+                            },
+                            match &desc.visibility {
+                                ToolVisibilitySpec::All => ToolVisibility::All,
+                                ToolVisibilitySpec::User(u) => ToolVisibility::User(u.clone()),
+                                ToolVisibilitySpec::Crew(c) => ToolVisibility::Crew(c.clone()),
+                            },
+                            serde_json::to_value(&desc).unwrap_or_default(),
+                        )
+                        .with_capabilities(caps)
+                        .with_permissions(permissions);
+
+                        Some(entry)
+                    }
+                }
             })
             .collect();
         Ok(entries)
@@ -180,5 +230,45 @@ mod tests {
         );
         let entries = ToolScanner::scan_as_entries("svc", dir.path()).unwrap();
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn scan_as_entries_uses_explicit_permissions_block() {
+        let dir = TempDir::new().unwrap();
+        write_tool(
+            &dir,
+            "fs-read.tool.yaml",
+            "name: fs/read\ndescription: d\npermissions:\n  owner: alice\n  crew: ops\n  all: \"rwx\"\n",
+        );
+        let entries = ToolScanner::scan_as_entries("fs-svc", dir.path()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].permissions.owner, "alice");
+        assert_eq!(entries[0].permissions.crew, "ops");
+        assert_eq!(entries[0].permissions.all, "rwx");
+    }
+
+    #[test]
+    fn scan_as_entries_derives_owner_from_owner_field() {
+        let dir = TempDir::new().unwrap();
+        write_tool(
+            &dir,
+            "fs-write.tool.yaml",
+            "name: fs/write\ndescription: d\nowner: bob\n",
+        );
+        let entries = ToolScanner::scan_as_entries("fs-svc", dir.path()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].permissions.owner, "bob");
+        assert_eq!(entries[0].permissions.crew, "");      // default
+        assert_eq!(entries[0].permissions.all, "r--");    // default
+    }
+
+    #[test]
+    fn scan_as_entries_defaults_when_no_permissions_or_owner() {
+        let dir = TempDir::new().unwrap();
+        write_tool(&dir, "x-y.tool.yaml", "name: x/y\ndescription: d\n");
+        let entries = ToolScanner::scan_as_entries("svc", dir.path()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].permissions.owner, "root");
+        assert_eq!(entries[0].permissions.all, "r--");
     }
 }

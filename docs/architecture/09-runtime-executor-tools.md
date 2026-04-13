@@ -92,6 +92,8 @@ socket (`AVIX_KERNEL_SOCK` / `runtime_dir/kernel.sock`) with `_caller` always in
 **Execute permission check:** before dispatching, `RuntimeExecutor` verifies the agent's
 `spawned_by` user has execute permission on the tool. Tool owner has implicit execute;
 other users need `permissions.all` to contain `x`; `root` is always allowed.
+`ToolPermissions` is loaded from the tool's `*.tool.yaml` descriptor at scan time
+(see `docs/architecture/07-services.md` § Tool Descriptor Files for derivation rules).
 
 Full namespace reference:
 

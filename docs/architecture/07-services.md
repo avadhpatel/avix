@@ -145,6 +145,7 @@ description: List open pull requests for a repository.
 status:
   state: available          # available | degraded | unavailable
   reason: null
+owner:       github-svc     # legacy single-field owner (used when permissions block absent)
 ipc:
   transport: local-ipc
   endpoint:  github-svc
@@ -153,6 +154,10 @@ streaming: false
 job:       false
 capabilities_required: [github:read]
 visibility: all             # all | {user: alice} | {crew: engineering}
+permissions:               # optional; overrides owner field when present
+  owner: github-svc
+  crew:  ""
+  all:   "r--"             # r-- | rw- | rwx
 input:
   repo: { type: string, required: true }
 output:
@@ -163,6 +168,11 @@ output:
 - `all` — visible to every user
 - `{user: alice}` — visible only to user `alice`
 - `{crew: engineering}` — visible only to members of crew `engineering`
+
+**Permissions derivation** (`ToolScanner.scan_as_entries`): explicit `permissions:` block
+wins; if absent, the bare `owner:` field seeds `ToolPermissions.owner` with the rest at
+defaults; if neither is present, `ToolPermissions::default()` applies
+(`owner: "root"`, `crew: ""`, `all: "r--"`).
 
 ---
 

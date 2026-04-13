@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::tool_registry::permissions::ToolPermissions;
+
 /// Typed tool descriptor, parsed from `<name>.tool.yaml`.
 /// Matches the format defined in docs/architecture/07-services.md § Tool Descriptor Format.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -7,8 +9,12 @@ pub struct ToolDescriptor {
     pub name: String,
     #[serde(default)]
     pub path: Option<String>,
+    /// Legacy single-field owner. When `permissions` is absent, this seeds the owner name.
     #[serde(default)]
     pub owner: Option<String>,
+    /// Full permission block. When present, takes precedence over the bare `owner` field.
+    #[serde(default)]
+    pub permissions: Option<ToolPermissions>,
     #[serde(default)]
     pub description: String,
     #[serde(default)]
@@ -109,5 +115,30 @@ mod tests {
         assert_eq!(ipc.transport, "local-ipc");
         assert_eq!(ipc.endpoint, "memfs");
         assert_eq!(ipc.method, "fs.read");
+    }
+
+    #[test]
+    fn permissions_block_parsed() {
+        let yaml = "name: fs/read\ndescription: d\npermissions:\n  owner: alice\n  crew: ops\n  all: \"r--\"\n";
+        let desc: ToolDescriptor = serde_yaml::from_str(yaml).unwrap();
+        let perms = desc.permissions.unwrap();
+        assert_eq!(perms.owner, "alice");
+        assert_eq!(perms.crew, "ops");
+        assert_eq!(perms.all, "r--");
+    }
+
+    #[test]
+    fn permissions_absent_yields_none() {
+        let desc: ToolDescriptor =
+            serde_yaml::from_str("name: fs/read\ndescription: d\n").unwrap();
+        assert!(desc.permissions.is_none());
+    }
+
+    #[test]
+    fn owner_field_without_permissions_block() {
+        let desc: ToolDescriptor =
+            serde_yaml::from_str("name: fs/read\ndescription: d\nowner: bob\n").unwrap();
+        assert_eq!(desc.owner.as_deref(), Some("bob"));
+        assert!(desc.permissions.is_none());
     }
 }
