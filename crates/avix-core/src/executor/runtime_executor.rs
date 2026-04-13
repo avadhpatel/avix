@@ -405,15 +405,39 @@ impl RuntimeExecutor {
                     reg.lookup(name).await.ok().map(|e| e.descriptor)
                 }
             };
-            if let Some(d) = desc {
-                cat1_descriptors.insert(name.clone(), d);
+            match desc {
+                Some(d) => {
+                    tracing::debug!(
+                        pid = self.pid.as_u64(),
+                        tool = %name,
+                        "Cat1 descriptor resolved from registry"
+                    );
+                    cat1_descriptors.insert(name.clone(), d);
+                }
+                None => {
+                    tracing::debug!(
+                        pid = self.pid.as_u64(),
+                        tool = %name,
+                        "Cat1 tool granted but not yet in registry — omitted from tool list"
+                    );
+                }
             }
         }
+
+        let cat1_count = cat1_descriptors.len();
         self.tools.cat1_descriptors = cat1_descriptors;
 
         let token = self.token.clone();
         let spawned_by = self.spawned_by.clone();
         self.tools.refresh_tool_list(&token, &spawned_by);
+
+        tracing::debug!(
+            pid = self.pid.as_u64(),
+            cat2_count = self.tools.registered_cat2.len(),
+            cat1_count,
+            total = self.tools.tool_list.len(),
+            "tool list refreshed"
+        );
     }
 
     pub fn current_tool_list(&self) -> Vec<serde_json::Value> {

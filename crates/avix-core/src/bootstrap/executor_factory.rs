@@ -66,6 +66,7 @@ impl IpcExecutorFactory {
     /// Wire in the real `ToolRegistry` after phase3 construction.
     pub async fn set_tool_registry(&self, registry: Arc<ToolRegistry>) {
         *self.tool_registry.lock().await = Some(registry);
+        info!("real ToolRegistry injected into IpcExecutorFactory");
     }
 
     pub fn with_tracer(mut self, tracer: Arc<Tracer>) -> Self {
@@ -111,9 +112,11 @@ impl AgentExecutorFactory for IpcExecutorFactory {
             let registry_opt = tool_registry_handle.lock().await.clone();
             let spawn_result = match registry_opt {
                 Some(registry) => {
+                    tracing::debug!(pid = pid.as_u64(), "spawning executor with real ToolRegistry");
                     RuntimeExecutor::spawn_with_real_registry(params, registry).await
                 }
                 None => {
+                    warn!(pid = pid.as_u64(), "real ToolRegistry not yet available — spawning executor with mock registry");
                     use crate::executor::runtime_executor::MockToolRegistry;
                     let mock = Arc::new(MockToolRegistry::new());
                     RuntimeExecutor::spawn_with_registry(params, mock).await

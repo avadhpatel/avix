@@ -7,6 +7,7 @@ use crate::ipc::{
 };
 use crate::llm_svc::adapter::AvixToolCall;
 use tokio::net::UnixStream;
+use tracing::{debug, warn};
 
 /// Dispatch a kernel syscall tool call to the kernel IPC server.
 ///
@@ -43,25 +44,43 @@ pub async fn dispatch_kernel_syscall(
         params,
     };
 
+    debug!(
+        syscall = %call.name,
+        socket = %socket_path,
+        pid = agent_pid,
+        "dispatching kernel syscall"
+    );
+
     // ADR-05: fresh connection per call
-    let mut stream = UnixStream::connect(&socket_path)
-        .await
-        .map_err(|e| AvixError::Io(format!("kernel IPC connect to '{socket_path}' failed: {e}")))?;
+    let mut stream = UnixStream::connect(&socket_path).await.map_err(|e| {
+        warn!(syscall = %call.name, socket = %socket_path, error = %e, "kernel IPC connect failed");
+        AvixError::Io(format!("kernel IPC connect to '{socket_path}' failed: {e}"))
+    })?;
 
-    frame::write_to(&mut stream, &rpc_req)
-        .await
-        .map_err(|e| AvixError::Io(format!("kernel IPC write failed: {e}")))?;
+    frame::write_to(&mut stream, &rpc_req).await.map_err(|e| {
+        warn!(syscall = %call.name, error = %e, "kernel IPC write failed");
+        AvixError::Io(format!("kernel IPC write failed: {e}"))
+    })?;
 
-    let response: JsonRpcResponse = frame::read_from(&mut stream)
-        .await
-        .map_err(|e| AvixError::Io(format!("kernel IPC read failed: {e}")))?;
+    let response: JsonRpcResponse = frame::read_from(&mut stream).await.map_err(|e| {
+        warn!(syscall = %call.name, error = %e, "kernel IPC read failed");
+        AvixError::Io(format!("kernel IPC read failed: {e}"))
+    })?;
 
     if let Some(err) = response.error {
+        warn!(
+            syscall = %call.name,
+            rpc_code = err.code,
+            rpc_message = %err.message,
+            "kernel syscall returned RPC error"
+        );
         return Err(AvixError::Io(format!(
             "kernel syscall '{}' error {}: {}",
             call.name, err.code, err.message
         )));
     }
+
+    debug!(syscall = %call.name, "kernel syscall completed");
 
     response
         .result

@@ -297,16 +297,35 @@ impl RuntimeExecutor {
             .as_ref()
             .map(|e: &ToolEntry| &e.descriptor)
             .ok_or_else(|| {
+                tracing::warn!(
+                    pid = self.pid.as_u64(),
+                    tool = %call.name,
+                    "Cat1 tool not found in registry"
+                );
                 AvixError::ConfigParse(format!("tool '{}' not found in registry", call.name))
             })?;
 
         // 2. Check execute permission
         if let Some(ref entry) = entry_opt {
-            check_tool_execute_permission(entry, &self.spawned_by)?;
+            if let Err(e) = check_tool_execute_permission(entry, &self.spawned_by) {
+                tracing::warn!(
+                    pid = self.pid.as_u64(),
+                    tool = %call.name,
+                    user = %self.spawned_by,
+                    error = %e,
+                    "Cat1 tool execute permission denied"
+                );
+                return Err(e);
+            }
         }
 
         // 3. Kernel tools have no IPC binding — route to kernel socket
         if descriptor.get("ipc").map_or(true, |v| v.is_null()) {
+            tracing::debug!(
+                pid = self.pid.as_u64(),
+                tool = %call.name,
+                "routing to kernel IPC server (no IPC binding)"
+            );
             return dispatch_kernel_syscall(
                 call,
                 self.pid.as_u64(),
@@ -318,6 +337,12 @@ impl RuntimeExecutor {
 
         // 4. Dispatch via service IPC socket
         let caller_scoped = is_caller_scoped_tool(&call.name, descriptor);
+        tracing::debug!(
+            pid = self.pid.as_u64(),
+            tool = %call.name,
+            caller_scoped,
+            "routing Cat1 tool to service IPC"
+        );
         dispatch_cat1_tool(
             call,
             descriptor,
