@@ -310,6 +310,18 @@ LLM call returns.
 
 ---
 
+## Session Management
+
+### Session Delete (`avix session delete <id>`)
+
+**Plan**: [session-gap-B-session-delete.md](session-gap-B-session-delete.md)
+
+`SessionStore::delete()` exists at the store layer but is not wired to `PersistentSessionStore`,
+the IPC server (`kernel/proc/session/delete`), the ATP gateway, or `avix session delete <id>` CLI.
+Workaround: stop kernel, delete `<root>/data/sessions.redb`.
+
+---
+
 ## Notes
 
 - Permission model defaults to `all: r--` (everyone can read but not execute)
