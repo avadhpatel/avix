@@ -328,3 +328,53 @@ Workaround: stop kernel, delete `<root>/data/sessions.redb`.
 - Admin role gets full rwx on all tools
 - VFS needs caller context to compute per-agent state - this may require changes to how VFS resolves the calling agent's identity
 - HIL path uses existing `cap/request-tool` - just need to reference it in YAML
+
+---
+
+## Agent Tool Visibility — Cat1 Tools Not Sent to LLM
+
+**Problem**: The LLM only receives tool descriptors for Cat2 tools (`agent/`, `pipe/`, `cap/`,
+`job/`). Cat1 service tools (`fs/read`, `fs/write`, etc.) are granted in the capability token
+but never appear in the tool list sent to Claude each turn. The agent cannot use them — the LLM
+doesn't know they exist as callable tools.
+
+**Root cause**: `current_tool_list()` is built solely from `compute_cat2_tools()`. Cat1 tool
+descriptors are never fetched or stored by `RuntimeExecutor`.
+
+**Related bugs discovered during investigation**:
+
+1. **`llm/*` tools incorrectly classified as Cat2** (`src/types/capability_map.rs:40`)  
+   `llm/complete`, `llm/generate-image`, etc. are listed in `CapabilityToolMap` under
+   `"llm:inference"` etc., making `is_cat2_tool("llm/complete")` return `true` at runtime.
+   They should be Cat1 service tools dispatched via `router.svc → llm.svc`. Consequence:
+   `dispatch_category2` is called but has no handler for them — hits the `_` catch-all stub.
+
+2. **`llm/complete` gets an empty descriptor** (`src/executor/tool_registration.rs`)  
+   `cat2_tool_descriptor("llm/complete")` falls to the `_ =>` arm and returns `description: ""`
+   with an empty schema. The LLM sees a useless tool definition and calls it blindly.
+
+3. **`ipc.tool-add` discards the full descriptor** (`src/executor/tool_manager.rs`)  
+   When a service registers a tool via `ipc.tool-add`, only the tool name is tracked in
+   `registered_cat2`. The full JSON schema descriptor is discarded. There is nowhere to store
+   Cat1 tool descriptors received at runtime.
+
+4. **`dispatch_via_router` is a stub** (`dispatch_manager.rs:278`)  
+   Cat1 tool calls route to `dispatch_via_router`, which returns a placeholder. No IPC to
+   `router.svc` is wired.
+
+**Required fixes** (in implementation order):
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `src/types/capability_map.rs` | Remove `llm/*` entries — they are Cat1 service tools, not Cat2 |
+| 2 | `src/executor/tool_manager.rs` | Add `cat1_descriptors: HashMap<String, serde_json::Value>` field; store full descriptor on `ipc.tool-add` |
+| 3 | `src/executor/runtime_executor.rs` / `dispatch_manager.rs` | In `current_tool_list()`, merge Cat2 descriptors + Cat1 descriptors filtered to token's `granted_tools` |
+| 4 | `src/executor/tool_registration.rs` | Remove dead `_ =>` fallback from `cat2_tool_descriptor` (or panic — unknown Cat2 names are a bug) |
+| 5 | `dispatch_manager.rs:dispatch_via_router` | Wire actual IPC call to `router.svc` socket for Cat1 dispatch |
+
+**Expected outcome**: When `fs.svc` and `llm.svc` are running and have called `ipc.tool-add`,
+the LLM receives complete tool descriptors for all granted tools and can call them. No special
+`proc/tools/list` discovery tool is needed — the standard tool interface is complete.
+
+**Note**: Fix 5 (router wiring) depends on `router.svc` being implemented. Fixes 1–4 are
+independent and unblock correct tool visibility immediately.
