@@ -2,6 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use crate::executor::ipc_dispatch::dispatch_cat1_tool;
+use crate::executor::syscall_dispatch::dispatch_kernel_syscall;
+use crate::tool_registry::ToolEntry;
+
 use tokio_util::sync::CancellationToken;
 
 use crate::error::AvixError;
@@ -274,14 +278,55 @@ impl RuntimeExecutor {
         })
     }
 
-    /// Dispatch a Category 1 or 3 tool call via router.svc.
+    /// Dispatch a Category 1 tool call via its registered IPC endpoint.
+    ///
+    /// Looks up the tool's descriptor from the real `ToolRegistry` (wired in gap-A),
+    /// checks execute permission, then dispatches over a fresh Unix socket (ADR-05).
+    /// Kernel tools (no `ipc` binding) are forwarded to the kernel IPC server.
     pub async fn dispatch_via_router(
         &self,
         call: &AvixToolCall,
     ) -> Result<serde_json::Value, AvixError> {
-        Ok(serde_json::json!({
-            "content": format!("Tool '{}' executed via router (IPC dispatch not yet wired)", call.name)
-        }))
+        // 1. Look up ToolEntry from real registry; mock registry always returns None
+        let entry_opt = match &self.registry_ref {
+            super::RegistryRef::Real(reg) => reg.lookup(&call.name).await.ok(),
+            super::RegistryRef::Mock(_) => None,
+        };
+
+        let descriptor = entry_opt
+            .as_ref()
+            .map(|e: &ToolEntry| &e.descriptor)
+            .ok_or_else(|| {
+                AvixError::ConfigParse(format!("tool '{}' not found in registry", call.name))
+            })?;
+
+        // 2. Check execute permission
+        if let Some(ref entry) = entry_opt {
+            check_tool_execute_permission(entry, &self.spawned_by)?;
+        }
+
+        // 3. Kernel tools have no IPC binding — route to kernel socket
+        if descriptor.get("ipc").map_or(true, |v| v.is_null()) {
+            return dispatch_kernel_syscall(
+                call,
+                self.pid.as_u64(),
+                &self.session_id,
+                &self.runtime_dir,
+            )
+            .await;
+        }
+
+        // 4. Dispatch via service IPC socket
+        let caller_scoped = is_caller_scoped_tool(&call.name, descriptor);
+        dispatch_cat1_tool(
+            call,
+            descriptor,
+            self.pid.as_u64(),
+            &self.session_id,
+            &self.runtime_dir,
+            caller_scoped,
+        )
+        .await
     }
 
     pub async fn dispatch_category2(
@@ -1327,6 +1372,48 @@ impl RuntimeExecutor {
     }
 }
 
+/// Check that `username` has execute (`x`) permission on `entry`.
+///
+/// Rules:
+/// - `username == "root"` → always allow (admin)
+/// - `username == entry.permissions.owner` → check owner bits contain `x`
+/// - otherwise → check `entry.permissions.all` contains `x`
+fn check_tool_execute_permission(entry: &ToolEntry, username: &str) -> Result<(), AvixError> {
+    // Root (admin) is always allowed
+    if username == "root" {
+        return Ok(());
+    }
+    let perms = &entry.permissions;
+    // The tool owner has implicit execute permission on their own tool
+    if username == perms.owner {
+        return Ok(());
+    }
+    // All other users must have 'x' in the `all` permission bits
+    if perms.all.contains('x') {
+        Ok(())
+    } else {
+        Err(AvixError::CapabilityDenied(format!(
+            "agent '{}' does not have execute permission on tool '{}'",
+            username,
+            entry.name.as_str()
+        )))
+    }
+}
+
+/// Returns true if the tool should have `_caller` injected into its params.
+///
+/// Kernel tools (namespace `kernel/`) are always caller-scoped. For service tools,
+/// check the descriptor's `caller_scoped` field.
+fn is_caller_scoped_tool(name: &str, descriptor: &serde_json::Value) -> bool {
+    if name.starts_with("kernel/") {
+        return true;
+    }
+    descriptor
+        .get("caller_scoped")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1338,6 +1425,7 @@ mod tests {
     use crate::llm_svc::adapter::AvixToolCall;
     use crate::types::{token::CapabilityToken, Pid};
     use serde_json::json;
+    use super::check_tool_execute_permission;
 
     fn make_params(pid_val: u64, caps: &[&str]) -> SpawnParams {
         SpawnParams {
@@ -1352,6 +1440,27 @@ mod tests {
             denied_tools: vec![],
             context_limit: 0,
             runtime_dir: std::path::PathBuf::new(),
+            invocation_id: String::new(),
+        }
+    }
+
+    fn make_params_with_dir(
+        pid_val: u64,
+        caps: &[&str],
+        runtime_dir: std::path::PathBuf,
+    ) -> SpawnParams {
+        SpawnParams {
+            pid: Pid::from_u64(pid_val),
+            agent_name: "test-agent".into(),
+            goal: "test goal".into(),
+            spawned_by: "alice".into(),
+            session_id: "sess-test".into(),
+            token: CapabilityToken::test_token(caps),
+            system_prompt: None,
+            selected_model: "claude-sonnet-4".into(),
+            denied_tools: vec![],
+            context_limit: 0,
+            runtime_dir,
             invocation_id: String::new(),
         }
     }
@@ -1953,5 +2062,156 @@ mod tests {
         let names: Vec<_> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
         assert!(names.contains(&"fs/read"), "granted tool should appear");
         assert!(!names.contains(&"fs/write"), "non-granted tool should be excluded");
+    }
+
+    // GAP-B: dispatch_via_router forwards call to mock IPC service and returns result
+    #[tokio::test]
+    async fn test_dispatch_via_router_with_ipc_binding() {
+        use crate::tool_registry::{ToolEntry, ToolRegistry, ToolState, ToolVisibility};
+        use crate::tool_registry::permissions::ToolPermissions;
+        use crate::types::tool::ToolName;
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("fs.sock");
+
+        // Spawn a mock service listener
+        let sock_clone = sock.clone();
+        let listener = UnixListener::bind(&sock_clone).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let req: serde_json::Value = crate::ipc::frame::read_from(&mut conn).await.unwrap();
+            let resp = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "result": {"content": "file contents here"},
+            });
+            let bytes = crate::ipc::frame::encode(&resp).unwrap();
+            conn.write_all(&bytes).await.unwrap();
+        });
+
+        // Register a tool with IPC binding pointing to our mock service
+        let reg = Arc::new(ToolRegistry::new());
+        let descriptor = serde_json::json!({
+            "name": "fs/read",
+            "description": "Read a file",
+            "ipc": {
+                "transport": "local-ipc",
+                "endpoint": "fs",
+                "method": "fs.read"
+            }
+        });
+        reg.add(
+            "fs.svc",
+            vec![
+                ToolEntry::new(
+                    ToolName::parse("fs/read").unwrap(),
+                    "fs.svc".into(),
+                    ToolState::Available,
+                    ToolVisibility::All,
+                    descriptor,
+                )
+                .with_permissions(ToolPermissions::new("root".into(), "".into(), "rwx".into())),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let params = make_params_with_dir(10200, &["fs/read"], dir.path().to_path_buf());
+        let executor = RuntimeExecutor::spawn_with_real_registry(params, Arc::clone(&reg))
+            .await
+            .unwrap();
+
+        let call = AvixToolCall {
+            call_id: "r1".into(),
+            name: "fs/read".into(),
+            args: serde_json::json!({"path": "/data/file.txt"}),
+        };
+
+        let result = executor.dispatch_via_router(&call).await.unwrap();
+        assert_eq!(result["content"], "file contents here");
+        let _ = server.await;
+    }
+
+    // GAP-B: tool not in registry returns ConfigParse error
+    #[tokio::test]
+    async fn test_dispatch_via_router_tool_not_in_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = Arc::new(crate::tool_registry::ToolRegistry::new());
+        let params = make_params_with_dir(10201, &["fs/read"], dir.path().to_path_buf());
+        let executor = RuntimeExecutor::spawn_with_real_registry(params, Arc::clone(&reg))
+            .await
+            .unwrap();
+
+        let call = AvixToolCall {
+            call_id: "r2".into(),
+            name: "fs/read".into(),
+            args: serde_json::json!({}),
+        };
+        let result = executor.dispatch_via_router(&call).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not found in registry"), "got: {err}");
+    }
+
+    // GAP-B: check_tool_execute_permission — owner with rwx allowed
+    #[test]
+    fn test_permission_owner_rwx_allowed() {
+        use crate::tool_registry::{ToolEntry, ToolState, ToolVisibility};
+        use crate::tool_registry::permissions::ToolPermissions;
+        use crate::types::tool::ToolName;
+
+        let entry = ToolEntry::new(
+            ToolName::parse("fs/read").unwrap(),
+            "alice".into(),
+            ToolState::Available,
+            ToolVisibility::All,
+            serde_json::json!({}),
+        )
+        .with_permissions(ToolPermissions::new("alice".into(), "".into(), "r--".into()));
+
+        assert!(check_tool_execute_permission(&entry, "alice").is_ok());
+    }
+
+    // GAP-B: non-owner with all=r-- denied
+    #[test]
+    fn test_permission_non_owner_no_execute_denied() {
+        use crate::tool_registry::{ToolEntry, ToolState, ToolVisibility};
+        use crate::tool_registry::permissions::ToolPermissions;
+        use crate::types::tool::ToolName;
+
+        let entry = ToolEntry::new(
+            ToolName::parse("fs/read").unwrap(),
+            "alice".into(),
+            ToolState::Available,
+            ToolVisibility::All,
+            serde_json::json!({}),
+        )
+        .with_permissions(ToolPermissions::new("alice".into(), "".into(), "r--".into()));
+
+        let result = check_tool_execute_permission(&entry, "bob");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("execute permission"), "got: {err}");
+    }
+
+    // GAP-B: root is always allowed
+    #[test]
+    fn test_permission_root_always_allowed() {
+        use crate::tool_registry::{ToolEntry, ToolState, ToolVisibility};
+        use crate::tool_registry::permissions::ToolPermissions;
+        use crate::types::tool::ToolName;
+
+        let entry = ToolEntry::new(
+            ToolName::parse("fs/read").unwrap(),
+            "alice".into(),
+            ToolState::Available,
+            ToolVisibility::All,
+            serde_json::json!({}),
+        )
+        .with_permissions(ToolPermissions::new("alice".into(), "".into(), "---".into()));
+
+        assert!(check_tool_execute_permission(&entry, "root").is_ok());
     }
 }

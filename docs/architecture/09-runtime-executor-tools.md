@@ -82,9 +82,16 @@ is called only on error/kill — the executor is about to exit.
 Registered by services (e.g., `fs/read`, `fs/write` by `fs.svc`; `llm/complete` by
 `llm.svc`). The LLM can call them if the agent's `CapabilityToken` grants access.
 
-`RuntimeExecutor` forwards the call to `router.svc`, which dispatches it to the owning
-service. The agent's PID is injected into the request as `_caller` (enforced by
-`router.svc` — the caller cannot spoof this field).
+`RuntimeExecutor` dispatches the call directly over a fresh Unix socket connection
+(ADR-05) to the service identified by the tool's `IpcBinding.endpoint`. The JSON-RPC
+method called is `IpcBinding.method`. If the service is caller-scoped, `_caller` (PID +
+session ID) is injected into the request params before sending. Kernel tools
+(namespace `kernel/`) have no `IpcBinding` and are forwarded to the kernel IPC server
+socket (`AVIX_KERNEL_SOCK` / `runtime_dir/kernel.sock`) with `_caller` always injected.
+
+**Execute permission check:** before dispatching, `RuntimeExecutor` verifies the agent's
+`spawned_by` user has execute permission on the tool. Tool owner has implicit execute;
+other users need `permissions.all` to contain `x`; `root` is always allowed.
 
 Full namespace reference:
 

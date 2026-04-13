@@ -1,7 +1,7 @@
 # tool-visibility-gap-B — Cat1 IPC Dispatch via Router
 
-**Status**: Not started  
-**Last Updated**: 2026-04-12  
+**Status**: Complete  
+**Last Updated**: 2026-04-13  
 **Depends on**: `tool-visibility-gap-A` (registry must be wired into executor first)
 
 ---
