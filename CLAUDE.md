@@ -165,6 +165,8 @@ Use this mode **only** when the user explicitly tells you to implement from an a
 2. Implement **strictly one file at a time**, following the exact order specified in the dev plan:
    - Make **only** the minimal code changes required for that specific file.
    - Ensure every change **compiles cleanly** (run `cargo check` or `cargo build` **only** on the affected crate/package).
+   - Always add tracing logs to the changes at the right level for better
+     debuggability, error tracking etc.
    - Add or update **only the necessary tests** needed to achieve the target test coverage for the code touched (see "Testing" section in Code Conventions).
    - Run **only the tests that apply to the code touched** (use precise filters such as `cargo test <module_path>::` or `cargo test --test <test_file>`). **Never** run full workspace tests, `cargo test`, or tests for untouched code.
    - Verify that the relevant tests pass.
