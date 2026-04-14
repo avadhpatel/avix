@@ -371,8 +371,9 @@ pub async fn invoke_handler(
                     "entries": entries,
                 }));
             }
-            let json_str = serde_json::to_string(&result).map_err(|e| internal(e.to_string()))?;
-            Ok(Json(Value::String(json_str)))
+            Ok(Json(
+                serde_json::to_value(&result).map_err(|e| internal(e.to_string()))?,
+            ))
         }
 
         "get_services" => {

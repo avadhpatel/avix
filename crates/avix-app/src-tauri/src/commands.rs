@@ -4,10 +4,14 @@ use tauri::State;
 use avix_client_core::atp::types::HilOutcome;
 use avix_client_core::commands::spawn_agent::spawn_agent as core_spawn_agent;
 use avix_client_core::commands::{
-    get_invocation as core_get_invocation, list_agents as core_list_agents,
+    get_invocation as core_get_invocation,
+    get_invocation_conversation as core_get_invocation_conversation,
+    get_session as core_get_session, list_agents as core_list_agents,
     list_installed as core_list_installed, list_invocations as core_list_invocations,
+    list_invocations_for_session as core_list_invocations_for_session,
     list_services as core_list_services, list_tools as core_list_tools,
     pipe_text as core_pipe_text, resolve_hil as core_resolve_hil,
+    resume_session as core_resume_session,
 };
 use avix_client_core::state::SharedState;
 
@@ -342,6 +346,100 @@ pub async fn list_installed_agents(state: State<'_, SharedState>) -> Result<Stri
                 .await
                 .map_err(|e| format!("Failed to list installed agents: {:?}", e))
                 .and_then(|agents| serde_json::to_string(&agents).map_err(|e| e.to_string()))
+        } else {
+            Err("Not connected".to_string())
+        }
+    } else {
+        Err("No dispatcher".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn get_session(
+    state: State<'_, SharedState>,
+    session_id: String,
+) -> Result<Option<String>, String> {
+    let s = state.read().await;
+    if let Some(dispatcher) = &s.dispatcher {
+        if let Some(_session) = s.connection_status.session_id() {
+            match core_get_session(dispatcher, &session_id).await {
+                Ok(Some(session)) => serde_json::to_string(&session)
+                    .map(Some)
+                    .map_err(|e| e.to_string()),
+                Ok(None) => Ok(None),
+                Err(e) => Err(format!("Failed to get session: {:?}", e)),
+            }
+        } else {
+            Err("Not connected".to_string())
+        }
+    } else {
+        Err("No dispatcher".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn get_session_messages(
+    state: State<'_, SharedState>,
+    session_id: String,
+) -> Result<serde_json::Value, String> {
+    let s = state.read().await;
+    if let Some(dispatcher) = &s.dispatcher {
+        if let Some(_session) = s.connection_status.session_id() {
+            let dispatcher = dispatcher.clone();
+            drop(s);
+            let invocations = core_list_invocations_for_session(&dispatcher, &session_id)
+                .await
+                .map_err(|e| format!("Failed to list invocations: {:?}", e))?;
+            let handles: Vec<_> = invocations
+                .iter()
+                .map(|inv| {
+                    let d = dispatcher.clone();
+                    let id = inv["id"].as_str().unwrap_or("").to_string();
+                    tokio::spawn(async move {
+                        core_get_invocation_conversation(&d, &id)
+                            .await
+                            .unwrap_or_default()
+                    })
+                })
+                .collect();
+            let mut result = Vec::with_capacity(invocations.len());
+            for (inv, handle) in invocations.iter().zip(handles) {
+                let entries = handle.await.map_err(|e| format!("Join error: {:?}", e))?;
+                let inv_id = inv["id"].as_str().unwrap_or("");
+                let agent_name = inv["agentName"]
+                    .as_str()
+                    .or_else(|| inv["agent_name"].as_str())
+                    .unwrap_or("");
+                let status = inv["status"].as_str().unwrap_or("");
+                result.push(serde_json::json!({
+                    "invocationId": inv_id,
+                    "agentName": agent_name,
+                    "status": status,
+                    "entries": entries,
+                }));
+            }
+            serde_json::to_value(&result).map_err(|e| e.to_string())
+        } else {
+            Err("Not connected".to_string())
+        }
+    } else {
+        Err("No dispatcher".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn resume_session(
+    state: State<'_, SharedState>,
+    session_id: String,
+    input: String,
+) -> Result<(), String> {
+    let s = state.read().await;
+    if let Some(dispatcher) = &s.dispatcher {
+        if let Some(_session) = s.connection_status.session_id() {
+            core_resume_session(dispatcher, &session_id, &input)
+                .await
+                .map(|_| ())
+                .map_err(|e| format!("Failed to resume session: {:?}", e))
         } else {
             Err("Not connected".to_string())
         }

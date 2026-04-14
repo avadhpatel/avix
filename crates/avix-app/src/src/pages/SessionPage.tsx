@@ -143,9 +143,8 @@ const SessionPage: React.FC = () => {
     if (!selectedSessionId) return;
     setLoadingMessages(true);
     try {
-      const jsonStr = await invoke<string>('get_session_messages', { session_id: selectedSessionId });
-      const parsed = JSON.parse(jsonStr) as InvocationMessages[];
-      setInvocationMessages(parsed);
+      const parsed = await invoke<InvocationMessages[]>('get_session_messages', { session_id: selectedSessionId });
+      setInvocationMessages(Array.isArray(parsed) ? parsed : []);
     } catch {
       setInvocationMessages([]);
     } finally {
