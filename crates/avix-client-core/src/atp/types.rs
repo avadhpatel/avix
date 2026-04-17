@@ -138,11 +138,15 @@ pub struct SessionReadyBody {
 
 /// Body for `agent.spawned` events.
 /// `pid` is string-encoded to avoid u64 precision loss in JavaScript JSON.
+/// `session_id` is the logical agent session UUID (maps the agent to its conversation session).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSpawnedBody {
     pub pid: String,
     pub name: String,
     pub goal: String,
+    /// Logical agent session UUID — used by the frontend to associate pid → session.
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
 }
 
 /// Body for `agent.output` events (full text, non-streaming).

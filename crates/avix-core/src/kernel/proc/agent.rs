@@ -60,10 +60,11 @@ impl AgentManager {
         name: &str,
         goal: &str,
         session_id: &str,
+        atp_session_id: &str,
         caller_identity: &str,
         parent_pid: Option<u64>,
     ) -> Result<u64, AvixError> {
-        info!(name, goal, session_id, ?parent_pid, "spawning agent");
+        info!(name, goal, session_id, atp_session_id, ?parent_pid, "spawning agent");
 
         let pid = Pid::generate().as_u64();
         debug!(pid, "allocated PID");
@@ -157,6 +158,7 @@ impl AgentManager {
                 goal: goal.to_string(),
                 spawned_by: caller_identity.to_string(),
                 session_id: effective_session_id.clone(),
+                atp_session_id: atp_session_id.to_string(),
                 token,
                 system_prompt: None,
                 selected_model: String::new(),
@@ -347,8 +349,8 @@ mod tests {
             Arc::clone(&active_sessions),
         );
 
-        let pid1 = manager.spawn("agent-a", "goal-a", "sess-1", "kernel", None).await.unwrap();
-        let pid2 = manager.spawn("agent-b", "goal-b", "sess-1", "kernel", None).await.unwrap();
+        let pid1 = manager.spawn("agent-a", "goal-a", "sess-1", "", "kernel", None).await.unwrap();
+        let pid2 = manager.spawn("agent-b", "goal-b", "sess-1", "", "kernel", None).await.unwrap();
 
         assert_eq!(count.load(Ordering::SeqCst), 2);
         assert_eq!(table.get(Pid::from_u64(pid1)).await.unwrap().status, ProcessStatus::Running);
@@ -380,7 +382,7 @@ mod tests {
             Arc::clone(&active_sessions),
         );
 
-        let pid = manager.spawn("agent", "goal", "sess", "kernel", None).await.unwrap();
+        let pid = manager.spawn("agent", "goal", "sess", "", "kernel", None).await.unwrap();
         let entry = table.get(Pid::from_u64(pid)).await.unwrap();
         assert_eq!(entry.status, ProcessStatus::Running);
         assert!(manager.task_handles.lock().await.is_empty());
@@ -406,8 +408,8 @@ mod tests {
             Arc::clone(&active_sessions),
         );
 
-        let pid1 = manager.spawn("agent1", "goal1", "sess-1", "kernel", None).await.unwrap();
-        let pid2 = manager.spawn("agent2", "goal2", "sess-1", "kernel", None).await.unwrap();
+        let pid1 = manager.spawn("agent1", "goal1", "sess-1", "", "kernel", None).await.unwrap();
+        let pid2 = manager.spawn("agent2", "goal2", "sess-1", "", "kernel", None).await.unwrap();
 
         let active = manager.list().await.unwrap();
         assert_eq!(active.len(), 2);
@@ -446,7 +448,7 @@ mod tests {
             Arc::clone(&active_sessions),
         );
 
-        let pid = manager.spawn("agent-a", "goal", "", "alice", None).await.unwrap();
+        let pid = manager.spawn("agent-a", "goal", "", "", "alice", None).await.unwrap();
         let sessions = sstore.list_for_user("alice").await.unwrap();
         assert_eq!(sessions.len(), 1);
         assert!(sessions[0].pids.contains(&pid));
@@ -479,12 +481,12 @@ mod tests {
             Arc::clone(&active_sessions),
         );
 
-        let parent_pid = manager.spawn("parent-agent", "parent goal", "", "alice", None).await.unwrap();
+        let parent_pid = manager.spawn("parent-agent", "parent goal", "", "", "alice", None).await.unwrap();
         let sessions = sstore.list_for_user("alice").await.unwrap();
         assert_eq!(sessions.len(), 1);
         let parent_session_id = sessions[0].id;
 
-        let child_pid = manager.spawn("child-agent", "child goal", "", "alice", Some(parent_pid)).await.unwrap();
+        let child_pid = manager.spawn("child-agent", "child goal", "", "", "alice", Some(parent_pid)).await.unwrap();
 
         let session = sstore.get(&parent_session_id).await.unwrap().unwrap();
         assert!(session.pids.contains(&parent_pid));

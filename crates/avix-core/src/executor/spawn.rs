@@ -8,6 +8,10 @@ pub struct SpawnParams {
     pub spawned_by: String,
     pub token: CapabilityToken,
     pub session_id: String,
+    /// ATP connection session ID (from `ValidatedCmd.caller_session_id`).
+    /// Used by `IpcExecutorFactory` for `event_bus.*` calls so the ownership gate
+    /// (`conn.session_id == event.owner_session`) passes correctly.
+    pub atp_session_id: String,
     /// System prompt from the agent manifest's `defaults.systemPrompt`.
     pub system_prompt: Option<String>,
     /// The resolved model name (from `--model` arg or `KernelConfig.models.default`).

@@ -235,7 +235,7 @@ async fn spawn_creates_records_and_first_turn_transitions_to_idle() {
     let rx = bus.subscribe();
 
     let pid = handler
-        .spawn("researcher", "What is the capital of France?", "", "alice", None)
+        .spawn("researcher", "What is the capital of France?", "", "", "alice", None)
         .await
         .unwrap();
 
@@ -295,7 +295,7 @@ async fn follow_up_via_resume_session_reuses_session() {
     // ── Turn 1 ────────────────────────────────────────────────────────────────
     let rx1 = bus.subscribe();
     let pid1 = handler
-        .spawn("researcher", "What is the capital of France?", "", "alice", None)
+        .spawn("researcher", "What is the capital of France?", "", "", "alice", None)
         .await
         .unwrap();
 
@@ -342,7 +342,7 @@ async fn atp_events_emitted_in_correct_order() {
 
     let mut rx = bus.subscribe();
     let pid = handler
-        .spawn("solver", "What is the answer?", "", "alice", None)
+        .spawn("solver", "What is the answer?", "", "", "alice", None)
         .await
         .unwrap();
 
@@ -401,7 +401,7 @@ async fn abort_agent_kills_invocation_and_fails_session() {
     // Spawn and wait for the first turn to complete (Waiting).
     let rx = bus.subscribe();
     let pid = handler
-        .spawn("researcher", "Some task", "", "alice", None)
+        .spawn("researcher", "Some task", "", "", "alice", None)
         .await
         .unwrap();
     wait_for_status(rx, pid, "waiting").await;
@@ -450,7 +450,7 @@ async fn full_lifecycle_spawn_followup_stop() {
     // ── Turn 1 ────────────────────────────────────────────────────────────────
     let rx1 = bus.subscribe();
     let pid1 = handler
-        .spawn("researcher", "Capital of France?", "", "alice", None)
+        .spawn("researcher", "Capital of France?", "", "", "alice", None)
         .await
         .unwrap();
     wait_for_status(rx1, pid1, "waiting").await;

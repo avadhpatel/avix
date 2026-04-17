@@ -158,6 +158,7 @@ mod tests {
             context_limit: 0,
             runtime_dir: std::path::PathBuf::new(),
             invocation_id: String::new(),
+            atp_session_id: String::new(),
         };
         let vfs = Arc::new(VfsRouter::new());
         let executor = RuntimeExecutor::spawn_with_registry(params, registry)
@@ -193,6 +194,7 @@ mod tests {
             context_limit: 0,
             runtime_dir: std::path::PathBuf::new(),
             invocation_id: String::new(),
+            atp_session_id: String::new(),
         };
         let executor = RuntimeExecutor::spawn_with_registry(params, registry)
             .await

@@ -43,6 +43,7 @@ async fn spawn_test_executor(username: &str, pid: u64) -> RuntimeExecutor {
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
         invocation_id: String::new(),
+            atp_session_id: String::new(),
     };
     RuntimeExecutor::spawn_with_registry(params, registry)
         .await

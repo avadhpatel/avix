@@ -94,18 +94,22 @@ impl AgentExecutorFactory for IpcExecutorFactory {
         let pid = params.pid;
         let agent_name = params.agent_name.clone();
         let goal = params.goal.clone();
-        let session_id = params.session_id.clone();
+        let agent_session_id = params.session_id.clone();   // logical agent session UUID
+        let atp_session_id = params.atp_session_id.clone(); // ATP connection session ID — for event routing
         let invocation_id = params.invocation_id.clone();
         let signal_channels = self.signal_channels.clone();
         let tool_registry_handle = Arc::clone(&self.tool_registry);
 
         let handle = tokio::spawn(async move {
-            tracer.agent_spawn(pid.as_u64(), &agent_name, &goal, &session_id);
+            tracer.agent_spawn(pid.as_u64(), &agent_name, &goal, &agent_session_id);
+
+            // Emit agent.spawned so the UI can register the new agent immediately.
+            event_bus.agent_spawned(&atp_session_id, pid.as_u64(), &agent_name, &goal, &agent_session_id);
 
             let llm_client = IpcLlmClient::new(
                 llm_sock.to_string_lossy().to_string(),
                 pid.as_u64(),
-                session_id.clone(),
+                agent_session_id.clone(),
             );
 
             // Resolve real ToolRegistry if available, otherwise fall back to mock.
@@ -129,8 +133,8 @@ impl AgentExecutorFactory for IpcExecutorFactory {
                     warn!(pid = pid.as_u64(), error = %err, "executor spawn failed");
                     tracer.agent_exit(pid.as_u64(), "crashed", Some("spawn failed"));
                     let _ = process_table.set_status(pid, ProcessStatus::Crashed).await;
-                    event_bus.agent_status(&session_id, pid.as_u64(), "crashed");
-                    event_bus.agent_exit(&session_id, pid.as_u64(), 1);
+                    event_bus.agent_status(&atp_session_id, pid.as_u64(), "crashed");
+                    event_bus.agent_exit(&atp_session_id, pid.as_u64(), 1);
                     return;
                 }
             };
@@ -153,7 +157,7 @@ impl AgentExecutorFactory for IpcExecutorFactory {
             // turn the executor idles and waits for SIGSTART (next message).
             // The loop exits on SIGKILL, SIGSTOP, or an unrecoverable error.
             loop {
-                event_bus.agent_status(&session_id, pid.as_u64(), "running");
+                event_bus.agent_status(&atp_session_id, pid.as_u64(), "running");
 
                 match executor.run_with_client(&current_goal, &llm_client).await {
                     Ok(_result) => {
@@ -162,7 +166,7 @@ impl AgentExecutorFactory for IpcExecutorFactory {
                         // Persist idle state — invocation + session status → Idle.
                         executor.idle().await;
 
-                        event_bus.agent_status(&session_id, pid.as_u64(), "waiting");
+                        event_bus.agent_status(&atp_session_id, pid.as_u64(), "waiting");
                         let _ = process_table.set_status(pid, ProcessStatus::Waiting).await;
 
                         info!(pid = pid.as_u64(), "executor waiting for next goal (SIGSTART)");
@@ -188,8 +192,8 @@ impl AgentExecutorFactory for IpcExecutorFactory {
                             )
                             .await;
                         tracer.agent_exit(pid.as_u64(), "crashed", Some(&err.to_string()));
-                        event_bus.agent_status(&session_id, pid.as_u64(), "crashed");
-                        event_bus.agent_exit(&session_id, pid.as_u64(), 1);
+                        event_bus.agent_status(&atp_session_id, pid.as_u64(), "crashed");
+                        event_bus.agent_exit(&atp_session_id, pid.as_u64(), 1);
                         let _ = process_table
                             .set_status(Pid::from_u64(pid.as_u64()), ProcessStatus::Crashed)
                             .await;

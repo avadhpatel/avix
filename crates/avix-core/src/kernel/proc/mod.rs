@@ -406,10 +406,11 @@ impl ProcHandler {
         name: &str,
         goal: &str,
         session_id: &str,
+        atp_session_id: &str,
         caller_identity: &str,
         parent_pid: Option<u64>,
     ) -> Result<u64, AvixError> {
-        let pid = self.agent_manager.spawn(name, goal, session_id, caller_identity, parent_pid).await?;
+        let pid = self.agent_manager.spawn(name, goal, session_id, atp_session_id, caller_identity, parent_pid).await?;
 
         persist_agent(&self.agents_yaml_path, pid, name, goal, session_id).await?;
 
@@ -635,6 +636,7 @@ impl ProcHandler {
                 &session.primary_agent,
                 &goal,
                 &session_id.to_string(),
+                "",
                 &session.username,
                 None,
             )
@@ -713,11 +715,11 @@ mod tests {
         );
 
         let pid1 = handler
-            .spawn("agent-a", "goal-a", "sess-1", "kernel", None)
+            .spawn("agent-a", "goal-a", "sess-1", "", "kernel", None)
             .await
             .unwrap();
         let pid2 = handler
-            .spawn("agent-b", "goal-b", "sess-1", "kernel", None)
+            .spawn("agent-b", "goal-b", "sess-1", "", "kernel", None)
             .await
             .unwrap();
 
@@ -748,7 +750,7 @@ mod tests {
         let handler = ProcHandler::new(table.clone(), dir.path().join("agents.yaml"), master_key);
 
         let pid = handler
-            .spawn("agent", "goal", "sess", "kernel", None)
+            .spawn("agent", "goal", "sess", "", "kernel", None)
             .await
             .unwrap();
         let entry = table.get(Pid::from_u64(pid)).await.unwrap();
@@ -765,7 +767,7 @@ mod tests {
         let handler = ProcHandler::new(table.clone(), yaml_path.clone(), master_key);
 
         let pid = handler
-            .spawn("test_agent", "test_goal", "sess-1", "kernel", None)
+            .spawn("test_agent", "test_goal", "sess-1", "", "kernel", None)
             .await
             .unwrap();
 
@@ -792,11 +794,11 @@ mod tests {
         let handler = ProcHandler::new(table.clone(), yaml_path, master_key);
 
         let pid1 = handler
-            .spawn("agent1", "goal1", "sess-1", "kernel", None)
+            .spawn("agent1", "goal1", "sess-1", "", "kernel", None)
             .await
             .unwrap();
         let pid2 = handler
-            .spawn("agent2", "goal2", "sess-1", "kernel", None)
+            .spawn("agent2", "goal2", "sess-1", "", "kernel", None)
             .await
             .unwrap();
 
@@ -823,7 +825,7 @@ mod tests {
         let handler = ProcHandler::new(table, yaml_path.clone(), master_key);
 
         let pid = handler
-            .spawn("test", "goal", "sess", "kernel", None)
+            .spawn("test", "goal", "sess", "", "kernel", None)
             .await
             .unwrap();
         assert_eq!(handler.load_agents_yaml().await.unwrap().agents.len(), 1);
@@ -956,7 +958,7 @@ mod tests {
         let (handler, sstore, _) = make_handler_with_stores(&dir).await;
 
         let pid = handler
-            .spawn("agent-a", "goal", "", "alice", None)
+            .spawn("agent-a", "goal", "", "", "alice", None)
             .await
             .unwrap();
 
@@ -972,7 +974,7 @@ mod tests {
         let (handler, sstore, _) = make_handler_with_stores(&dir).await;
 
         let parent_pid = handler
-            .spawn("parent-agent", "parent goal", "", "alice", None)
+            .spawn("parent-agent", "parent goal", "", "", "alice", None)
             .await
             .unwrap();
         let sessions = sstore.list_for_user("alice").await.unwrap();
@@ -980,7 +982,7 @@ mod tests {
         let parent_session_id = sessions[0].id;
 
         let child_pid = handler
-            .spawn("child-agent", "child goal", "", "alice", Some(parent_pid))
+            .spawn("child-agent", "child goal", "", "", "alice", Some(parent_pid))
             .await
             .unwrap();
 
@@ -996,7 +998,7 @@ mod tests {
         let (handler, sstore, _) = make_handler_with_stores(&dir).await;
 
         let pid = handler
-            .spawn("agent", "goal", "", "alice", None)
+            .spawn("agent", "goal", "", "", "alice", None)
             .await
             .unwrap();
         let sessions = sstore.list_for_user("alice").await.unwrap();
@@ -1017,7 +1019,7 @@ mod tests {
         let (handler, sstore, istore) = make_handler_with_stores(&dir).await;
 
         let pid = handler
-            .spawn("agent", "goal", "", "alice", None)
+            .spawn("agent", "goal", "", "", "alice", None)
             .await
             .unwrap();
         let sessions = sstore.list_for_user("alice").await.unwrap();
@@ -1054,7 +1056,7 @@ mod tests {
         let (handler, sstore, _) = make_handler_with_stores(&dir).await;
 
         let pid = handler
-            .spawn("agent", "goal", "", "alice", None)
+            .spawn("agent", "goal", "", "", "alice", None)
             .await
             .unwrap();
         let sessions = sstore.list_for_user("alice").await.unwrap();
@@ -1072,14 +1074,14 @@ mod tests {
         let (handler, sstore, _) = make_handler_with_stores(&dir).await;
 
         let owner_pid = handler
-            .spawn("owner", "goal", "", "alice", None)
+            .spawn("owner", "goal", "", "", "alice", None)
             .await
             .unwrap();
         let sessions = sstore.list_for_user("alice").await.unwrap();
         let session_id = sessions[0].id;
 
         let child_pid = handler
-            .spawn("child", "subgoal", "", "alice", Some(owner_pid))
+            .spawn("child", "subgoal", "", "", "alice", Some(owner_pid))
             .await
             .unwrap();
 
@@ -1097,7 +1099,7 @@ mod tests {
         let (handler, _, istore) = make_handler_with_stores(&dir).await;
 
         let pid = handler
-            .spawn("agent", "goal", "", "alice", None)
+            .spawn("agent", "goal", "", "", "alice", None)
             .await
             .unwrap();
         let inv_id = handler
@@ -1130,7 +1132,7 @@ mod tests {
         let (handler, _, istore) = make_handler_with_stores(&dir).await;
 
         let pid = handler
-            .spawn("agent", "goal", "", "alice", None)
+            .spawn("agent", "goal", "", "", "alice", None)
             .await
             .unwrap();
         let inv_id = handler

@@ -90,11 +90,13 @@ async fn dispatch_request(
             let name = params["name"].as_str().unwrap_or("unnamed");
             let goal = params["goal"].as_str().unwrap_or("");
             let session_id = params["session_id"].as_str().unwrap_or("");
+            let atp_session_id = params["atp_session_id"].as_str().unwrap_or("");
             let caller = params["caller"].as_str().unwrap_or("gateway");
             let parent_pid = params["parent_pid"].as_u64();
 
+            tracing::debug!(atp_session_id, "kernel/proc/spawn: extracted atp_session_id from IPC body");
             match proc_handler
-                .spawn(name, goal, session_id, caller, parent_pid)
+                .spawn(name, goal, session_id, atp_session_id, caller, parent_pid)
                 .await
             {
                 Ok(pid) => {

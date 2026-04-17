@@ -137,6 +137,37 @@ impl AtpEventBus {
         self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 
+    /// Publish `agent.spawned` so the UI registers the new agent immediately.
+    /// `agent_session_id` is the logical conversation UUID (shown in SessionPage).
+    pub fn agent_spawned(
+        &self,
+        atp_session_id: &str,
+        pid: u64,
+        name: &str,
+        goal: &str,
+        agent_session_id: &str,
+    ) {
+        let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentSpawned);
+        let ev = AtpEvent::new(
+            AtpEventKind::AgentSpawned,
+            atp_session_id,
+            serde_json::json!({
+                "pid": pid.to_string(),
+                "name": name,
+                "goal": goal,
+                "sessionId": agent_session_id,
+            }),
+        );
+        tracing::debug!(
+            atp_session_id,
+            pid,
+            name,
+            agent_session_id,
+            "publishing agent.spawned event"
+        );
+        self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
+    }
+
     /// Publish an incremental token delta from a streaming LLM turn.
     /// `atp_session_id` routes the event to the originating client connection.
     pub fn agent_output_chunk(

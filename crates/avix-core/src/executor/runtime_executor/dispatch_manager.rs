@@ -640,7 +640,7 @@ impl RuntimeExecutor {
                 if !pending_text.is_empty() {
                     if let Some(bus) = &self.event_bus {
                         bus.agent_output_chunk(
-                            &self.session_id,
+                            &self.atp_session_id,
                             self.pid.as_u64(),
                             &turn_id_str,
                             &pending_text,
@@ -1459,6 +1459,7 @@ mod tests {
             goal: "test goal".into(),
             spawned_by: "kernel".into(),
             session_id: "sess-test".into(),
+            atp_session_id: String::new(),
             token: CapabilityToken::test_token(caps),
             system_prompt: None,
             selected_model: "claude-sonnet-4".into(),
@@ -1480,6 +1481,7 @@ mod tests {
             goal: "test goal".into(),
             spawned_by: "alice".into(),
             session_id: "sess-test".into(),
+            atp_session_id: String::new(),
             token: CapabilityToken::test_token(caps),
             system_prompt: None,
             selected_model: "claude-sonnet-4".into(),
@@ -1730,6 +1732,7 @@ mod tests {
             goal: "goal".into(),
             spawned_by: "kernel".into(),
             session_id: "sess".into(),
+            atp_session_id: String::new(),
             token: CapabilityToken::test_token(&["cap/list"]),
             system_prompt: None,
             selected_model: "claude-sonnet-4".into(),

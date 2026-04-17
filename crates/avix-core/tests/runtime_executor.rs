@@ -32,6 +32,7 @@ async fn spawn_with_caps(pid_val: u64, caps: &[&str]) -> (RuntimeExecutor, Arc<M
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
         invocation_id: String::new(),
+            atp_session_id: String::new(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -122,6 +123,7 @@ async fn shutdown_deregisters_all_category2_tools() {
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
         invocation_id: String::new(),
+            atp_session_id: String::new(),
     };
     let mut executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -157,6 +159,7 @@ async fn category2_tools_registered_with_user_visibility() {
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
         invocation_id: String::new(),
+            atp_session_id: String::new(),
     };
     RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -386,6 +389,7 @@ async fn agent_spawn_translates_to_kernel_proc_spawn() {
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
         invocation_id: String::new(),
+            atp_session_id: String::new(),
     };
     let mut executor =
         RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
@@ -426,6 +430,7 @@ async fn agent_kill_records_in_kernel() {
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
         invocation_id: String::new(),
+            atp_session_id: String::new(),
     };
     let mut executor =
         RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
@@ -463,6 +468,7 @@ async fn cap_request_tool_triggers_resource_request() {
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
         invocation_id: String::new(),
+            atp_session_id: String::new(),
     };
     let mut executor =
         RuntimeExecutor::spawn_with_registry_and_kernel(params, registry, Arc::clone(&kernel))
@@ -505,6 +511,7 @@ async fn build_test_executor_with_mocks() -> RuntimeExecutor {
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
         invocation_id: String::new(),
+            atp_session_id: String::new(),
     };
     RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -526,6 +533,7 @@ async fn build_test_executor_with_max_chain(max: usize) -> RuntimeExecutor {
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
         invocation_id: String::new(),
+            atp_session_id: String::new(),
     };
     let mut executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -859,6 +867,7 @@ async fn spawn_with_signed_token(
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
         invocation_id: String::new(),
+            atp_session_id: String::new(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, Arc::clone(&registry))
         .await
@@ -1028,6 +1037,7 @@ async fn spawn_status_yaml_contains_pid_and_name() {
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
         invocation_id: String::new(),
+            atp_session_id: String::new(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await
@@ -1069,6 +1079,7 @@ async fn spawn_writes_resolved_yaml_to_vfs() {
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
         invocation_id: String::new(),
+            atp_session_id: String::new(),
     };
     let executor = RuntimeExecutor::spawn_with_registry(params, registry)
         .await

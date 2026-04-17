@@ -37,6 +37,9 @@ pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
                 .unwrap()
                 .entry("session_id")
                 .or_insert(serde_json::json!(""));
+            // Inject the ATP connection session ID so IpcExecutorFactory can route
+            // ownership-scoped events to the correct WebSocket connection.
+            body["atp_session_id"] = serde_json::json!(cmd.caller_session_id);
             ipc_forward(&id, ipc_method, body, ctx.ipc.as_ref()).await
         }
         "kill"
@@ -197,6 +200,7 @@ mod tests {
         let params = spy.last_params().await;
         assert_eq!(params["caller"].as_str(), Some("alice"), "caller must be injected");
         assert_eq!(params["session_id"].as_str(), Some(""), "session_id must default to empty string");
+        assert_eq!(params["atp_session_id"].as_str(), Some("sess-proc"), "atp_session_id must be injected from caller_session_id");
     }
 
     #[tokio::test]

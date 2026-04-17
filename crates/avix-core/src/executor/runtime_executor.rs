@@ -144,6 +144,8 @@ pub struct RuntimeExecutor {
     pub goal: String,
     pub spawned_by: String,
     pub session_id: String,
+    /// ATP connection session ID — used for event_bus ownership routing.
+    pub atp_session_id: String,
     pub token: CapabilityToken,
     pub pending_messages: Vec<String>,
     /// Tool management sub-struct (tool_list, budgets, HIL, registered_cat2).
@@ -227,6 +229,7 @@ impl RuntimeExecutor {
             goal: params.goal,
             spawned_by: params.spawned_by,
             session_id: params.session_id,
+            atp_session_id: params.atp_session_id,
             token: params.token,
             pending_messages: Vec::new(),
             tools,
@@ -753,6 +756,7 @@ mod tests {
             goal: "test goal".into(),
             spawned_by: "kernel".into(),
             session_id: "sess-test".into(),
+            atp_session_id: String::new(),
             token: CapabilityToken::test_token(caps),
             system_prompt: None,
             selected_model: "claude-sonnet-4".into(),

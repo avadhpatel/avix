@@ -229,6 +229,7 @@ pub async fn run(sub: ServerCmd) -> Result<()> {
                 goal: goal.clone(),
                 spawned_by: "cli".into(),
                 session_id: uuid::Uuid::new_v4().to_string(),
+                atp_session_id: String::new(),
                 token,
                 system_prompt: None,
                 selected_model: resolved_model.clone(),
