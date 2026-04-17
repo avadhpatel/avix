@@ -1,15 +1,19 @@
 # Dev Plan: Streaming Events Gap D — ATP Session ID Routing
 
-## Task Summary
+## Task Summary — ✅ COMPLETE (commit `ef603f8`, 2026-04-17)
 
-All owner-scoped ATP events (agent output chunks, status, exit, tool calls, spawned) are
-silently dropped by the gateway's ownership gate because `IpcExecutorFactory` calls the
+All owner-scoped ATP events (agent output chunks, status, exit, tool calls, spawned) were
+silently dropped by the gateway's ownership gate because `IpcExecutorFactory` called the
 event bus with the **agent session ID** (a logical conversation UUID), but the ownership
-gate compares against the **ATP connection session ID** (from the login JWT). These are
-two distinct identifiers and are never equal, so no streaming event ever reaches a client.
+gate compares against the **ATP connection session ID** (from the login JWT).
 
-Additionally, the `agent.spawned` event is defined in the ATP protocol and handled by the
-frontend but is never emitted by the real kernel execution path.
+**Fixed**: `atp_session_id` is now threaded from `ValidatedCmd.caller_session_id` through
+`SpawnParams.atp_session_id` into `IpcExecutorFactory` and `RuntimeExecutor`. All
+`event_bus.*` calls use it instead of the agent session UUID. `agent.spawned` is now
+emitted at executor task start with `{ pid, name, goal, sessionId }`.
+
+Note: `agent.tool_call` and `agent.tool_result` events are **not yet emitted** — that is
+a separate follow-on gap (see `streaming-events-tool-calls.md` when written).
 
 ---
 
@@ -277,9 +281,9 @@ cargo test --package avix-client-core -- atp::types
 
 ## Success Criteria
 
-- [ ] `agent.output.chunk` events arrive at the UI as an agent executes
-- [ ] `agent.spawned` is emitted with both `pid` and `sessionId` (logical session UUID)
-- [ ] `agent.status` and `agent.exit` events arrive correctly
-- [ ] `agent.tool_call` and `agent.tool_result` events arrive correctly  
-- [ ] A second connected user does not receive the first user's agent events
-- [ ] `AgentSpawnedBody` includes `session_id` field and frontend maps pid → session correctly
+- [x] `agent.output.chunk` events arrive at the UI as an agent executes (`ef603f8`)
+- [x] `agent.spawned` is emitted with both `pid` and `sessionId` (logical session UUID) (`ef603f8`)
+- [x] `agent.status` and `agent.exit` events arrive correctly (`ef603f8`)
+- [ ] `agent.tool_call` and `agent.tool_result` events arrive correctly *(follow-on gap — not yet emitted by RuntimeExecutor)*
+- [x] A second connected user does not receive the first user's agent events (`ef603f8`)
+- [x] `AgentSpawnedBody` includes `session_id` field and frontend maps pid → session correctly (`ef603f8`)

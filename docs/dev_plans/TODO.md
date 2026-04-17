@@ -345,14 +345,13 @@ Server-side routing fix tracked in [`streaming-events-gap-D-session-id-routing.m
 | Gap B | `pid` type mismatch — `u64` vs string in typed body structs | ✅ Fixed (`c7a9dbf`) |
 | Gap C | `EventBody::AgentSpawned` variant missing; `AgentSpawnedBody` not defined | ✅ Fixed (`c7a9dbf`) |
 | Gap D | `start_event_bridge()` could be double-started on reconnect | ✅ Fixed (`c7a9dbf`) |
-| Gap E (server) | `IpcExecutorFactory` passes agent session UUID to `event_bus.*` calls that expect ATP connection session ID — ownership gate always fails, all events dropped | ⏳ Pending — see gap-D plan |
-| Gap F (server) | `agent.spawned` event never emitted by `IpcExecutorFactory` (only in test stubs) | ⏳ Pending — see gap-D plan |
+| Gap E (server) | `IpcExecutorFactory` passes agent session UUID to `event_bus.*` calls that expect ATP connection session ID — ownership gate always fails, all events dropped | ✅ Fixed (`ef603f8`) |
+| Gap F (server) | `agent.spawned` event never emitted by `IpcExecutorFactory` (only in test stubs) | ✅ Fixed (`ef603f8`) |
+| Gap G (server) | `agent.tool_call` and `agent.tool_result` never emitted by `RuntimeExecutor` | ⏳ Pending — needs new plan |
 
-**Root cause of streaming not working end-to-end**: Gap E. The ATP ownership gate
-(`conn.session_id == event.owner_session`) always fails because `IpcExecutorFactory`
-uses `params.session_id` (agent logical session UUID) instead of the ATP connection
-session ID. Fix requires threading `ValidatedCmd.caller_session_id` through
-`SpawnParams.atp_session_id` to `IpcExecutorFactory`.
+**Remaining**: Gap G — `RuntimeExecutor` never publishes `agent.tool_call` or
+`agent.tool_result` to the event bus. The ATP protocol defines these events and the
+frontend listens for them (`liveToolCalls`), but they are never emitted.
 
 ---
 

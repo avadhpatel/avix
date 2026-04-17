@@ -227,6 +227,6 @@ cargo test --package avix-core -- gateway::
 - [x] `ConnectionStatus::Connected.session_id` matches the real ATP login session_id (`c7a9dbf`)
 - [x] `start_event_bridge()` is idempotent (second call is a no-op) (`c7a9dbf`)
 - [x] `agent.output.chunk` body arrives at frontend with `pid` as a string (matching wire format) (`c7a9dbf`)
-- [ ] Streaming text tokens appear in the SessionPage as the agent executes *(blocked on gap-D: `streaming-events-gap-D-session-id-routing.md`)*
-- [ ] Agent tool calls appear in `liveToolCalls` during execution *(blocked on gap-D)*
-- [ ] Events from one user's session do not appear in another user's UI *(gate logic correct; blocked on gap-D routing fix to work end-to-end)*
+- [x] Streaming text tokens appear in the SessionPage as the agent executes (`ef603f8` — ATP routing fixed)
+- [ ] Agent tool calls appear in `liveToolCalls` during execution *(follow-on gap — `agent.tool_call`/`agent.tool_result` not yet emitted by RuntimeExecutor)*
+- [x] Events from one user's session do not appear in another user's UI (`ef603f8`)
