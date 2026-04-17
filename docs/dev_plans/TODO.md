@@ -334,6 +334,28 @@ Workaround: stop kernel, delete `<root>/data/sessions.redb`.
 
 ---
 
+## Streaming Events Pipeline — ✅ Client-Side Complete / ⏳ Server-Side Pending
+
+Client-side streaming gaps fixed in commit `c7a9dbf` (2026-04-17).
+Server-side routing fix tracked in [`streaming-events-gap-D-session-id-routing.md`](streaming-events-gap-D-session-id-routing.md).
+
+| Gap | Description | Status |
+|-----|-------------|--------|
+| Gap A | `ConnectionStatus` stored hardcoded `"core-init"` session_id | ✅ Fixed (`c7a9dbf`) |
+| Gap B | `pid` type mismatch — `u64` vs string in typed body structs | ✅ Fixed (`c7a9dbf`) |
+| Gap C | `EventBody::AgentSpawned` variant missing; `AgentSpawnedBody` not defined | ✅ Fixed (`c7a9dbf`) |
+| Gap D | `start_event_bridge()` could be double-started on reconnect | ✅ Fixed (`c7a9dbf`) |
+| Gap E (server) | `IpcExecutorFactory` passes agent session UUID to `event_bus.*` calls that expect ATP connection session ID — ownership gate always fails, all events dropped | ⏳ Pending — see gap-D plan |
+| Gap F (server) | `agent.spawned` event never emitted by `IpcExecutorFactory` (only in test stubs) | ⏳ Pending — see gap-D plan |
+
+**Root cause of streaming not working end-to-end**: Gap E. The ATP ownership gate
+(`conn.session_id == event.owner_session`) always fails because `IpcExecutorFactory`
+uses `params.session_id` (agent logical session UUID) instead of the ATP connection
+session ID. Fix requires threading `ValidatedCmd.caller_session_id` through
+`SpawnParams.atp_session_id` to `IpcExecutorFactory`.
+
+---
+
 ## Agent Tool Visibility — ✅ RESOLVED (gap-A + gap-B)
 
 All items below were fixed as part of gap-A and gap-B (2026-04-12/13).

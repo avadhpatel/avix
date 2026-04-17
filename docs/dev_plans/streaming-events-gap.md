@@ -2,17 +2,18 @@
 
 ## Task Summary
 
-Agent executor messages are not being streamed to the UI after a session is spawned. The
-server-side pipeline (Provider SSE → RuntimeExecutor → AtpEventBus → gateway.svc) is
-architecturally complete. The client-side reception pipeline (Dispatcher → start_event_bridge
-→ emit_callback → frontend) is also structurally sound — the subscribe frame is sent, the
-bridge task is started, and the `Raw(Value)` fallback in `EventBody` means events flow through
-even without typed deserialization matches.
+Agent executor messages are not being streamed to the UI after a session is spawned.
 
-The confirmed gaps are narrower: a hardcoded session_id in `ConnectionStatus`, a fragile
-bridge-start guard, and a type annotation inconsistency in `AgentOutputChunkBody`.
+**Gaps A, B, D (client-side) — ✅ COMPLETE** (commit `c7a9dbf`, 2026-04-17):
+- Gap A: `ConnectionStatus` hardcoded `"core-init"` session_id → fixed
+- Gap B: `pid` type mismatch in typed body structs → fixed
+- Gap D: `start_event_bridge()` double-start on reconnect → fixed with `AtomicBool` guard
 
-This plan documents the full pipeline, all identified gaps, and the exact changes needed.
+**Gap C (server-side routing) — ⏳ PENDING** — see [`streaming-events-gap-D-session-id-routing.md`](streaming-events-gap-D-session-id-routing.md):
+During investigation a deeper server-side bug was found: `IpcExecutorFactory` passes the
+**agent logical session UUID** to `event_bus.*` calls that expect the **ATP connection
+session ID**. The ownership gate (`conn.session_id == event.owner_session`) always fails,
+silently dropping every streaming event. This is the primary reason streaming does not work.
 
 ---
 
@@ -26,7 +27,7 @@ This plan documents the full pipeline, all identified gaps, and the exact change
 
 ## Full Pipeline (Current State)
 
-### Server Side (correct, no changes needed)
+### Server Side (broken — see gap-D plan for fix)
 
 ```
 Provider HTTP SSE
@@ -52,6 +53,7 @@ Provider HTTP SSE
 - `AtpEvent.body` for `agent.output.chunk` is `{"pid": pid.to_string(), "turn_id": ..., "text_delta": ..., "seq": ..., "is_final": ...}`
 - All agent events (spawned, output, tool_call, tool_result, exit, status) are **owner-scoped** (`event_scope` returns `owner_scoped = true`)
 - The ownership gate requires `conn.session_id == event.owner_session`; the connection's `session_id` is set at WebSocket upgrade from the JWT, so it equals `login_resp.session_id`
+- ⚠️ `IpcExecutorFactory` currently passes the agent logical session UUID (not the ATP connection session ID) to all `event_bus.*` calls — ownership gate always fails. Fix is in the gap-D plan.
 
 ### Client Side (has gaps — see below)
 
@@ -79,8 +81,8 @@ Frontend (AppContext.tsx)
 
 ## Identified Gaps
 
-### Gap A — `ConnectionStatus` stores wrong session_id  
-**File**: `crates/avix-client-core/src/state.rs` lines 146–148  
+### Gap A — `ConnectionStatus` stores wrong session_id ✅ RESOLVED (commit `c7a9dbf`)
+**File**: `crates/avix-client-core/src/state.rs`
 **File**: `crates/avix-client-core/src/atp/dispatcher.rs`
 
 `do_connect()` hardcodes the session_id in `ConnectionStatus::Connected`:
@@ -106,7 +108,7 @@ event routing, re-authentication, or session resumption).
 
 ---
 
-### Gap B — `AgentOutputChunkBody.pid` type annotation is wrong (cosmetic only)
+### Gap B — `AgentOutputChunkBody.pid` type annotation was wrong ✅ RESOLVED (commit `c7a9dbf`)
 **File**: `crates/avix-client-core/src/atp/types.rs`
 
 The server deliberately emits `pid` as a **JSON string** across all event bodies (e.g.,
@@ -130,143 +132,76 @@ This is **lower priority** — it's a type annotation fix, not a functional gap.
 
 ---
 
-### Gap C — `EventBody` missing typed variant for `AgentSpawned`  
+### Gap C — `EventBody` missing typed variant for `AgentSpawned` ✅ RESOLVED (commit `c7a9dbf`)
 **File**: `crates/avix-client-core/src/atp/types.rs`
 
-`EventBody` enum has no `AgentSpawned(...)` variant. The spawned event falls through to
-`EventBody::Raw(Value)`. Not critical (the raw Value is forwarded correctly), but prevents
-typed access.
+`AgentSpawnedBody` struct and `EventBody::AgentSpawned` variant were added. The `sessionId`
+field will be populated once gap-D adds it to the server-emitted body.
 
-**Impact**: Low — frontend accesses `.pid`, `.agentName`, `.sessionId` via raw JSON, which
-works in JavaScript.
-
-**Fix**: Add `AgentSpawnedBody` struct and `EventBody::AgentSpawned(AgentSpawnedBody)` variant.
-Fields: `pid: u64`, `agent_name: String`, `session_id: String`.
-
-This is **lower priority** than Gaps A and D — document it but implement last.
+Note: `AgentSpawnedBody.session_id` is currently a placeholder — the server does not yet
+emit `sessionId` in the `agent.spawned` body. That is part of the gap-D plan.
 
 ---
 
-### Gap D — `start_event_bridge()` has no double-start guard
+### Gap D — `start_event_bridge()` had no double-start guard ✅ RESOLVED (commit `c7a9dbf`)
 **File**: `crates/avix-client-core/src/state.rs`
 
-`start_event_bridge()` can be called by both `do_connect()` and `set_emit_callback()`. The
-current code-paths prevent a double-start (each checks the other's precondition), but this
-invariant is fragile. If `login()` is called after the bridge is already running (e.g., a
-reconnect), a second bridge task would be spawned, causing each event to fire the callback
-twice.
-
-**Impact**: Medium — currently prevented by control flow, but a reconnect scenario would
-break it.
-
-**Fix**: Add `bridge_started: Arc<AtomicBool>` to `AppState`. In `start_event_bridge()`,
-use `compare_exchange(false, true)` to make the spawn idempotent. Reset to `false` when
-`dispatcher` is cleared (on disconnect/reconnect).
+`bridge_started: Arc<AtomicBool>` added to `AppState`. `start_event_bridge()` uses
+`compare_exchange(false, true)` — a second call is a no-op. The flag resets to `false`
+when the bridge task exits (on disconnect) and when a new connection is established in
+`do_connect()`, allowing a clean restart on reconnect.
 
 ---
 
-## Multi-User Isolation Design (already correct server-side)
+## Multi-User Isolation Design (gate is correct; routing is broken — see gap-D)
 
 All agent events are owner-scoped (`event_scope` returns `owner_scoped = true`). The gateway
 only delivers an event to a connection where `conn.session_id == event.owner_session`. The
-`RuntimeExecutor` sets `owner_session = spawning_connection.session_id` at agent creation.
+**gate logic is correct**, but `IpcExecutorFactory` currently sets `owner_session` to the
+agent logical session UUID instead of the ATP connection session ID — so the gate always
+fails and every event is dropped (see `streaming-events-gap-D-session-id-routing.md`).
 
-No changes needed for multi-user isolation — the ATP ownership gate already enforces it.
-Fixing Gap A merely ensures the client's `ConnectionStatus` accurately reflects the real
-session_id for logging and debugging purposes.
+Once gap-D is fixed, multi-user isolation is automatically enforced by the ownership gate
+with no additional changes needed.
 
 ---
 
 ## Files to Change
 
-| # | File | Change |
-|---|------|--------|
-| 1 | `crates/avix-client-core/src/atp/dispatcher.rs` | Add `pub fn session_id(&self) -> &str` |
-| 2 | `crates/avix-client-core/src/state.rs` | Use `dispatcher.session_id()` in `do_connect()`; add `bridge_started` guard |
-| 3 | `crates/avix-client-core/src/atp/types.rs` | Fix `pid: u64` → `pid: String` in typed body structs; add `AgentSpawnedBody` *(lower priority)* |
+| # | File | Change | Status |
+|---|------|--------|--------|
+| 1 | `crates/avix-client-core/src/atp/dispatcher.rs` | Add `pub fn session_id(&self) -> &str` | ✅ Done (`c7a9dbf`) |
+| 2 | `crates/avix-client-core/src/state.rs` | Use `dispatcher.session_id()` in `do_connect()`; add `bridge_started` guard | ✅ Done (`c7a9dbf`) |
+| 3 | `crates/avix-client-core/src/atp/types.rs` | Fix `pid: u64` → `pid: String` in typed body structs; add `AgentSpawnedBody` | ✅ Done (`c7a9dbf`) |
 
 ---
 
 ## Implementation Order
 
-### Step 1 — `dispatcher.rs`: Expose `session_id()`
+### Step 1 — ✅ DONE (`c7a9dbf`) — `dispatcher.rs`: Expose `session_id()`
 
-Add a public method:
+Added public accessor:
 ```rust
 pub fn session_id(&self) -> &str {
     &self.inner.session_id
 }
 ```
 
-Compile check: `cargo check --package avix-client-core`
+---
+
+### Step 2 — ✅ DONE (`c7a9dbf`) — `state.rs`: Fix session_id + bridge guard
+
+Fixed `do_connect()` to use real session_id from dispatcher; added `bridge_started: Arc<AtomicBool>`
+with `compare_exchange` idempotency guard in `start_event_bridge()`; reset flag to `false` on
+disconnect and on new connection.
 
 ---
 
-### Step 2 — `state.rs`: Fix session_id + bridge guard
+### Step 3 — ✅ DONE (`c7a9dbf`) — `types.rs`: Fix pid type annotations + add AgentSpawnedBody
 
-In `do_connect()`, change:
-```rust
-// Before:
-self.connection_status = ConnectionStatus::Connected {
-    session_id: "core-init".to_string(),
-};
-
-// After:
-let session_id = dispatcher.session_id().to_string();
-self.dispatcher = Some(dispatcher);
-self.connection_status = ConnectionStatus::Connected { session_id };
-```
-
-Add `bridge_started: Arc<AtomicBool>` to `AppState`. In `start_event_bridge()`:
-```rust
-if self.bridge_started.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
-    tracing::debug!("event bridge already running, skipping");
-    return;
-}
-let bridge_flag = Arc::clone(&self.bridge_started);
-tokio::spawn(async move {
-    while let Ok(event) = rx.recv().await {
-        // ... existing mapping logic ...
-    }
-    bridge_flag.store(false, Ordering::SeqCst);  // allow restart after disconnect
-});
-```
-
-Also reset `bridge_started` to `false` wherever `dispatcher` is set to `None` (on disconnect).
-
-Compile check: `cargo check --package avix-client-core`  
-Test: `cargo test --package avix-client-core`
-
----
-
-### Step 3 (optional) — `types.rs`: Fix pid type annotations + add AgentSpawnedBody
-
-In `crates/avix-client-core/src/atp/types.rs`, fix typed body structs to match the
-string-encoded PID wire format:
-
-```rust
-// AgentOutputChunkBody — change:
-pub pid: u64,    // was wrong
-// to:
-pub pid: String, // matches "pid": pid.to_string() on wire
-```
-
-Apply the same `pid: String` fix to any other typed body structs (AgentOutputBody,
-AgentStatusBody, AgentExitBody) that include a pid field.
-
-Also add `AgentSpawnedBody`:
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSpawnedBody {
-    pub pid: String,
-    pub agent_name: String,
-    pub session_id: String,
-}
-```
-
-Add `EventBody::AgentSpawned(AgentSpawnedBody)` before `Raw(Value)` in the untagged enum.
-
-Compile check: `cargo check --package avix-client-core`
+Changed `pid: u64` → `pid: String` in `AgentOutputBody`, `AgentOutputChunkBody`, `AgentStatusBody`,
+`AgentExitBody`. Added `AgentSpawnedBody { pid, name, goal }` and `EventBody::AgentSpawned` variant.
+Updated `avix-cli/src/tui/app.rs` to parse string PIDs at each usage site.
 
 ---
 
@@ -289,9 +224,9 @@ cargo test --package avix-core -- gateway::
 
 ## Success Criteria
 
-- [ ] `ConnectionStatus::Connected.session_id` matches the real ATP login session_id
-- [ ] `start_event_bridge()` is idempotent (second call is a no-op)
-- [ ] `agent.output.chunk` body arrives at frontend with `pid` as a string (matching wire format)
-- [ ] Streaming text tokens appear in the SessionPage as the agent executes
-- [ ] Agent tool calls appear in `liveToolCalls` during execution
-- [ ] Events from one user's session do not appear in another user's UI (ownership gate enforcement already correct server-side)
+- [x] `ConnectionStatus::Connected.session_id` matches the real ATP login session_id (`c7a9dbf`)
+- [x] `start_event_bridge()` is idempotent (second call is a no-op) (`c7a9dbf`)
+- [x] `agent.output.chunk` body arrives at frontend with `pid` as a string (matching wire format) (`c7a9dbf`)
+- [ ] Streaming text tokens appear in the SessionPage as the agent executes *(blocked on gap-D: `streaming-events-gap-D-session-id-routing.md`)*
+- [ ] Agent tool calls appear in `liveToolCalls` during execution *(blocked on gap-D)*
+- [ ] Events from one user's session do not appear in another user's UI *(gate logic correct; blocked on gap-D routing fix to work end-to-end)*
