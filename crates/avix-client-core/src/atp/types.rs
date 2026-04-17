@@ -110,6 +110,7 @@ pub enum EventKind {
 #[serde(untagged)]
 pub enum EventBody {
     SessionReady(SessionReadyBody),
+    AgentSpawned(AgentSpawnedBody),
     AgentOutput(AgentOutputBody),
     AgentOutputChunk(AgentOutputChunkBody),
     AgentStatus(AgentStatusBody),
@@ -135,15 +136,28 @@ pub struct SessionReadyBody {
     pub role: String,
 }
 
+/// Body for `agent.spawned` events.
+/// `pid` is string-encoded to avoid u64 precision loss in JavaScript JSON.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSpawnedBody {
+    pub pid: String,
+    pub name: String,
+    pub goal: String,
+}
+
+/// Body for `agent.output` events (full text, non-streaming).
+/// `pid` is string-encoded to avoid u64 precision loss in JavaScript JSON.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentOutputBody {
-    pub pid: u64,
+    pub pid: String,
     pub text: String,
 }
 
+/// Body for `agent.output.chunk` streaming events.
+/// `pid` is string-encoded to avoid u64 precision loss in JavaScript JSON.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentOutputChunkBody {
-    pub pid: u64,
+    pub pid: String,
     /// UUID correlating all chunks from one LLM turn.
     pub turn_id: String,
     pub text_delta: String,
@@ -153,9 +167,11 @@ pub struct AgentOutputChunkBody {
     pub is_final: bool,
 }
 
+/// Body for `agent.status` events.
+/// `pid` is string-encoded to avoid u64 precision loss in JavaScript JSON.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentStatusBody {
-    pub pid: u64,
+    pub pid: String,
     pub status: AgentStatus,
 }
 
@@ -168,9 +184,11 @@ pub enum AgentStatus {
     Crashed,
 }
 
+/// Body for `agent.exit` events.
+/// `pid` is string-encoded to avoid u64 precision loss in JavaScript JSON.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentExitBody {
-    pub pid: u64,
+    pub pid: String,
     #[serde(rename = "exitCode")]
     pub exit_code: i32,
 }

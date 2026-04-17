@@ -1,5 +1,6 @@
 use serde_json;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
@@ -24,6 +25,8 @@ pub struct AppState {
     pub server_handle: Option<ServerHandle>,
     pub pending_hils: Arc<RwLock<HashMap<String, (u64, String)>>>, // hil_id -> (pid, approval_token)
     pub emit_callback: Option<EmitCallback>,
+    /// Guards against spawning multiple event bridge tasks (e.g. on reconnect).
+    bridge_started: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -80,6 +83,7 @@ impl AppState {
             server_handle: None,
             pending_hils: Arc::new(RwLock::new(HashMap::new())),
             emit_callback: None,
+            bridge_started: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -143,10 +147,11 @@ impl AppState {
         };
 
         let dispatcher = Arc::new(Dispatcher::new(client));
+        let session_id = dispatcher.session_id().to_string();
         self.dispatcher = Some(dispatcher);
-        self.connection_status = ConnectionStatus::Connected {
-            session_id: "core-init".to_string(),
-        };
+        self.connection_status = ConnectionStatus::Connected { session_id };
+        // Reset bridge flag so a fresh bridge task can be started for this connection.
+        self.bridge_started.store(false, Ordering::SeqCst);
 
         // If a UI callback was registered before login completed, start the
         // event bridge now that the dispatcher exists.
@@ -167,8 +172,18 @@ impl AppState {
 
     fn start_event_bridge(&self) {
         if let (Some(dispatcher), Some(callback)) = (&self.dispatcher, &self.emit_callback) {
+            // Idempotency guard: only one bridge task per connection.
+            if self
+                .bridge_started
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                debug!("event bridge already running, skipping duplicate start");
+                return;
+            }
             let mut rx = dispatcher.events();
             let callback = callback.clone();
+            let bridge_flag = Arc::clone(&self.bridge_started);
             tokio::spawn(async move {
                 while let Ok(event) = rx.recv().await {
                     let event_name: &str = match event.kind {
@@ -184,9 +199,13 @@ impl AppState {
                         crate::atp::types::EventKind::AgentToolResult => "agent.tool_result",
                         _ => continue,
                     };
-                    let data = serde_json::to_value(&event.body).unwrap_or(serde_json::Value::Null);
+                    let data =
+                        serde_json::to_value(&event.body).unwrap_or(serde_json::Value::Null);
                     (callback)(event_name, &data);
                 }
+                // Sender dropped (disconnect) — allow bridge to be restarted on reconnect.
+                bridge_flag.store(false, Ordering::SeqCst);
+                debug!("event bridge task exited");
             });
         }
     }

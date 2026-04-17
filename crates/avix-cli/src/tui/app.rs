@@ -58,10 +58,10 @@ async fn dispatch_event(
     let log_event = TuiEvent::ReceivedAtp {
         kind: event.kind.clone(),
         pid: match &event.body {
-            EventBody::AgentOutputChunk(body) => Some(body.pid),
-            EventBody::AgentOutput(body) => Some(body.pid),
-            EventBody::AgentStatus(body) => Some(body.pid),
-            EventBody::AgentExit(body) => Some(body.pid),
+            EventBody::AgentOutputChunk(body) => body.pid.parse::<u64>().ok(),
+            EventBody::AgentOutput(body) => body.pid.parse::<u64>().ok(),
+            EventBody::AgentStatus(body) => body.pid.parse::<u64>().ok(),
+            EventBody::AgentExit(body) => body.pid.parse::<u64>().ok(),
             EventBody::HilRequest(body) => Some(body.pid),
             _ => None,
         },
@@ -76,8 +76,9 @@ async fn dispatch_event(
                 // Only forward non-final deltas — final chunk is an empty sentinel.
                 if !body.is_final && !body.text_delta.is_empty() {
                     debug!("Agent output chunk: pid={} seq={}", body.pid, body.seq);
+                    let pid = body.pid.parse::<u64>().unwrap_or(0);
                     let _ = action_tx
-                        .send(Action::UpdateAgentOutput(body.pid, body.text_delta))
+                        .send(Action::UpdateAgentOutput(pid, body.text_delta))
                         .await;
                 }
             }
@@ -85,9 +86,10 @@ async fn dispatch_event(
         EventKind::AgentOutput => {
             if let EventBody::AgentOutput(body) = event.body {
                 debug!("Agent output: pid={}", body.pid);
+                let pid = body.pid.parse::<u64>().unwrap_or(0);
                 // Send action to update TuiState
                 let _ = action_tx
-                    .send(Action::UpdateAgentOutput(body.pid, body.text))
+                    .send(Action::UpdateAgentOutput(pid, body.text))
                     .await;
             }
         }
@@ -97,7 +99,8 @@ async fn dispatch_event(
                 // Update agent status
                 let s = state.read().await;
                 let mut agents = s.agents.write().await;
-                if let Some(agent) = agents.iter_mut().find(|a| a.pid == body.pid) {
+                let pid = body.pid.parse::<u64>().unwrap_or(0);
+                if let Some(agent) = agents.iter_mut().find(|a| a.pid == pid) {
                     agent.status = body.status;
                 }
             }
@@ -105,8 +108,9 @@ async fn dispatch_event(
         EventKind::AgentExit => {
             if let EventBody::AgentExit(body) = event.body {
                 debug!("Agent exited: pid={}", body.pid);
+                let pid = body.pid.parse::<u64>().unwrap_or(0);
                 let session_id = event.owner_session.as_deref().unwrap_or("");
-                let notif = Notification::from_agent_exit(body.pid, session_id, None);
+                let notif = Notification::from_agent_exit(pid, session_id, None);
                 notifications.add(notif).await;
                 let _ = persistence::save_notifications(&notifications.all().await);
             }

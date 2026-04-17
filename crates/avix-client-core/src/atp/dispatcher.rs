@@ -117,6 +117,11 @@ impl Dispatcher {
     pub fn events(&self) -> broadcast::Receiver<Event> {
         self.event_rx.resubscribe()
     }
+
+    /// Returns the ATP session_id obtained from the login response.
+    pub fn session_id(&self) -> &str {
+        &self.inner.session_id
+    }
 }
 
 #[cfg(test)]
