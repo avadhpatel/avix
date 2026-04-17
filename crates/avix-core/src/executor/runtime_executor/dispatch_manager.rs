@@ -1185,7 +1185,7 @@ impl RuntimeExecutor {
 
                         if let Some(bus) = &self.event_bus {
                             bus.agent_tool_call(
-                                &self.session_id,
+                                &self.atp_session_id,
                                 self.pid.as_u64(),
                                 &call.call_id,
                                 &call.name,
@@ -1216,7 +1216,7 @@ impl RuntimeExecutor {
 
                         if let Some(bus) = &self.event_bus {
                             bus.agent_tool_result(
-                                &self.session_id,
+                                &self.atp_session_id,
                                 self.pid.as_u64(),
                                 &call.call_id,
                                 &call.name,

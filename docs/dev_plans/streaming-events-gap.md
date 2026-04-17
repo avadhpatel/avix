@@ -228,5 +228,5 @@ cargo test --package avix-core -- gateway::
 - [x] `start_event_bridge()` is idempotent (second call is a no-op) (`c7a9dbf`)
 - [x] `agent.output.chunk` body arrives at frontend with `pid` as a string (matching wire format) (`c7a9dbf`)
 - [x] Streaming text tokens appear in the SessionPage as the agent executes (`ef603f8` — ATP routing fixed)
-- [ ] Agent tool calls appear in `liveToolCalls` during execution *(follow-on gap — `agent.tool_call`/`agent.tool_result` not yet emitted by RuntimeExecutor)*
+- [x] Agent tool calls appear in `liveToolCalls` during execution (emission existed; wrong session_id fixed in `dispatch_manager.rs`)
 - [x] Events from one user's session do not appear in another user's UI (`ef603f8`)

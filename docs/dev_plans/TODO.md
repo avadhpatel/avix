@@ -347,11 +347,9 @@ Server-side routing fix tracked in [`streaming-events-gap-D-session-id-routing.m
 | Gap D | `start_event_bridge()` could be double-started on reconnect | ✅ Fixed (`c7a9dbf`) |
 | Gap E (server) | `IpcExecutorFactory` passes agent session UUID to `event_bus.*` calls that expect ATP connection session ID — ownership gate always fails, all events dropped | ✅ Fixed (`ef603f8`) |
 | Gap F (server) | `agent.spawned` event never emitted by `IpcExecutorFactory` (only in test stubs) | ✅ Fixed (`ef603f8`) |
-| Gap G (server) | `agent.tool_call` and `agent.tool_result` never emitted by `RuntimeExecutor` | ⏳ Pending — needs new plan |
+| Gap G (server) | `agent.tool_call`/`agent.tool_result` used `self.session_id` instead of `self.atp_session_id` | ✅ Fixed (`b350963` + one-liner in dispatch_manager.rs) |
 
-**Remaining**: Gap G — `RuntimeExecutor` never publishes `agent.tool_call` or
-`agent.tool_result` to the event bus. The ATP protocol defines these events and the
-frontend listens for them (`liveToolCalls`), but they are never emitted.
+**Streaming pipeline fully operational** — all ownership-scoped events now route correctly.
 
 ---
 

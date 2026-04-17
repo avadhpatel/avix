@@ -284,6 +284,6 @@ cargo test --package avix-client-core -- atp::types
 - [x] `agent.output.chunk` events arrive at the UI as an agent executes (`ef603f8`)
 - [x] `agent.spawned` is emitted with both `pid` and `sessionId` (logical session UUID) (`ef603f8`)
 - [x] `agent.status` and `agent.exit` events arrive correctly (`ef603f8`)
-- [ ] `agent.tool_call` and `agent.tool_result` events arrive correctly *(follow-on gap — not yet emitted by RuntimeExecutor)*
+- [x] `agent.tool_call` and `agent.tool_result` events arrive correctly (were emitted but used wrong session_id — fixed in `dispatch_manager.rs` alongside gap-D)
 - [x] A second connected user does not receive the first user's agent events (`ef603f8`)
 - [x] `AgentSpawnedBody` includes `session_id` field and frontend maps pid → session correctly (`ef603f8`)
