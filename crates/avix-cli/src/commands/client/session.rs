@@ -50,7 +50,7 @@ pub async fn run(sub: SessionCmd, json: bool) -> Result<()> {
                 .call(&AtpCmd_::new(
                     "proc",
                     "session-list",
-                    "",
+                    &dispatcher.token,
                     serde_json::json!({ "username": username }),
                 ))
                 .await?;
@@ -103,7 +103,7 @@ pub async fn run(sub: SessionCmd, json: bool) -> Result<()> {
                 .call(&AtpCmd_::new(
                     "proc",
                     "session-get",
-                    "",
+                    &dispatcher.token,
                     serde_json::json!({ "id": session_id }),
                 ))
                 .await?;
@@ -138,7 +138,7 @@ pub async fn run(sub: SessionCmd, json: bool) -> Result<()> {
                 .call(&AtpCmd_::new(
                     "proc",
                     "session-resume",
-                    "",
+                    &dispatcher.token,
                     serde_json::json!({
                         "session_id": session_id,
                         "input": input,
@@ -176,7 +176,7 @@ pub async fn run(sub: SessionCmd, json: bool) -> Result<()> {
                 .call(&AtpCmd_::new(
                     "proc",
                     "session-delete",
-                    "",
+                    &dispatcher.token,
                     serde_json::json!({ "session_id": session_id }),
                 ))
                 .await?;

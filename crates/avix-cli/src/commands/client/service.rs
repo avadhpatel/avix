@@ -246,7 +246,7 @@ pub async fn run(sub: ServiceCmd, json: bool) -> Result<()> {
                 .call(&AtpCmd_::new(
                     "signal",
                     "send",
-                    "",
+                    &dispatcher.token,
                     serde_json::json!({ "name": name, "signal": "SIGSTART" }),
                 ))
                 .await?;
@@ -262,7 +262,7 @@ pub async fn run(sub: ServiceCmd, json: bool) -> Result<()> {
                 .call(&AtpCmd_::new(
                     "signal",
                     "send",
-                    "",
+                    &dispatcher.token,
                     serde_json::json!({ "name": name, "signal": "SIGTERM" }),
                 ))
                 .await?;
@@ -279,7 +279,7 @@ pub async fn run(sub: ServiceCmd, json: bool) -> Result<()> {
                     .call(&AtpCmd_::new(
                         "signal",
                         "send",
-                        "",
+                        &dispatcher.token,
                         serde_json::json!({ "name": name, "signal": signal }),
                     ))
                     .await?;
@@ -306,7 +306,7 @@ pub async fn run(sub: ServiceCmd, json: bool) -> Result<()> {
                         .call(&AtpCmd_::new(
                             "signal",
                             "send",
-                            "",
+                            &dispatcher.token,
                             serde_json::json!({ "name": name, "signal": "SIGKILL" }),
                         ))
                         .await;
