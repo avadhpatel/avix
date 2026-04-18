@@ -1,6 +1,6 @@
 # Dev Plan: Cat1 Tool Pipeline Fix
 
-**Status:** READY FOR IMPLEMENTATION
+**Status:** COMPLETE (commit `4a126ba`)
 **Priority:** P0 — crashes production agents
 
 ---

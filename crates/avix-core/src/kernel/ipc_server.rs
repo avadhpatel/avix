@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use base64::Engine as _;
 use serde_json::json;
 use tracing::{debug, info, warn};
 
@@ -8,6 +9,7 @@ use crate::error::AvixError;
 use crate::ipc::message::{IpcMessage, JsonRpcResponse};
 use crate::ipc::{IpcServer, IpcServerHandle};
 use crate::kernel::proc::ProcHandler;
+use crate::memfs::{VfsPath, VfsRouter};
 use crate::process::entry::ProcessStatus;
 use crate::process::table::ProcessTable;
 use crate::types::token::CapabilityToken;
@@ -22,14 +24,21 @@ pub struct KernelIpcServer {
     sock_path: PathBuf,
     proc_handler: Arc<ProcHandler>,
     avix_root: PathBuf,
+    vfs: Arc<VfsRouter>,
 }
 
 impl KernelIpcServer {
-    pub fn new(sock_path: PathBuf, proc_handler: Arc<ProcHandler>, avix_root: PathBuf) -> Self {
+    pub fn new(
+        sock_path: PathBuf,
+        proc_handler: Arc<ProcHandler>,
+        avix_root: PathBuf,
+        vfs: Arc<VfsRouter>,
+    ) -> Self {
         Self {
             sock_path,
             proc_handler,
             avix_root,
+            vfs,
         }
     }
 
@@ -41,12 +50,14 @@ impl KernelIpcServer {
 
         let proc_handler = Arc::clone(&self.proc_handler);
         let avix_root = self.avix_root;
+        let vfs = Arc::clone(&self.vfs);
         tokio::spawn(async move {
             if let Err(e) = server
                 .serve(move |msg| {
                     let ph = Arc::clone(&proc_handler);
                     let root = avix_root.clone();
-                    async move { handle_message(msg, ph, root).await }
+                    let vfs = Arc::clone(&vfs);
+                    async move { handle_message(msg, ph, root, vfs).await }
                 })
                 .await
             {
@@ -58,17 +69,25 @@ impl KernelIpcServer {
     }
 }
 
-/// Route one IPC message to the appropriate kernel/proc handler.
+/// Route one IPC message to the appropriate kernel handler.
 async fn handle_message(
     msg: IpcMessage,
     proc_handler: Arc<ProcHandler>,
     avix_root: PathBuf,
+    vfs: Arc<VfsRouter>,
 ) -> Option<JsonRpcResponse> {
     match msg {
         IpcMessage::Request(req) => {
             debug!(method = %req.method, id = %req.id, "kernel IPC request");
-            let resp =
-                dispatch_request(&req.id, &req.method, req.params, proc_handler, avix_root).await;
+            let resp = dispatch_request(
+                &req.id,
+                &req.method,
+                req.params,
+                proc_handler,
+                avix_root,
+                vfs,
+            )
+            .await;
             Some(resp)
         }
         IpcMessage::Notification(notif) => {
@@ -84,6 +103,7 @@ async fn dispatch_request(
     params: serde_json::Value,
     proc_handler: Arc<ProcHandler>,
     avix_root: PathBuf,
+    vfs: Arc<VfsRouter>,
 ) -> JsonRpcResponse {
     match method {
         "kernel/proc/spawn" => {
@@ -679,6 +699,93 @@ async fn dispatch_request(
             }
         }
 
+        // ── VFS / fs/* tools ─────────────────────────────────────────────────
+        "fs/read" => {
+            let raw_path = params["path"].as_str().unwrap_or("");
+            match VfsPath::parse(raw_path) {
+                Err(e) => JsonRpcResponse::err(id, -32602, &e.to_string(), None),
+                Ok(path) => match vfs.read(&path).await {
+                    Ok(bytes) => match String::from_utf8(bytes.clone()) {
+                        Ok(text) => JsonRpcResponse::ok(
+                            id,
+                            json!({ "content": text, "encoding": "utf-8" }),
+                        ),
+                        Err(_) => JsonRpcResponse::ok(
+                            id,
+                            json!({
+                                "content": base64::engine::general_purpose::STANDARD.encode(&bytes),
+                                "encoding": "base64",
+                            }),
+                        ),
+                    },
+                    Err(e) => {
+                        warn!(path = raw_path, error = %e, "fs/read failed");
+                        JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                    }
+                },
+            }
+        }
+
+        "fs/write" => {
+            let raw_path = params["path"].as_str().unwrap_or("");
+            let content = params["content"].as_str().unwrap_or("");
+            match VfsPath::parse(raw_path) {
+                Err(e) => JsonRpcResponse::err(id, -32602, &e.to_string(), None),
+                Ok(path) => match vfs.write(&path, content.as_bytes().to_vec()).await {
+                    Ok(()) => {
+                        debug!(path = raw_path, "fs/write succeeded");
+                        JsonRpcResponse::ok(id, json!({ "ok": true }))
+                    }
+                    Err(e) => {
+                        warn!(path = raw_path, error = %e, "fs/write failed");
+                        JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                    }
+                },
+            }
+        }
+
+        "fs/list" => {
+            let raw_path = params["path"].as_str().unwrap_or("");
+            match VfsPath::parse(raw_path) {
+                Err(e) => JsonRpcResponse::err(id, -32602, &e.to_string(), None),
+                Ok(path) => match vfs.list(&path).await {
+                    Ok(entries) => JsonRpcResponse::ok(id, json!({ "entries": entries })),
+                    Err(e) => {
+                        warn!(path = raw_path, error = %e, "fs/list failed");
+                        JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                    }
+                },
+            }
+        }
+
+        "fs/exists" => {
+            let raw_path = params["path"].as_str().unwrap_or("");
+            match VfsPath::parse(raw_path) {
+                Err(e) => JsonRpcResponse::err(id, -32602, &e.to_string(), None),
+                Ok(path) => {
+                    let exists = vfs.exists(&path).await;
+                    JsonRpcResponse::ok(id, json!({ "exists": exists }))
+                }
+            }
+        }
+
+        "fs/delete" => {
+            let raw_path = params["path"].as_str().unwrap_or("");
+            match VfsPath::parse(raw_path) {
+                Err(e) => JsonRpcResponse::err(id, -32602, &e.to_string(), None),
+                Ok(path) => match vfs.delete(&path).await {
+                    Ok(()) => {
+                        debug!(path = raw_path, "fs/delete succeeded");
+                        JsonRpcResponse::ok(id, json!({ "ok": true }))
+                    }
+                    Err(e) => {
+                        warn!(path = raw_path, error = %e, "fs/delete failed");
+                        JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                    }
+                },
+            }
+        }
+
         other => {
             warn!(method = other, "kernel IPC: unknown method");
             JsonRpcResponse::err(id, -32601, &format!("unknown kernel method: {other}"), None)
@@ -751,12 +858,27 @@ mod tests {
         dir.path().to_path_buf()
     }
 
+    fn make_vfs() -> Arc<VfsRouter> {
+        Arc::new(VfsRouter::new())
+    }
+
+    /// Thin wrapper used by pre-existing proc/* tests — supplies a fresh default VfsRouter.
+    async fn dispatch_proc(
+        id: &str,
+        method: &str,
+        params: serde_json::Value,
+        proc_handler: Arc<ProcHandler>,
+        avix_root: PathBuf,
+    ) -> JsonRpcResponse {
+        dispatch_request(id, method, params, proc_handler, avix_root, make_vfs()).await
+    }
+
     #[tokio::test]
     async fn spawn_returns_pid() {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
         let root = make_avix_root(&dir);
-        let resp = dispatch_request(
+        let resp = dispatch_proc(
             "req-1",
             "kernel/proc/spawn",
             json!({ "name": "test-agent", "goal": "do stuff", "session_id": "s1", "caller": "gw" }),
@@ -776,7 +898,7 @@ mod tests {
         let root = make_avix_root(&dir);
 
         // Spawn one agent first
-        dispatch_request(
+        dispatch_proc(
             "req-1",
             "kernel/proc/spawn",
             json!({ "name": "a1", "goal": "g1", "session_id": "s1", "caller": "gw" }),
@@ -785,7 +907,7 @@ mod tests {
         )
         .await;
 
-        let resp = dispatch_request("req-2", "kernel/proc/list", json!({}), ph, root).await;
+        let resp = dispatch_proc("req-2", "kernel/proc/list", json!({}), ph, root).await;
         assert!(resp.error.is_none());
         let list = resp.result.unwrap();
         assert_eq!(list.as_array().unwrap().len(), 1);
@@ -797,7 +919,7 @@ mod tests {
         let ph = make_proc_handler(&dir);
         let root = make_avix_root(&dir);
 
-        let spawn_resp = dispatch_request(
+        let spawn_resp = dispatch_proc(
             "req-1",
             "kernel/proc/spawn",
             json!({ "name": "agent-x", "goal": "my-goal", "session_id": "s1", "caller": "gw" }),
@@ -808,7 +930,7 @@ mod tests {
         let pid = spawn_resp.result.unwrap()["pid"].as_u64().unwrap();
 
         let stat_resp =
-            dispatch_request("req-2", "kernel/proc/stat", json!({ "id": pid }), ph, root).await;
+            dispatch_proc("req-2", "kernel/proc/stat", json!({ "id": pid }), ph, root).await;
         assert!(stat_resp.error.is_none());
         let body = stat_resp.result.unwrap();
         assert_eq!(body["name"], "agent-x");
@@ -822,7 +944,7 @@ mod tests {
         let ph = make_proc_handler(&dir);
         let root = make_avix_root(&dir);
 
-        let spawn_resp = dispatch_request(
+        let spawn_resp = dispatch_proc(
             "req-1",
             "kernel/proc/spawn",
             json!({ "name": "doomed", "goal": "g", "session_id": "s", "caller": "gw" }),
@@ -832,7 +954,7 @@ mod tests {
         .await;
         let pid = spawn_resp.result.unwrap()["pid"].as_u64().unwrap();
 
-        let kill_resp = dispatch_request(
+        let kill_resp = dispatch_proc(
             "req-2",
             "kernel/proc/kill",
             json!({ "id": pid }),
@@ -844,7 +966,7 @@ mod tests {
 
         // Verify status is now stopped
         let stat_resp =
-            dispatch_request("req-3", "kernel/proc/stat", json!({ "id": pid }), ph, root).await;
+            dispatch_proc("req-3", "kernel/proc/stat", json!({ "id": pid }), ph, root).await;
         assert_eq!(stat_resp.result.unwrap()["status"], "stopped");
     }
 
@@ -853,7 +975,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
         let root = make_avix_root(&dir);
-        let resp = dispatch_request("req-1", "kernel/bogus/method", json!({}), ph, root).await;
+        let resp = dispatch_proc("req-1", "kernel/bogus/method", json!({}), ph, root).await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
     }
@@ -864,7 +986,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
         let root = make_avix_root(&dir);
-        let resp = dispatch_request(
+        let resp = dispatch_proc(
             "req-1",
             "kernel/proc/list-installed",
             json!({ "username": "alice" }),
@@ -883,7 +1005,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
         let root = make_avix_root(&dir);
-        let resp = dispatch_request(
+        let resp = dispatch_proc(
             "req-1",
             "kernel/proc/invocation-list",
             json!({ "username": "alice" }),
@@ -902,7 +1024,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
         let root = make_avix_root(&dir);
-        let resp = dispatch_request(
+        let resp = dispatch_proc(
             "req-1",
             "kernel/proc/invocation-get",
             json!({ "id": "does-not-exist" }),
@@ -921,7 +1043,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
         let root = make_avix_root(&dir);
-        let resp = dispatch_request(
+        let resp = dispatch_proc(
             "req-1",
             "kernel/proc/invocation-conversation",
             json!({ "id": "no-such-id" }),
@@ -939,7 +1061,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
         let root = make_avix_root(&dir);
-        let resp = dispatch_request(
+        let resp = dispatch_proc(
             "req-1",
             "kernel/proc/invocation-list",
             json!({ "session_id": "sess-xyz" }),
@@ -957,7 +1079,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let ph = make_proc_handler(&dir);
         let root = make_avix_root(&dir);
-        let resp = dispatch_request("req-1", "kernel/proc/bogus-new-op", json!({}), ph, root).await;
+        let resp = dispatch_proc("req-1", "kernel/proc/bogus-new-op", json!({}), ph, root).await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
     }
@@ -1001,7 +1123,7 @@ mod tests {
         let root = make_avix_root(&dir);
         let session_id = seed_session(&store, "alice").await;
 
-        let resp = dispatch_request(
+        let resp = dispatch_proc(
             "req-1",
             "kernel/proc/session/get",
             json!({ "id": session_id.to_string(), "caller_identity": "alice", "is_privileged": false }),
@@ -1020,7 +1142,7 @@ mod tests {
         let root = make_avix_root(&dir);
         let session_id = seed_session(&store, "alice").await;
 
-        let resp = dispatch_request(
+        let resp = dispatch_proc(
             "req-1",
             "kernel/proc/session/get",
             json!({ "id": session_id.to_string(), "caller_identity": "bob", "is_privileged": false }),
@@ -1040,7 +1162,7 @@ mod tests {
         let root = make_avix_root(&dir);
         let session_id = seed_session(&store, "alice").await;
 
-        let resp = dispatch_request(
+        let resp = dispatch_proc(
             "req-1",
             "kernel/proc/session/get",
             json!({ "id": session_id.to_string(), "caller_identity": "bob", "is_privileged": true }),
@@ -1059,7 +1181,7 @@ mod tests {
         let root = make_avix_root(&dir);
         let session_id = seed_session(&store, "alice").await;
 
-        let del_resp = dispatch_request(
+        let del_resp = dispatch_proc(
             "req-1",
             "kernel/proc/session/delete",
             json!({ "session_id": session_id.to_string(), "caller_identity": "alice", "is_privileged": false }),
@@ -1071,7 +1193,7 @@ mod tests {
         assert_eq!(del_resp.result.unwrap()["deleted"], session_id.to_string());
 
         // Verify it's gone
-        let get_resp = dispatch_request(
+        let get_resp = dispatch_proc(
             "req-2",
             "kernel/proc/session/get",
             json!({ "id": session_id.to_string(), "caller_identity": "alice", "is_privileged": false }),
@@ -1090,7 +1212,7 @@ mod tests {
         let root = make_avix_root(&dir);
         let session_id = seed_session(&store, "alice").await;
 
-        let resp = dispatch_request(
+        let resp = dispatch_proc(
             "req-1",
             "kernel/proc/session/delete",
             json!({ "session_id": session_id.to_string(), "caller_identity": "bob", "is_privileged": false }),
@@ -1110,7 +1232,7 @@ mod tests {
         let root = make_avix_root(&dir);
         let fake_id = uuid::Uuid::new_v4().to_string();
 
-        let resp = dispatch_request(
+        let resp = dispatch_proc(
             "req-1",
             "kernel/proc/session/delete",
             json!({ "session_id": fake_id, "caller_identity": "alice", "is_privileged": false }),
@@ -1119,6 +1241,161 @@ mod tests {
         )
         .await;
         assert!(resp.error.is_none(), "deleting non-existent session should be a no-op");
+    }
+
+    // ── fs/* handler tests ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn fs_read_missing_file_returns_error() {
+        let vfs = make_vfs();
+        let ph = make_proc_handler(&TempDir::new().unwrap());
+        let root = TempDir::new().unwrap().path().to_path_buf();
+        let resp = dispatch_request(
+            "r1",
+            "fs/read",
+            json!({ "path": "/no/such/file.txt" }),
+            ph,
+            root,
+            Arc::clone(&vfs),
+        )
+        .await;
+        assert!(resp.error.is_some(), "missing file should return error");
+        assert_eq!(resp.error.unwrap().code, -32000);
+    }
+
+    #[tokio::test]
+    async fn fs_write_then_read_roundtrip() {
+        let vfs = make_vfs();
+        let ph = make_proc_handler(&TempDir::new().unwrap());
+        let root = TempDir::new().unwrap().path().to_path_buf();
+
+        // Write
+        let write_resp = dispatch_request(
+            "r1",
+            "fs/write",
+            json!({ "path": "/tmp/hello.txt", "content": "hello world" }),
+            Arc::clone(&ph),
+            root.clone(),
+            Arc::clone(&vfs),
+        )
+        .await;
+        assert!(write_resp.error.is_none(), "write should succeed: {:?}", write_resp.error);
+        assert_eq!(write_resp.result.unwrap()["ok"], true);
+
+        // Read back
+        let read_resp = dispatch_request(
+            "r2",
+            "fs/read",
+            json!({ "path": "/tmp/hello.txt" }),
+            ph,
+            root,
+            Arc::clone(&vfs),
+        )
+        .await;
+        assert!(read_resp.error.is_none(), "read should succeed: {:?}", read_resp.error);
+        let result = read_resp.result.unwrap();
+        assert_eq!(result["content"], "hello world");
+        assert_eq!(result["encoding"], "utf-8");
+    }
+
+    #[tokio::test]
+    async fn fs_exists_true_and_false() {
+        let vfs = make_vfs();
+        let ph = make_proc_handler(&TempDir::new().unwrap());
+        let root = TempDir::new().unwrap().path().to_path_buf();
+
+        // Write a file
+        dispatch_request(
+            "r1",
+            "fs/write",
+            json!({ "path": "/tmp/exists.txt", "content": "data" }),
+            Arc::clone(&ph),
+            root.clone(),
+            Arc::clone(&vfs),
+        )
+        .await;
+
+        let yes = dispatch_request(
+            "r2",
+            "fs/exists",
+            json!({ "path": "/tmp/exists.txt" }),
+            Arc::clone(&ph),
+            root.clone(),
+            Arc::clone(&vfs),
+        )
+        .await;
+        assert_eq!(yes.result.unwrap()["exists"], true);
+
+        let no = dispatch_request(
+            "r3",
+            "fs/exists",
+            json!({ "path": "/tmp/ghost.txt" }),
+            ph,
+            root,
+            Arc::clone(&vfs),
+        )
+        .await;
+        assert_eq!(no.result.unwrap()["exists"], false);
+    }
+
+    #[tokio::test]
+    async fn fs_delete_removes_file() {
+        let vfs = make_vfs();
+        let ph = make_proc_handler(&TempDir::new().unwrap());
+        let root = TempDir::new().unwrap().path().to_path_buf();
+
+        // Write
+        dispatch_request(
+            "r1",
+            "fs/write",
+            json!({ "path": "/tmp/del.txt", "content": "bye" }),
+            Arc::clone(&ph),
+            root.clone(),
+            Arc::clone(&vfs),
+        )
+        .await;
+
+        // Delete
+        let del = dispatch_request(
+            "r2",
+            "fs/delete",
+            json!({ "path": "/tmp/del.txt" }),
+            Arc::clone(&ph),
+            root.clone(),
+            Arc::clone(&vfs),
+        )
+        .await;
+        assert!(del.error.is_none(), "delete should succeed");
+
+        // Verify gone
+        let exists = dispatch_request(
+            "r3",
+            "fs/exists",
+            json!({ "path": "/tmp/del.txt" }),
+            ph,
+            root,
+            Arc::clone(&vfs),
+        )
+        .await;
+        assert_eq!(exists.result.unwrap()["exists"], false);
+    }
+
+    #[tokio::test]
+    async fn fs_read_invalid_path_returns_parse_error() {
+        let vfs = make_vfs();
+        let ph = make_proc_handler(&TempDir::new().unwrap());
+        let root = TempDir::new().unwrap().path().to_path_buf();
+        let resp = dispatch_request(
+            "r1",
+            "fs/read",
+            json!({ "path": "relative/path" }),
+            ph,
+            root,
+            Arc::clone(&vfs),
+        )
+        .await;
+        assert!(resp.error.is_some(), "relative path should be rejected");
+        assert_eq!(resp.error.unwrap().code, -32602);
     }
 
     // T-SM-07: session_ownership_ok helper unit tests

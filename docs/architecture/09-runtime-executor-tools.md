@@ -79,15 +79,20 @@ is called only on error/kill — the executor is about to exit.
 
 ### Category 1: Direct Service Tools
 
-Registered by services (e.g., `fs/read`, `fs/write` by `fs.svc`; `llm/complete` by
-`llm.svc`). The LLM can call them if the agent's `CapabilityToken` grants access.
+Registered by built-in services and the kernel at boot, or by third-party services via
+`ipc.tool-add`. The LLM can call them if the agent's `CapabilityToken` grants access.
 
 `RuntimeExecutor` dispatches the call directly over a fresh Unix socket connection
 (ADR-05) to the service identified by the tool's `IpcBinding.endpoint`. The JSON-RPC
 method called is `IpcBinding.method`. If the service is caller-scoped, `_caller` (PID +
-session ID) is injected into the request params before sending. Kernel tools
-(namespace `kernel/`) have no `IpcBinding` and are forwarded to the kernel IPC server
-socket (`AVIX_KERNEL_SOCK` / `runtime_dir/kernel.sock`) with `_caller` always injected.
+session ID) is injected into the request params before sending.
+
+**`fs/*` tools** route to `KernelIpcServer` via `endpoint: "kernel"` (resolves to
+`AVIX_KERNEL_SOCK` / `runtime_dir/kernel.sock`). `KernelIpcServer` delegates to its
+`Arc<VfsRouter>` instance, which is passed in at bootstrap Phase 2.
+
+**`kernel/*` syscall tools** have no `IpcBinding` and are forwarded directly to the
+kernel IPC server socket with `_caller` always injected.
 
 **Execute permission check:** before dispatching, `RuntimeExecutor` verifies the agent's
 `spawned_by` user has execute permission on the tool. Tool owner has implicit execute;
@@ -95,15 +100,14 @@ other users need `permissions.all` to contain `x`; `root` is always allowed.
 `ToolPermissions` is loaded from the tool's `*.tool.yaml` descriptor at scan time
 (see `docs/architecture/07-services.md` § Tool Descriptor Files for derivation rules).
 
-Full namespace reference:
+**Built-in Cat1 registrations** (performed by `bootstrap::phase3_services`):
 
-| Namespace       | Tools                                                        | Capability required                |
-|-----------------|--------------------------------------------------------------|------------------------------------|
-| `fs/`           | read, write, list, copy, move, watch, search                 | `fs:read`, `fs:write`              |
-| `llm/`          | complete, generate-image, generate-speech, transcribe, embed | per-tool grant in `granted_tools`  |
-| `exec/`         | runtime/python/run, runtime/shell/run, tool/git/*, pkg/uv/* | `exec:python`, `exec:shell`        |
-| `mcp/<server>/` | any tool from a connected MCP server                         | per-tool grant                     |
-| `jobs/`         | watch, cancel                                                | (see Category 2)                   |
+| Namespace       | Tools registered at boot                                     | IPC endpoint | Registered by      |
+|-----------------|--------------------------------------------------------------|--------------|--------------------|
+| `fs/`           | `read`, `write`, `list`, `exists`, `delete`                  | `kernel`     | `bootstrap` (fixed)|
+| `llm/`          | `complete`, `embed`, `generate-image`, `generate-speech`, `transcribe` | `llm` | `bootstrap` (if `etc/llm.yaml` present) |
+| `exec/`         | `run` (params: `runtime`, `code`)                            | `exec`       | `bootstrap` (fixed)|
+| `mcp/<server>/` | any tool from a connected MCP server                         | `mcp-bridge` | `mcp-bridge.svc`   |
 
 Category 1 tools use `ToolVisibility::All` unless the owning service declares otherwise.
 
@@ -114,13 +118,18 @@ for all Cat1 tools granted in the token (those not in the Cat2 set) by calling
 `ToolRegistry::lookup(name)` on the real kernel `ToolRegistry`. Found descriptors are
 merged into the LLM's `tools[]` array alongside Cat2 descriptors.
 
-This makes granted Cat1 tools (e.g. `fs/read`, `llm/complete`) automatically visible in
-the LLM context without having to flood every tool into every agent — only tools
-explicitly granted in the token are included.
+This makes granted Cat1 tools (e.g. `fs/read`, `llm/complete`, `exec/run`) automatically
+visible in the LLM context — only tools explicitly granted in the token are included.
 
-If the registry does not hold a descriptor for a granted Cat1 tool (e.g. the owning
-service has not yet registered it), the tool is simply omitted from `tools[]` that turn.
-The agent can still call it if it knows the name, but the LLM will not auto-suggest it.
+The registry is populated at Phase 3 boot:
+- `fs/*` (5 tools) — always registered; `endpoint: "kernel"`
+- `exec/run` — always registered; `endpoint: "exec"`
+- `llm/*` (5 tools) — registered only if `etc/llm.yaml` is present; `endpoint: "llm"`
+- `kernel/*` syscalls — registered from `SyscallRegistry` at Phase 3 start
+
+If the registry does not hold a descriptor for a granted Cat1 tool (e.g. `llm.yaml` is
+absent), the tool is omitted from `tools[]` that turn. The agent can still call it by
+name, but the LLM will not auto-suggest it.
 
 **Wiring:** `IpcExecutorFactory` holds `Arc<Mutex<Option<Arc<ToolRegistry>>>>`. The
 registry is `None` at factory construction (phase 2). Phase 3 calls
@@ -193,7 +202,8 @@ The set of Category 2 tools granted to an agent depends on its `CapabilityToken`
 The five always-present tools (`cap/request-tool`, `cap/escalate`, `cap/list`,
 `job/watch`, `sys/tools`) are registered regardless of the agent's capability grants
 (Architecture Invariant 13). They also **bypass the capability grant check** in
-`validate_tool_call` — an agent can always call them even if its
+`validate_tool_call` via the `ALWAYS_PRESENT` constant in
+`executor/validation.rs` — an agent can always call them even if its
 `CapabilityToken.granted_tools` does not explicitly list them.
 
 `sys/tools` is a discovery tool: rather than flooding the LLM context with every

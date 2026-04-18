@@ -292,8 +292,12 @@ impl Runtime {
 
         // Retain a reference so phase3 can wire in service_manager and tool_registry.
         self.proc_handler = Some(Arc::clone(&proc_handler));
-        let kernel_server =
-            KernelIpcServer::new(self.kernel_sock.clone(), proc_handler, self.root.clone());
+        let kernel_server = KernelIpcServer::new(
+            self.kernel_sock.clone(),
+            proc_handler,
+            self.root.clone(),
+            Arc::clone(&self.vfs),
+        );
         kernel_server.start().await?;
         tracing::info!(sock = %self.kernel_sock.display(), "kernel IPC server started");
         Ok(())
@@ -354,6 +358,70 @@ impl Runtime {
         let exec_sock = self.runtime_dir.join("exec.sock");
         ExecIpcServer::new(exec_sock.clone()).start().await?;
         tracing::info!(sock = %exec_sock.display(), "exec.svc started");
+        // Register exec.svc Cat1 tool in the tool registry so agents can discover
+        // and call it. IPC binding: endpoint "exec" resolves to runtime_dir/exec.sock.
+        if let Ok(tool_name) = ToolName::parse("exec/run") {
+            let descriptor = serde_json::json!({
+                "name": "exec/run",
+                "description": "Execute code in a sandboxed runtime (bash, python, or sh)",
+                "ipc": {
+                    "transport": "local-ipc",
+                    "endpoint": "exec",
+                    "method": "exec/run",
+                }
+            });
+            let entry = ToolEntry::new(
+                tool_name,
+                "exec.svc".to_string(),
+                ToolState::Available,
+                ToolVisibility::All,
+                descriptor,
+            );
+            if let Err(e) = tool_registry.add("exec.svc", vec![entry]).await {
+                tracing::warn!(error = %e, "failed to register exec.svc tools");
+            } else {
+                tracing::info!("registered exec.svc tools in tool registry");
+            }
+        }
+
+        // Register fs/* Cat1 tools. IPC binding: endpoint "kernel" resolves to
+        // AVIX_KERNEL_SOCK env var or runtime_dir/kernel.sock at dispatch time.
+        let fs_tool_defs: &[(&str, &str)] = &[
+            ("fs/read",   "Read the contents of a file in the VFS"),
+            ("fs/write",  "Write content to a file in the VFS"),
+            ("fs/list",   "List entries in a VFS directory"),
+            ("fs/exists", "Check whether a path exists in the VFS"),
+            ("fs/delete", "Delete a file from the VFS"),
+        ];
+        let mut fs_entries = Vec::new();
+        for (name, desc) in fs_tool_defs {
+            if let Ok(tool_name) = ToolName::parse(name) {
+                let descriptor = serde_json::json!({
+                    "name": name,
+                    "description": desc,
+                    "ipc": {
+                        "transport": "local-ipc",
+                        "endpoint": "kernel",
+                        "method": name,
+                    }
+                });
+                fs_entries.push(ToolEntry::new(
+                    tool_name,
+                    "kernel".to_string(),
+                    ToolState::Available,
+                    ToolVisibility::All,
+                    descriptor,
+                ));
+            }
+        }
+        if let Err(e) = tool_registry.add("kernel", fs_entries).await {
+            tracing::warn!(error = %e, "failed to register fs/* tools");
+        } else {
+            tracing::info!(
+                "registered {} fs/* tools in tool registry",
+                fs_tool_defs.len()
+            );
+        }
 
         // ── llm.svc (optional — requires etc/llm.yaml) ────────────────────────
         let llm_yaml_path = self.root.join("etc/llm.yaml");
@@ -554,5 +622,104 @@ impl Runtime {
     async fn hot_reload(&mut self) -> Result<(), AvixError> {
         tracing::info!("reload stub");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool_registry::ToolRegistry;
+    use std::sync::Arc;
+
+    /// Verify that the exec.svc registration produces a valid ToolEntry with IPC binding.
+    #[tokio::test]
+    async fn exec_svc_tool_registered_with_ipc_binding() {
+        let tool_registry = Arc::new(ToolRegistry::new());
+
+        // Replicate the registration block from phase3_services
+        let tool_name = ToolName::parse("exec/run").expect("exec/run must be a valid tool name");
+        let descriptor = serde_json::json!({
+            "name": "exec/run",
+            "description": "Execute code in a sandboxed runtime (bash, python, or sh)",
+            "ipc": {
+                "transport": "local-ipc",
+                "endpoint": "exec",
+                "method": "exec/run",
+            }
+        });
+        let entry = ToolEntry::new(
+            tool_name,
+            "exec.svc".to_string(),
+            ToolState::Available,
+            ToolVisibility::All,
+            descriptor,
+        );
+        tool_registry
+            .add("exec.svc", vec![entry])
+            .await
+            .expect("add should succeed");
+
+        let found = tool_registry
+            .lookup("exec/run")
+            .await
+            .expect("exec/run must be in registry after registration");
+
+        assert_eq!(found.owner, "exec.svc");
+        let ipc = &found.descriptor["ipc"];
+        assert_eq!(ipc["transport"], "local-ipc", "transport must be local-ipc");
+        assert_eq!(ipc["endpoint"], "exec", "endpoint must be exec");
+        assert_eq!(ipc["method"], "exec/run", "method must be exec/run");
+    }
+
+    /// Verify that fs/* tools are registered with endpoint "kernel" (routes to kernel.sock).
+    #[tokio::test]
+    async fn fs_tools_registered_with_kernel_ipc_binding() {
+        let tool_registry = Arc::new(ToolRegistry::new());
+
+        // Replicate the fs/* registration from phase3_services
+        let fs_tool_defs: &[(&str, &str)] = &[
+            ("fs/read",   "Read the contents of a file in the VFS"),
+            ("fs/write",  "Write content to a file in the VFS"),
+            ("fs/list",   "List entries in a VFS directory"),
+            ("fs/exists", "Check whether a path exists in the VFS"),
+            ("fs/delete", "Delete a file from the VFS"),
+        ];
+        let mut fs_entries = Vec::new();
+        for (name, desc) in fs_tool_defs {
+            if let Ok(tool_name) = ToolName::parse(name) {
+                let descriptor = serde_json::json!({
+                    "name": name,
+                    "description": desc,
+                    "ipc": {
+                        "transport": "local-ipc",
+                        "endpoint": "kernel",
+                        "method": name,
+                    }
+                });
+                fs_entries.push(ToolEntry::new(
+                    tool_name,
+                    "kernel".to_string(),
+                    ToolState::Available,
+                    ToolVisibility::All,
+                    descriptor,
+                ));
+            }
+        }
+        tool_registry
+            .add("kernel", fs_entries)
+            .await
+            .expect("add should succeed");
+
+        for (name, _) in fs_tool_defs {
+            let entry = tool_registry
+                .lookup(name)
+                .await
+                .unwrap_or_else(|_| panic!("{name} must be in registry after registration"));
+            assert_eq!(entry.owner, "kernel");
+            let ipc = &entry.descriptor["ipc"];
+            assert_eq!(ipc["transport"], "local-ipc");
+            assert_eq!(ipc["endpoint"], "kernel", "{name}: endpoint must be kernel");
+            assert_eq!(ipc["method"], *name, "{name}: method must match tool name");
+        }
     }
 }
