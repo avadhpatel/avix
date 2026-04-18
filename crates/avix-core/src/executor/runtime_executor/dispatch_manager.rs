@@ -1201,10 +1201,46 @@ impl RuntimeExecutor {
                             );
                         }
 
-                        let result = if self.is_cat2_tool(&call.name) {
-                            self.dispatch_category2(call).await?
+                        let result = match if self.is_cat2_tool(&call.name) {
+                            self.dispatch_category2(call).await
                         } else {
-                            self.dispatch_via_router(call).await?
+                            self.dispatch_via_router(call).await
+                        } {
+                            Ok(v) => v,
+                            Err(e) => {
+                                tracing::warn!(
+                                    pid = self.pid.as_u64(),
+                                    tool = %call.name,
+                                    call_id = %call.call_id,
+                                    error = %e,
+                                    "tool dispatch failed; reporting error to agent"
+                                );
+                                let error_content = format!("Error: {e}");
+                                if let Some(bus) = &self.event_bus {
+                                    bus.agent_tool_result(
+                                        &self.atp_session_id,
+                                        self.pid.as_u64(),
+                                        &call.call_id,
+                                        &call.name,
+                                        &error_content,
+                                    );
+                                }
+                                if let Some(t) = &self.tracer {
+                                    t.agent_tool_result(
+                                        self.pid.as_u64(),
+                                        &call.call_id,
+                                        &call.name,
+                                        &serde_json::json!({"error": e.to_string()}),
+                                    );
+                                }
+                                self.save_invocation_state().await;
+                                tool_results.push(serde_json::json!({
+                                    "type": "tool_result",
+                                    "tool_use_id": call.call_id,
+                                    "content": error_content
+                                }));
+                                continue;
+                            }
                         };
 
                         tracing::debug!(
@@ -2241,5 +2277,58 @@ mod tests {
         .with_permissions(ToolPermissions::new("alice".into(), "".into(), "---".into()));
 
         assert!(check_tool_execute_permission(&entry, "root").is_ok());
+    }
+
+    /// A Cat1 tool dispatch failure (tool not found in mock registry) must NOT crash the agent.
+    /// The error is reported to the LLM as a tool_result and the agent continues normally.
+    #[tokio::test]
+    async fn test_tool_dispatch_error_does_not_crash_agent() {
+        // Grant fs/read so it passes validation, but the mock registry always returns None
+        // for lookup — so dispatch_via_router will fail with "not found in registry".
+        let registry = Arc::new(MockToolRegistry::new());
+        let params = SpawnParams {
+            pid: Pid::from_u64(3290),
+            agent_name: "agent".into(),
+            goal: "goal".into(),
+            spawned_by: "kernel".into(),
+            session_id: "sess".into(),
+            atp_session_id: String::new(),
+            token: CapabilityToken::test_token(&["fs/read"]),
+            system_prompt: None,
+            selected_model: "claude-sonnet-4".into(),
+            denied_tools: vec![],
+            context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
+            invocation_id: String::new(),
+        };
+        let mut executor = RuntimeExecutor::spawn_with_registry(params, registry)
+            .await
+            .unwrap();
+
+        let mock_client = MockLlmClient::new(vec![
+            // Turn 1: LLM requests fs/read — dispatch will fail (not in mock registry)
+            LlmCompleteResponse {
+                content: vec![json!({
+                    "type": "tool_use",
+                    "id": "read-fail",
+                    "name": "fs__read",
+                    "input": {"path": "/etc/passwd"}
+                })],
+                stop_reason: StopReason::ToolUse,
+                input_tokens: 5,
+                output_tokens: 2,
+            },
+            // Turn 2: LLM receives the error result and decides to stop
+            LlmCompleteResponse {
+                content: vec![json!({"type": "text", "text": "I encountered an error but recovered."})],
+                stop_reason: StopReason::EndTurn,
+                input_tokens: 10,
+                output_tokens: 5,
+            },
+        ]);
+
+        let result = executor.run_with_client("read something", &mock_client).await;
+        assert!(result.is_ok(), "agent should survive a tool dispatch error: {result:?}");
+        assert_eq!(result.unwrap().text, "I encountered an error but recovered.");
     }
 }
