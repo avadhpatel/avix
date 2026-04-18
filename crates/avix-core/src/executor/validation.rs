@@ -4,7 +4,13 @@ use crate::types::token::CapabilityToken;
 use std::collections::HashMap;
 
 /// Always-present Cat2 tools that bypass the capability grant check (Architecture Invariant 13).
-const ALWAYS_PRESENT: &[&str] = &["cap/request-tool", "cap/escalate", "cap/list", "job/watch"];
+const ALWAYS_PRESENT: &[&str] = &[
+    "cap/request-tool",
+    "cap/escalate",
+    "cap/list",
+    "job/watch",
+    "sys/tools",
+];
 
 #[derive(Default)]
 pub struct ToolBudgets {
@@ -133,6 +139,17 @@ mod tests {
                 "always-present tool {tool} should not be blocked by capability check"
             );
         }
+    }
+
+    #[test]
+    fn sys_tools_bypasses_capability_check() {
+        // sys/tools must bypass the grant check even when absent from the token (Invariant 13)
+        let token = CapabilityToken::test_token(&["agent/spawn"]); // sys/tools NOT in token
+        let mut budgets = ToolBudgets::default();
+        assert!(
+            validate_tool_call(&token, &make_call("sys/tools"), &mut budgets).is_ok(),
+            "sys/tools should bypass capability check regardless of granted_tools"
+        );
     }
 
     #[test]

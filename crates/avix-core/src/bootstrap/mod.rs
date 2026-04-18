@@ -24,7 +24,9 @@ use crate::service::lifecycle::{ServiceManager, ServiceSpawnRequest};
 use crate::service::process::ServiceProcess;
 use crate::service::watchdog::{ServiceWatchdog, WatchdogEntry};
 use crate::signal::SignalChannelRegistry;
+use crate::tool_registry::{ToolEntry, ToolState, ToolVisibility};
 use crate::trace::{TraceFlags, Tracer};
+use crate::types::tool::ToolName;
 use crate::types::Pid;
 use std::collections::HashMap;
 use std::fs;
@@ -375,6 +377,42 @@ impl Runtime {
                     {
                         Ok(_handle) => {
                             tracing::info!(sock = %llm_sock.display(), "llm.svc started");
+                            // Register llm.svc Cat1 tools in the tool registry so agents can
+                            // discover and call them. IPC binding: endpoint "llm" resolves to
+                            // runtime_dir/llm.sock at dispatch time.
+                            let llm_tool_defs: &[(&str, &str)] = &[
+                                ("llm/complete",       "Generate a completion from the language model"),
+                                ("llm/embed",          "Generate embedding vectors for text input"),
+                                ("llm/generate-image", "Generate an image from a text prompt"),
+                                ("llm/generate-speech","Convert text to speech audio"),
+                                ("llm/transcribe",     "Transcribe audio to text"),
+                            ];
+                            let mut llm_entries = Vec::new();
+                            for (name, desc) in llm_tool_defs {
+                                if let Ok(tool_name) = ToolName::parse(name) {
+                                    let descriptor = serde_json::json!({
+                                        "name": name,
+                                        "description": desc,
+                                        "ipc": {
+                                            "transport": "local-ipc",
+                                            "endpoint": "llm",
+                                            "method": name,
+                                        }
+                                    });
+                                    llm_entries.push(ToolEntry::new(
+                                        tool_name,
+                                        "llm.svc".to_string(),
+                                        ToolState::Available,
+                                        ToolVisibility::All,
+                                        descriptor,
+                                    ));
+                                }
+                            }
+                            if let Err(e) = tool_registry.add("llm.svc", llm_entries).await {
+                                tracing::warn!(error = %e, "failed to register llm.svc tools");
+                            } else {
+                                tracing::info!("registered {} llm.svc tools in tool registry", llm_tool_defs.len());
+                            }
                         }
                         Err(e) => {
                             tracing::warn!(error = %e, "llm.svc failed to start");

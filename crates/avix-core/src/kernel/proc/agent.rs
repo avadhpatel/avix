@@ -139,12 +139,16 @@ impl AgentManager {
             agent_name: name.to_string(),
             spawned_by: caller_identity.to_string(),
         };
+        // TODO: resolve granted_tools from the agent manifest's requestedCapabilities.
+        // For now, grant the Cat1/Cat2 tools that have working dispatch paths:
+        //   - agent/spawn   → Cat2, registered at spawn
+        //   - llm/*         → Cat1, dispatched to llm.svc via IPC
+        // fs/read and fs/write are omitted: no fs.svc socket exists yet.
         let token = CapabilityToken::mint(
             vec![
-                "fs/read".to_string(),
-                "fs/write".to_string(),
                 "agent/spawn".to_string(),
                 "llm/complete".to_string(),
+                "llm/embed".to_string(),
             ],
             Some(issued_to),
             3600,
