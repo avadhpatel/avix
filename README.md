@@ -34,98 +34,67 @@ capabilities — are applied to agentic concepts.
 cargo build --workspace
 ```
 
-### Quickstart (Daemon + Clients)
+### Daemon Setup
 
-1. Build:
+1. Init config (writes `auth.conf`, prints the generated API key):
    ```bash
-   cargo build --workspace
-   ```
-
-2. Init config (prints API key):
-   ```bash
-   ./target/debug/avix config init \\
-     --root ~/avix-data \\
-     --user alice \\
-     --role admin \\
-     --credential-type api_key \\
+   ./target/debug/avix server config init \
+     --root ~/avix-data \
+     --user alice \
+     --role admin \
+     --credential-type api_key \
      --mode cli
    ```
 
-3. Start daemon:
+2. Start the daemon (ATP WebSocket on port 9142):
    ```bash
    export AVIX_MASTER_KEY=<your-32-byte-hex-key>
-   ./target/debug/avix start --root ~/avix-data  # ws://localhost:9142/atp
+   ./target/debug/avix server start --root ~/avix-data
    ```
 
-4. CLI connect:
+3. Connect and interact:
    ```bash
    export AVIX_API_KEY=<api-key-from-init>
-   ./target/debug/avix agent list
-   ./target/debug/avix agent spawn researcher \\
+
+   ./target/debug/avix client connect           # verify connectivity
+   ./target/debug/avix client agent list        # list running agents
+   ./target/debug/avix client agent spawn researcher \
      --goal "Research Q3 earnings"
-   ./target/debug/avix agent catalog        # list installed agents
-   ./target/debug/avix agent history        # past invocations
-   ./target/debug/avix agent show <id>      # detail + conversation
+   ./target/debug/avix client agent catalog     # list installed agents
+   ./target/debug/avix client agent history     # past invocations
+   ./target/debug/avix client agent show <id>   # detail + conversation
    ```
 
-5. GUI dev:
+4. GUI dev:
    ```bash
    cd crates/avix-app
    npm install
    tauri dev  # auto-connects to localhost:9142
    ```
-  --root ~/avix-data \
-  --user alice \
-  --role admin \
-  --credential-type api_key \
-  --mode cli
-```
 
-### Start the Runtime
+---
 
-```bash
-export AVIX_MASTER_KEY=<your-32-byte-key>
-export AVIX_API_KEY=<the-key-printed-by-config-init>
-./target/debug/avix start --root ~/avix-data
-```
+## ATP Manual Testing (websocat)
 
-### Connect
-
-```bash
-# Check runtime status
-./target/debug/avix status
-
-# Spawn an agent
-./target/debug/avix agent spawn \
-  --agent researcher \
-  --goal "Summarise the Q3 earnings report in /users/alice/workspace/q3.pdf"
-
-# List running agents
-./target/debug/avix agent list
-
-# Check LLM provider health
-./target/debug/avix llm status
-```
-
-## ATP Quickstart (Manual Testing)
-
-Manual ATP testing with curl + websocat (assumes `avix start --test-mode` on port 7700):
+Test ATP directly against the daemon (port 9142 by default):
 
 ### 1. Login
+
 ```bash
-curl -X POST http://localhost:7700/atp/auth/login \\
-  -H 'Content-Type: application/json' \\
+curl -X POST http://localhost:9142/atp/auth/login \
+  -H 'Content-Type: application/json' \
   -d '{"identity":"alice","credential":"<api_key>"}'
 ```
 
 ### 2. WS Connect + Interact
+
 ```bash
-websocat "ws://localhost:7700/atp" \\
-  -H "Authorization: Bearer <token_from_login>" \\
+websocat "ws://localhost:9142/atp" \
+  -H "Authorization: Bearer <token_from_login>" \
   --interactive
 ```
 
-In websocat shell:
+In the websocat shell:
 ```
 {"type":"subscribe","events":["*"]}
 {"type":"cmd","id":"req-1","token":"<token>","domain":"proc","op":"spawn","body":{"agent":"researcher","goal":"Hello world"}}
@@ -217,61 +186,105 @@ Supported providers: Anthropic, OpenAI, Ollama, Stability AI, ElevenLabs.
 
 ## Clients
 
-* **Daemon**: `avix start --root <dir> [--port 9142]` — ATP WS gateway + services + kernel.agent
-* **CLI**: `avix agent spawn/list/kill/catalog/history/show`, `avix hil approve/deny`, `avix logs --follow`
-* **TUI**: `avix tui` — fullscreen dashboard: Running tab (agents/output/events/notifs/HIL) + Catalog tab (`Tab` to switch). Commands: `:spawn`/`:kill`/`:logs`/`:catalog`
+* **Daemon**: `avix server start --root <dir> [--port 9142]` — ATP WS gateway + services + kernel.agent
+* **CLI**: `avix client <subcommand>` — full control over agents, sessions, services, secrets, HIL
+* **TUI**: `avix client tui` — fullscreen dashboard: Running tab (agents/output/events/notifs/HIL) + Catalog tab (`Tab` to switch). Commands: `:spawn`/`:kill`/`:logs`/`:catalog`
 * **GUI**: `cd crates/avix-app && tauri dev` — sidebar app with Agent threads, Catalog page (browse + spawn), History page (invocation table + conversation drawer), Services, Tools
 
 All share `avix-client-core` ATP lib.
 
-### Package Management
+### Server Commands
 
 ```bash
-# Package authoring (offline — no server required)
-avix client package new my-agent --type agent          # scaffold new agent
-avix client package new my-svc --type service          # scaffold new service
-avix client package validate ./my-agent                 # validate package structure
-avix client package build ./my-agent --version v0.1.0   # build .tar.xz + checksums
+# Initialize config (must run once before starting)
+avix server config init \
+  --root ~/avix-data \
+  --user alice \
+  --role admin \
+  --credential-type api_key \
+  --mode cli
 
-# Agent installation
-avix agent install ./my-agent.tar.xz                    # from local archive
-avix agent install https://example.com/agent.tar.xz     # from URL
-avix agent install github:owner/repo/agent              # from GitHub Releases
-avix agent install git:https://github.com/user/repo     # from git
-avix agent catalog                                       # list installed agents
-avix agent uninstall my-agent [--scope user|system]     # remove agent
+# Start the daemon (ATP WebSocket on port 9142)
+avix server start --root ~/avix-data [--port 9142]
 
-# Service installation
-avix service install ./github-svc-1.2.0.tar.gz --checksum sha256:abc123
-avix service install https://pkg.avix.dev/github-svc-1.2.0.tar.gz
-
-# Manage running services
-avix service list                         # offline — reads service.yaml files
-avix service status github-svc            # reads /proc/services/<name>/status.yaml
-avix service start   github-svc
-avix service stop    github-svc
-avix service restart github-svc
-avix service uninstall github-svc [--force]
+# Run a single agent directly (no daemon required)
+avix server run --goal "Summarise Q3 earnings" [--name researcher]
 ```
 
-### Secret Management
-
-Secrets are stored as AES-256-GCM encrypted blobs in `AVIX_ROOT/secrets/`. Admin
-operations require `AVIX_MASTER_KEY` in the environment.
+### Client — Agent Commands
 
 ```bash
-export AVIX_MASTER_KEY=<your-32-byte-key>
+avix client agent list                          # list running agents
+avix client agent spawn researcher \
+  --goal "Research Q3 earnings"                 # spawn an agent
+avix client agent kill <pid>                    # kill an agent by PID
+avix client agent catalog [--username]          # list installed agents
+avix client agent history [--agent] [--username] # past invocations
+avix client agent show <id>                     # detail + conversation
+avix client agent install ./my-agent.tar.xz    # from local archive
+avix client agent install https://...          # from URL
+avix client agent install github:owner/repo/agent  # from GitHub Releases
+avix client agent uninstall my-agent [--scope user|system]
 
-# Per-service secrets (used by the service via kernel/secret/get)
-avix secret set github-app-key ghp_abc123 --for-service github-svc
-avix secret list --for-service github-svc
-
-# Per-user secrets
-avix secret set gh-token tok-xyz --for-user alice
-avix secret delete gh-token --for-user alice
+# All agent commands accept --json for machine-readable output
 ```
 
-## Repository Layout (Workspace Structure)
+### Client — Session Commands
+
+Sessions group related invocations. Ownership is enforced: users access only their own
+sessions; operator and admin roles bypass the check.
+
+```bash
+avix client session list [--username] [--status idle|running|completed|failed]
+avix client session show <session_id>
+avix client session resume <session_id> [--input "continue with X"]
+avix client session delete <session_id> [--force]
+```
+
+### Client — Other Commands
+
+```bash
+# Connectivity
+avix client connect                      # test connectivity (reads config.yaml)
+avix client tui                          # launch TUI dashboard
+avix client logs [--follow]              # tail server logs
+avix client atp shell                    # interactive ATP shell (REPL)
+
+# HIL (Human-in-the-Loop)
+avix client hil list                     # pending HIL requests
+avix client hil approve <hil_id>
+avix client hil deny <hil_id>
+
+# Services
+avix client service list
+avix client service status <name>
+avix client service start <name>
+avix client service stop <name>
+avix client service restart <name>
+avix client service uninstall <name> [--force]
+
+# Secrets (requires AVIX_MASTER_KEY in env)
+avix client secret set <key> <value> --for-service <svc>
+avix client secret set <key> <value> --for-user <user>
+avix client secret list [--for-service <svc>] [--for-user <user>]
+avix client secret delete <key> [--for-service <svc>] [--for-user <user>]
+```
+
+### Package Commands (offline — no server required)
+
+```bash
+avix package new my-agent --type agent          # scaffold new agent
+avix package new my-svc --type service          # scaffold new service
+avix package validate ./my-agent                # validate package structure
+avix package build ./my-agent --version v0.1.0  # build .tar.xz archive
+avix package trust add <key> --name "AcmeCorp"  # add trusted signing key
+avix package trust list
+avix package trust remove <fingerprint>
+```
+
+---
+
+## Repository Layout
 
 ```
 avix/ (Cargo workspace)
@@ -317,7 +330,7 @@ cargo fmt --check                          # must be clean
 cargo bench
 ```
 
-All performance targets must pass before the Day 29 milestone:
+Performance targets:
 
 | Operation | Target |
 |---|---|
@@ -337,7 +350,7 @@ Every change follows the same cycle:
 3. Implement the minimum code to make it pass
 4. Refactor
 5. `cargo clippy --workspace -- -D warnings && cargo fmt --check`
-6. Commit: `day-NN: <description>`
+6. Commit
 
 See `CLAUDE.md` for the full development convention reference.
 
@@ -358,7 +371,7 @@ See `CLAUDE.md` for the full development convention reference.
 FROM avix:latest
 ENV AVIX_MASTER_KEY=""
 ENV AVIX_ADMIN_API_KEY=""
-RUN avix config init \
+RUN avix server config init \
   --root /var/avix-data \
   --user avix-admin \
   --credential-type api_key \
@@ -366,7 +379,7 @@ RUN avix config init \
   --master-key-source env \
   --mode headless \
   --non-interactive
-CMD ["avix", "start", "--root", "/var/avix-data"]
+CMD ["avix", "server", "start", "--root", "/var/avix-data"]
 ```
 
 ---
@@ -385,12 +398,15 @@ CMD ["avix", "start", "--root", "/var/avix-data"]
   `_caller.pid`, `_caller.user`, and `_caller.token`. Services use this to scope
   per-user behaviour. Unauthorized calls never reach the service — the kernel enforces
   ACLs at dispatch time.
+- **Session ownership** — users can only read and mutate their own sessions. Operator and
+  admin roles bypass this check. Ownership is enforced at the kernel IPC layer, not just
+  the gateway.
 
 ---
 
 ## Key Design Invariants
 
-1. `auth.conf` must exist before `avix start` — no setup mode inside core
+1. `auth.conf` must exist before `avix server start` — no setup mode inside core
 2. `credential.type: none` does not exist — all auth is `api_key` or `password`
 3. ATP (external) and IPC (internal) never cross the boundary
 4. `llm.svc` owns all AI inference — `RuntimeExecutor` never calls providers directly
