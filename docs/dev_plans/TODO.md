@@ -1,7 +1,7 @@
 # Tool Registry Unification - Remaining Items
 
 **Status**: Phase 5 partial — tool visibility complete, VFS permission wiring pending  
-**Last Updated**: 2026-04-13
+**Last Updated**: 2026-04-18
 
 ---
 
@@ -21,6 +21,53 @@
 ---
 
 ## Remaining Items (Phase 5+)
+
+### 0. Cat1 Tool Pipeline — Remaining Work
+
+Items deferred from `cat1-tool-pipeline-fix.md` (commit `4a126ba`). These are the highest
+priority items — agents cannot do meaningful work without `fs/*` and `exec/*` tools.
+
+#### 0a. Token resolution from manifest `requestedCapabilities`
+
+The `CapabilityToken` in `proc/agent.rs` is still hardcoded with 3 tools (`agent/spawn`,
+`llm/complete`, `llm/embed`). It must be resolved from the agent manifest's
+`requestedCapabilities` field so each agent gets exactly the tools its manifest declares.
+
+**Requires**: a resolver that maps capability group strings (e.g. `fs:*`, `llm:inference`,
+`kernel:*`) to individual tool names by querying the tool registry and syscall registry.
+
+**Affected files**: `kernel/proc/agent.rs`, new `kernel/capability_resolver.rs`.
+
+#### 0b. `fs.svc` — VFS Cat1 tools (`fs/read`, `fs/write`, `fs/list`, `fs/exists`, `fs/delete`)
+
+No filesystem service exists. Agents cannot read or write files. The VFS is operational
+internally but not exposed as Cat1 tools to the LLM.
+
+**Options** (decide at plan time):
+1. Add a lightweight `fs.svc` IPC server that wraps `VfsRouter` calls.
+2. Route `fs/*` calls through the kernel IPC server (already has `VfsRouter` access).
+
+Option 2 is simpler — add `fs/*` handlers directly to `KernelIpcServer` and register the
+tools with no IPC binding (routes to `kernel.sock` automatically). The kernel IPC already has
+`VfsRouter` access through `ProcHandler`.
+
+**Affected files**: `kernel/ipc_server.rs`, `bootstrap/mod.rs` (register `fs/*` tools).
+
+#### 0c. `kernel/fs/*` kernel IPC handlers
+
+`SyscallRegistry` defines `kernel/fs/read`, `kernel/fs/write`, etc. but `KernelIpcServer`
+does not handle them. These need handlers that delegate to `VfsRouter`.
+
+Closely related to 0b — implement together.
+
+#### 0d. `exec.svc` Cat1 tools (`exec/python`, `exec/shell`, etc.)
+
+`exec.svc` IPC server is running (`exec.sock` is created) but its tools are not registered in
+the tool registry. Follow the same pattern as `llm.svc` registration added in `4a126ba`.
+
+**Affected files**: `bootstrap/mod.rs` (register `exec/*` tools after `exec.svc` starts).
+
+---
 
 ### 1. Linux-Style Permission Model (rwx)
 
@@ -88,10 +135,13 @@ Already emitted in `generate_tool_yaml()` as part of the per-agent tool state fi
 
 1. **Phase 4a**: ✅ Implement `ToolPermissions` struct + default to all r--
 2. **Phase 4b**: ✅ Update scanner to read permissions from tool.yaml
-3. **Phase 4c**: ✅ Add permissions to VFS output + per-agent tool state (commit `accb915`)
-4. **Phase 5a**: Implement Linux-style rwx permission enforcement in `generate_tool_yaml()`
-5. **Phase 5b**: Wire crew membership into `VfsCallerContext` at spawn
-6. **Phase 5c**: Enforce write/execute permissions at tool dispatch time
+3. **Phase 4c**: ✅ Per-agent tool state via `init_vfs_caller()` (commit `accb915`)
+4. **Cat1 0d**: Register `exec.svc` tools in tool registry (quick, follows llm.svc pattern)
+5. **Cat1 0b+0c**: `fs/*` Cat1 tools — kernel IPC handlers + registry registration
+6. **Cat1 0a**: Token resolution from manifest `requestedCapabilities`
+7. **Phase 5a**: Linux-style rwx permission enforcement in `generate_tool_yaml()`
+8. **Phase 5b**: Wire crew membership into `VfsCallerContext` at spawn
+9. **Phase 5c**: Enforce write/execute permissions at tool dispatch time
 
 ---
 
@@ -270,15 +320,11 @@ LLM call returns.
 
 ---
 
-## Session Management
+## Session Management — ✅ RESOLVED
 
-### Session Delete (`avix session delete <id>`)
-
-**Plan**: [session-gap-B-session-delete.md](session-gap-B-session-delete.md)
-
-`SessionStore::delete()` exists at the store layer but is not wired to `PersistentSessionStore`,
-the IPC server (`kernel/proc/session/delete`), the ATP gateway, or `avix session delete <id>` CLI.
-Workaround: stop kernel, delete `<root>/data/sessions.redb`.
+All session management commands implemented and committed (2026-04-17/18).
+`avix client session list/show/resume/delete` fully wired with ownership enforcement.
+See `docs/architecture/06-agents.md` § Session Management and `docs/architecture/12-avix-clients.md`.
 
 ---
 
