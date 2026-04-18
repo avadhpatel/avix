@@ -547,6 +547,46 @@ impl RuntimeExecutor {
                         .await;
                     return Ok(serde_json::json!({ "tools": summaries }));
                 }
+
+                // Real path: query the live ToolRegistry directly.
+                if let super::RegistryRef::Real(reg) = &self.registry_ref {
+                    let all = reg.list_all().await;
+                    let token = &self.token;
+                    let tools: Vec<serde_json::Value> = all
+                        .into_iter()
+                        .filter(|s| {
+                            if granted_only && !token.has_tool(&s.name) {
+                                return false;
+                            }
+                            if !namespace.is_empty() && s.namespace != namespace {
+                                return false;
+                            }
+                            if !keyword.is_empty()
+                                && !s.name.contains(&keyword)
+                                && !s.description.contains(&keyword)
+                            {
+                                return false;
+                            }
+                            true
+                        })
+                        .map(|s| {
+                            serde_json::json!({
+                                "name": s.name,
+                                "description": s.description,
+                                "state": s.state,
+                            })
+                        })
+                        .collect();
+                    tracing::debug!(
+                        pid = self.pid.as_u64(),
+                        count = tools.len(),
+                        namespace = %namespace,
+                        granted_only,
+                        "sys/tools query from real registry"
+                    );
+                    return Ok(serde_json::json!({ "tools": tools }));
+                }
+
                 Ok(serde_json::json!({ "tools": [] }))
             }
             _ => Ok(serde_json::json!({
@@ -1098,11 +1138,24 @@ impl RuntimeExecutor {
                 TurnAction::DispatchTools(calls) => {
                     chain_count += calls.len();
                     if chain_count > self.max_tool_chain_length {
-                        self.signal_rx = Some(signal_rx);
-                        return Err(AvixError::ConfigParse(format!(
-                            "exceeded max tool chain limit of {}",
+                        tracing::warn!(
+                            pid = self.pid.as_u64(),
+                            limit = self.max_tool_chain_length,
+                            chain_count,
+                            "tool chain limit reached; completing invocation gracefully"
+                        );
+                        let text = format!(
+                            "I have reached the tool call limit of {} for this invocation. \
+                             Please review the work completed so far and provide new instructions.",
                             self.max_tool_chain_length
-                        )));
+                        );
+                        self.memory.conversation_history.push(
+                            ConversationEntry::from_role_content(Role::Assistant, &text),
+                        );
+                        self.save_invocation_state().await;
+                        self.save_session_response(&text).await;
+                        self.signal_rx = Some(signal_rx);
+                        return Ok(TurnResult { text });
                     }
                     messages.push(serde_json::json!({
                         "role": "assistant",
@@ -1876,8 +1929,9 @@ mod tests {
             output_tokens: 2,
         }]);
         let result = executor.run_with_client("do it", &mock_client).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("max tool chain"));
+        // Chain limit now completes gracefully instead of crashing the agent.
+        assert!(result.is_ok(), "chain limit should return Ok, not crash: {result:?}");
+        assert!(result.unwrap().text.contains("tool call limit"));
     }
 
     #[tokio::test]
