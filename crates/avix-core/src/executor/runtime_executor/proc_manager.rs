@@ -202,4 +202,41 @@ mod tests {
         // No VFS — must not panic
         executor.init_proc_files().await;
     }
+
+    #[tokio::test]
+    async fn init_vfs_caller_sets_token_on_vfs() {
+        let (executor, vfs) = make_executor_with_vfs(910).await;
+        executor.init_vfs_caller().await;
+        let ctx = vfs.caller().await;
+        assert!(ctx.is_some(), "caller context should be set after init_vfs_caller");
+        assert!(
+            ctx.unwrap().token.is_some(),
+            "caller context should carry the agent token"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_vfs_caller_no_vfs_no_panic() {
+        let registry = Arc::new(MockToolRegistry::new());
+        let params = SpawnParams {
+            pid: Pid::from_u64(911),
+            agent_name: "no-vfs-caller".into(),
+            goal: "g".into(),
+            spawned_by: "kernel".into(),
+            session_id: "s".into(),
+            atp_session_id: String::new(),
+            token: CapabilityToken::test_token(&[]),
+            system_prompt: None,
+            selected_model: "claude-sonnet-4".into(),
+            denied_tools: vec![],
+            context_limit: 0,
+            runtime_dir: std::path::PathBuf::new(),
+            invocation_id: String::new(),
+        };
+        let executor = RuntimeExecutor::spawn_with_registry(params, registry)
+            .await
+            .unwrap();
+        // No VFS — must not panic
+        executor.init_vfs_caller().await;
+    }
 }

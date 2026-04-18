@@ -10,6 +10,7 @@ use crate::executor::spawn::SpawnParams;
 use crate::gateway::event_bus::AtpEventBus;
 use crate::invocation::{InvocationStatus, InvocationStore};
 use crate::llm_client::IpcLlmClient;
+use crate::memfs::VfsRouter;
 use crate::process::entry::ProcessStatus;
 use crate::process::table::ProcessTable;
 use crate::session::PersistentSessionStore;
@@ -43,6 +44,8 @@ pub struct IpcExecutorFactory {
     signal_channels: SignalChannelRegistry,
     /// Real kernel tool registry — injected in phase3 via `set_tool_registry`.
     tool_registry: Arc<Mutex<Option<Arc<ToolRegistry>>>>,
+    /// Shared VFS — attached to each executor so `/tools/**` reads reflect per-agent state.
+    vfs: Option<Arc<VfsRouter>>,
 }
 
 impl IpcExecutorFactory {
@@ -60,7 +63,14 @@ impl IpcExecutorFactory {
             session_store,
             signal_channels: SignalChannelRegistry::new(),
             tool_registry: Arc::new(Mutex::new(None)),
+            vfs: None,
         }
+    }
+
+    /// Wire in the shared `VfsRouter` so each launched executor gets per-agent tool state.
+    pub fn with_vfs(mut self, vfs: Arc<VfsRouter>) -> Self {
+        self.vfs = Some(vfs);
+        self
     }
 
     /// Wire in the real `ToolRegistry` after phase3 construction.
@@ -99,6 +109,7 @@ impl AgentExecutorFactory for IpcExecutorFactory {
         let invocation_id = params.invocation_id.clone();
         let signal_channels = self.signal_channels.clone();
         let tool_registry_handle = Arc::clone(&self.tool_registry);
+        let vfs_handle = self.vfs.clone();
 
         let handle = tokio::spawn(async move {
             tracer.agent_spawn(pid.as_u64(), &agent_name, &goal, &agent_session_id);
@@ -142,11 +153,15 @@ impl AgentExecutorFactory for IpcExecutorFactory {
             // Register the in-process signal channel so SignalHandler can reach this executor.
             signal_channels.register(pid, executor.signal_sender()).await;
 
-            // Wire the event bus, tracer, and persistence stores.
+            // Wire the event bus, tracer, persistence stores, and VFS.
             executor = executor.with_event_bus(Arc::clone(&event_bus));
             executor = executor.with_tracer(Arc::clone(&tracer));
             executor = executor.with_invocation_store(invocation_store, invocation_id);
             executor = executor.with_session_store(session_store);
+            if let Some(vfs) = vfs_handle {
+                executor = executor.with_vfs(Arc::clone(&vfs));
+                executor.init_vfs_caller().await;
+            }
 
             info!(pid = pid.as_u64(), "executor started");
 

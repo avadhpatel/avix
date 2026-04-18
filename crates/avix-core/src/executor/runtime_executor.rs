@@ -15,6 +15,7 @@ use crate::error::AvixError;
 use crate::gateway::event_bus::AtpEventBus;
 use crate::kernel::resource_request::KernelResourceHandler;
 use crate::llm_client::LlmCompleteResponse;
+use crate::memfs::context::VfsCallerContext;
 use crate::memfs::VfsRouter;
 use crate::memory_svc::vfs_layout::init_user_memory_tree;
 use crate::signal::kind::Signal;
@@ -317,6 +318,25 @@ impl RuntimeExecutor {
     pub fn with_vfs(mut self, vfs: Arc<VfsRouter>) -> Self {
         self.vfs = Some(vfs);
         self
+    }
+
+    /// Set the VFS caller context from this executor's token so `/tools/**` reads
+    /// return `state: available/unavailable` per the agent's actual capability grants.
+    /// Call this after `with_vfs()` in any async context.
+    pub async fn init_vfs_caller(&self) {
+        let Some(vfs) = &self.vfs else { return };
+        let ctx = VfsCallerContext {
+            username: self.spawned_by.clone(),
+            crews: vec![], // capability grants (not crew membership) gate tool state
+            is_admin: false,
+            token: Some(self.token.clone()),
+        };
+        vfs.set_caller(Some(ctx)).await;
+        tracing::debug!(
+            pid = self.pid.as_u64(),
+            spawned_by = %self.spawned_by,
+            "VFS caller context set from agent token"
+        );
     }
 
     /// Attach an `InvocationStore` so conversation history is flushed to disk on shutdown.

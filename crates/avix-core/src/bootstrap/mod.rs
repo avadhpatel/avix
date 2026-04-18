@@ -260,6 +260,7 @@ impl Runtime {
                 Arc::clone(&invocation_store),
                 Arc::clone(&session_store),
             )
+            .with_vfs(Arc::clone(&self.vfs))
             .with_tracer(Arc::clone(&self.tracer))
             .with_signal_channels(signal_channels.clone()),
         );
