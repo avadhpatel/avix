@@ -10,9 +10,13 @@ use crate::agent_manifest::{AgentManifestSummary, ManifestScanner};
 use crate::error::AvixError;
 use crate::executor::{AgentExecutorFactory, SpawnParams};
 use crate::invocation::{InvocationRecord, InvocationStatus, InvocationStore};
+use crate::kernel::capability_resolver::CapabilityResolver;
 use crate::process::entry::{ProcessEntry, ProcessKind, ProcessStatus};
 use crate::process::ProcessTable;
+use crate::router::ALWAYS_PRESENT;
 use crate::session::PersistentSessionStore;
+use crate::syscall::SyscallRegistry;
+use crate::tool_registry::ToolRegistry;
 use crate::types::token::{CapabilityToken, IssuedTo};
 use crate::types::Pid;
 
@@ -27,6 +31,7 @@ pub struct AgentManager {
     manifest_scanner: Option<Arc<ManifestScanner>>,
     active_invocations: Arc<Mutex<HashMap<u64, String>>>,
     active_sessions: Arc<Mutex<HashMap<u64, String>>>,
+    tool_registry: Arc<Mutex<Option<Arc<ToolRegistry>>>>,
 }
 
 impl AgentManager {
@@ -40,6 +45,7 @@ impl AgentManager {
         manifest_scanner: Option<Arc<ManifestScanner>>,
         active_invocations: Arc<Mutex<HashMap<u64, String>>>,
         active_sessions: Arc<Mutex<HashMap<u64, String>>>,
+        tool_registry: Arc<Mutex<Option<Arc<ToolRegistry>>>>,
     ) -> Self {
         Self {
             process_table,
@@ -52,6 +58,7 @@ impl AgentManager {
             manifest_scanner,
             active_invocations,
             active_sessions,
+            tool_registry,
         }
     }
 
@@ -139,17 +146,10 @@ impl AgentManager {
             agent_name: name.to_string(),
             spawned_by: caller_identity.to_string(),
         };
-        // TODO: resolve granted_tools from the agent manifest's requestedCapabilities.
-        // For now, grant the Cat1/Cat2 tools that have working dispatch paths:
-        //   - agent/spawn   → Cat2, registered at spawn
-        //   - llm/*         → Cat1, dispatched to llm.svc via IPC
-        // fs/read and fs/write are omitted: no fs.svc socket exists yet.
+        let granted_tools = self.resolve_granted_tools(name, caller_identity).await;
+        debug!(pid, agent = name, tools = ?granted_tools, "resolved granted tools from manifest");
         let token = CapabilityToken::mint(
-            vec![
-                "agent/spawn".to_string(),
-                "llm/complete".to_string(),
-                "llm/embed".to_string(),
-            ],
+            granted_tools,
             Some(issued_to),
             3600,
             &self.master_key,
@@ -180,6 +180,37 @@ impl AgentManager {
         info!(pid, name, "agent spawned successfully");
 
         Ok(pid)
+    }
+
+    /// Resolve the tool names to grant to a spawned agent.
+    ///
+    /// Loads the agent manifest from `ManifestScanner`, extracts
+    /// `requestedCapabilities`, and maps them to concrete tool names via
+    /// `CapabilityResolver`.  Falls back to `ALWAYS_PRESENT` only if the
+    /// manifest or registry is unavailable.
+    async fn resolve_granted_tools(&self, agent_name: &str, caller: &str) -> Vec<String> {
+        let cap_groups: Vec<String> = if let Some(scanner) = &self.manifest_scanner {
+            match scanner.get_manifest(agent_name, caller).await {
+                Some(m) => m.spec.requested_capabilities,
+                None => {
+                    warn!(agent_name, "manifest not found; granting always-present tools only");
+                    vec![]
+                }
+            }
+        } else {
+            warn!("manifest_scanner not wired; granting always-present tools only");
+            vec![]
+        };
+
+        let syscall_reg = SyscallRegistry::new();
+        let guard = self.tool_registry.lock().await;
+        if let Some(tool_reg) = guard.as_ref() {
+            let resolver = CapabilityResolver::new(tool_reg, &syscall_reg);
+            resolver.resolve(&cap_groups).await
+        } else {
+            warn!(agent_name, "tool_registry not wired; granting always-present tools only");
+            ALWAYS_PRESENT.iter().map(|s| s.to_string()).collect()
+        }
     }
 
     pub async fn list(&self) -> Result<Vec<super::types::ActiveAgent>, AvixError> {
@@ -351,6 +382,7 @@ mod tests {
             None,
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
+            Arc::new(Mutex::new(None)),
         );
 
         let pid1 = manager.spawn("agent-a", "goal-a", "sess-1", "", "kernel", None).await.unwrap();
@@ -384,6 +416,7 @@ mod tests {
             None,
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
+            Arc::new(Mutex::new(None)),
         );
 
         let pid = manager.spawn("agent", "goal", "sess", "", "kernel", None).await.unwrap();
@@ -410,6 +443,7 @@ mod tests {
             None,
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
+            Arc::new(Mutex::new(None)),
         );
 
         let pid1 = manager.spawn("agent1", "goal1", "sess-1", "", "kernel", None).await.unwrap();
@@ -450,6 +484,7 @@ mod tests {
             None,
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
+            Arc::new(Mutex::new(None)),
         );
 
         let pid = manager.spawn("agent-a", "goal", "", "", "alice", None).await.unwrap();
@@ -483,6 +518,7 @@ mod tests {
             None,
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
+            Arc::new(Mutex::new(None)),
         );
 
         let parent_pid = manager.spawn("parent-agent", "parent goal", "", "", "alice", None).await.unwrap();
@@ -495,5 +531,183 @@ mod tests {
         let session = sstore.get(&parent_session_id).await.unwrap().unwrap();
         assert!(session.pids.contains(&parent_pid));
         assert!(session.pids.contains(&child_pid));
+    }
+
+    // ── Resolver tests ────────────────────────────────────────────────────────
+
+    use crate::agent_manifest::ManifestScanner;
+    use crate::memfs::{VfsPath, VfsRouter};
+    use crate::tool_registry::{ToolRegistry, entry::ToolEntry};
+    use crate::types::tool::{ToolName, ToolState, ToolVisibility};
+    use crate::router::ALWAYS_PRESENT;
+
+    /// Factory that captures the `granted_tools` from the last `SpawnParams`.
+    struct CapturingFactory {
+        captured_tools: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl AgentExecutorFactory for CapturingFactory {
+        fn launch(&self, params: SpawnParams) -> tokio::task::AbortHandle {
+            let tools = params.token.granted_tools.clone();
+            let captured = Arc::clone(&self.captured_tools);
+            tokio::spawn(async move {
+                *captured.lock().await = tools;
+            })
+            .abort_handle()
+        }
+    }
+
+    const EXPLORER_YAML: &str = r#"
+apiVersion: avix/v1
+kind: Agent
+metadata:
+  name: explorer
+  version: 0.1.0
+  description: Explorer
+  author: test
+spec:
+  requestedCapabilities:
+    - fs:*
+    - llm:*
+  entrypoint:
+    type: llm-loop
+"#;
+
+    fn make_tool(name: &str) -> ToolEntry {
+        ToolEntry::new(
+            ToolName::parse(name).unwrap(),
+            "test".to_string(),
+            ToolState::Available,
+            ToolVisibility::All,
+            serde_json::Value::Null,
+        )
+    }
+
+    async fn make_vfs_with_manifest(path: &str, yaml: &str) -> Arc<VfsRouter> {
+        let vfs = Arc::new(VfsRouter::new());
+        let p = VfsPath::parse(path).unwrap();
+        vfs.write(&p, yaml.as_bytes().to_vec()).await.unwrap();
+        vfs
+    }
+
+    #[tokio::test]
+    async fn spawn_resolves_tools_from_manifest() {
+        let vfs = make_vfs_with_manifest("/bin/explorer@0.1.0/manifest.yaml", EXPLORER_YAML).await;
+        let scanner = Arc::new(ManifestScanner::new(Arc::clone(&vfs)));
+
+        let tool_reg = Arc::new(ToolRegistry::new());
+        tool_reg.add("test", vec![make_tool("fs/read"), make_tool("llm/complete")]).await.unwrap();
+        let tool_registry: Arc<Mutex<Option<Arc<ToolRegistry>>>> =
+            Arc::new(Mutex::new(Some(Arc::clone(&tool_reg))));
+
+        let captured = Arc::new(Mutex::new(Vec::<String>::new()));
+        let factory = Arc::new(CapturingFactory { captured_tools: Arc::clone(&captured) });
+
+        let table = Arc::new(ProcessTable::new());
+        let active_invocations = Arc::new(Mutex::new(HashMap::new()));
+        let active_sessions = Arc::new(Mutex::new(HashMap::new()));
+
+        let manager = AgentManager::new(
+            table,
+            PathBuf::from("/run/avix"),
+            b"test-master-key-32-bytes-padded!".to_vec(),
+            Some(factory),
+            None,
+            None,
+            Some(scanner),
+            Arc::clone(&active_invocations),
+            Arc::clone(&active_sessions),
+            Arc::clone(&tool_registry),
+        );
+
+        manager.spawn("explorer", "goal", "sess", "", "alice", None).await.unwrap();
+        // Give the spawned task a tick to run
+        tokio::task::yield_now().await;
+
+        let tools = captured.lock().await;
+        assert!(tools.contains(&"fs/read".to_string()), "fs/read missing from token");
+        assert!(tools.contains(&"llm/complete".to_string()), "llm/complete missing from token");
+        for ap in ALWAYS_PRESENT {
+            assert!(tools.contains(&ap.to_string()), "always-present {ap} missing from token");
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_falls_back_when_manifest_missing() {
+        // Scanner has no manifest for "ghost-agent"
+        let vfs = Arc::new(VfsRouter::new());
+        let scanner = Arc::new(ManifestScanner::new(vfs));
+        let tool_reg = Arc::new(ToolRegistry::new());
+        tool_reg.add("test", vec![make_tool("fs/read")]).await.unwrap();
+        let tool_registry = Arc::new(Mutex::new(Some(Arc::clone(&tool_reg))));
+
+        let captured = Arc::new(Mutex::new(Vec::<String>::new()));
+        let factory = Arc::new(CapturingFactory { captured_tools: Arc::clone(&captured) });
+
+        let table = Arc::new(ProcessTable::new());
+        let active_invocations = Arc::new(Mutex::new(HashMap::new()));
+        let active_sessions = Arc::new(Mutex::new(HashMap::new()));
+
+        let manager = AgentManager::new(
+            table,
+            PathBuf::from("/run/avix"),
+            b"test-master-key-32-bytes-padded!".to_vec(),
+            Some(factory),
+            None,
+            None,
+            Some(scanner),
+            Arc::clone(&active_invocations),
+            Arc::clone(&active_sessions),
+            tool_registry,
+        );
+
+        manager.spawn("ghost-agent", "goal", "sess", "", "alice", None).await.unwrap();
+        tokio::task::yield_now().await;
+
+        let tools = captured.lock().await;
+        // Only ALWAYS_PRESENT — no fs/read because no manifest matched
+        assert!(!tools.contains(&"fs/read".to_string()));
+        for ap in ALWAYS_PRESENT {
+            assert!(tools.contains(&ap.to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_falls_back_when_registry_not_wired() {
+        let vfs = make_vfs_with_manifest("/bin/explorer@0.1.0/manifest.yaml", EXPLORER_YAML).await;
+        let scanner = Arc::new(ManifestScanner::new(vfs));
+        // tool_registry is None — not wired
+        let tool_registry: Arc<Mutex<Option<Arc<ToolRegistry>>>> =
+            Arc::new(Mutex::new(None));
+
+        let captured = Arc::new(Mutex::new(Vec::<String>::new()));
+        let factory = Arc::new(CapturingFactory { captured_tools: Arc::clone(&captured) });
+
+        let table = Arc::new(ProcessTable::new());
+        let active_invocations = Arc::new(Mutex::new(HashMap::new()));
+        let active_sessions = Arc::new(Mutex::new(HashMap::new()));
+
+        let manager = AgentManager::new(
+            table,
+            PathBuf::from("/run/avix"),
+            b"test-master-key-32-bytes-padded!".to_vec(),
+            Some(factory),
+            None,
+            None,
+            Some(scanner),
+            Arc::clone(&active_invocations),
+            Arc::clone(&active_sessions),
+            tool_registry,
+        );
+
+        manager.spawn("explorer", "goal", "sess", "", "alice", None).await.unwrap();
+        tokio::task::yield_now().await;
+
+        let tools = captured.lock().await;
+        // Only ALWAYS_PRESENT — registry not wired
+        for ap in ALWAYS_PRESENT {
+            assert!(tools.contains(&ap.to_string()));
+        }
+        assert!(!tools.contains(&"fs/read".to_string()));
     }
 }

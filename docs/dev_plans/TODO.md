@@ -20,6 +20,7 @@
 | Cat1 pipeline | ✅ Done | `sys/tools` added to `ALWAYS_PRESENT`; `llm.svc` tools registered at boot; `fs/read`/`fs/write` removed from hardcoded token ([plan](cat1-tool-pipeline-fix.md)) |
 | Cat1 0d | ✅ Done | `exec/run` registered in tool registry with `endpoint: "exec"` ([plan](cat1-exec-svc-registration.md)) |
 | Cat1 0b+0c | ✅ Done | `fs/*` Cat1 tools handled by `KernelIpcServer` + registered with `endpoint: "kernel"`; `KernelIpcServer` now holds `Arc<VfsRouter>` ([plan](cat1-fs-tools.md)) |
+| Cat1 0a | ✅ Done | `CapabilityResolver` maps manifest `requestedCapabilities` to tool names; `ManifestScanner::get_manifest()` added; `AgentManager` uses resolver at spawn ([plan](cat1-0a-capability-resolver.md)) |
 
 ---
 
@@ -27,11 +28,7 @@
 
 ### 0. Cat1 Tool Pipeline — Remaining Work
 
-#### 0a. Token resolution from manifest `requestedCapabilities`
-
-The `CapabilityToken` in `proc/agent.rs` is still hardcoded with 3 tools (`agent/spawn`,
-`llm/complete`, `llm/embed`). It must be resolved from the agent manifest's
-`requestedCapabilities` field so each agent gets exactly the tools its manifest declares.
+#### ~~0a. Token resolution from manifest `requestedCapabilities`~~ ✅ Done
 
 **Requires**: a resolver that maps capability group strings (e.g. `fs:*`, `llm:inference`,
 `kernel:*`) to individual tool names by querying the tool registry and syscall registry.

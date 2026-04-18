@@ -97,6 +97,63 @@ impl ManifestScanner {
         results
     }
 
+    /// Load the full [`AgentManifest`] for a named agent.
+    ///
+    /// Checks `/bin/` (system scope) first, then `/users/<username>/bin/`
+    /// (user scope). Returns `None` if no manifest with
+    /// `metadata.name == name` is found in either location.
+    pub async fn get_manifest(&self, name: &str, username: &str) -> Option<AgentManifest> {
+        if let Some(m) = self.get_manifest_from_dir("/bin", name).await {
+            return Some(m);
+        }
+        let user_dir = format!("/users/{}/bin", username);
+        self.get_manifest_from_dir(&user_dir, name).await
+    }
+
+    /// Scan `dir_path` for a subdirectory whose name starts with `<name>@`
+    /// and load its `manifest.yaml`. Returns the first valid match or `None`.
+    async fn get_manifest_from_dir(&self, dir_path: &str, name: &str) -> Option<AgentManifest> {
+        let dir = VfsPath::parse(dir_path).ok()?;
+        let entries = self.vfs.list(&dir).await.unwrap_or_default();
+        let prefix = format!("{}@", name);
+        for entry in &entries {
+            if entry.starts_with('.') || !entry.starts_with(&prefix) {
+                continue;
+            }
+            let manifest_path = format!("{}/{}/manifest.yaml", dir_path, entry);
+            let vfs_path = match VfsPath::parse(&manifest_path) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            let raw = match self.vfs.read(&vfs_path).await {
+                Ok(bytes) => bytes,
+                Err(_) => continue,
+            };
+            let yaml_str = match std::str::from_utf8(&raw) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(path = %manifest_path, "manifest is not valid UTF-8: {e}");
+                    continue;
+                }
+            };
+            let manifest = match AgentManifest::from_yaml(yaml_str) {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!(path = %manifest_path, "failed to parse manifest: {e}");
+                    continue;
+                }
+            };
+            if manifest.kind != "Agent" {
+                warn!(path = %manifest_path, kind = %manifest.kind, "unexpected manifest kind, skipping");
+                continue;
+            }
+            if manifest.metadata.name == name {
+                return Some(manifest);
+            }
+        }
+        None
+    }
+
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     /// Enumerate all subdirectories of `dir_path` and attempt to load
@@ -295,5 +352,68 @@ spec:
         let names: Vec<&str> = result.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"researcher"));
         assert!(names.contains(&"coder"));
+    }
+
+    const CAPS_YAML: &str = r#"
+apiVersion: avix/v1
+kind: Agent
+metadata:
+  name: explorer
+  version: 0.1.0
+  description: Explorer agent
+  author: avix-team
+spec:
+  requestedCapabilities:
+    - fs:*
+    - llm:*
+  entrypoint:
+    type: llm-loop
+"#;
+
+    // T-SCN-07
+    #[tokio::test]
+    async fn get_manifest_returns_full_manifest_with_capabilities() {
+        let vfs = make_vfs_with(&[("/bin/explorer@0.1.0/manifest.yaml", CAPS_YAML)]).await;
+        let scanner = ManifestScanner::new(vfs);
+        let m = scanner.get_manifest("explorer", "alice").await;
+        assert!(m.is_some());
+        let m = m.unwrap();
+        assert_eq!(m.metadata.name, "explorer");
+        assert_eq!(m.spec.requested_capabilities, vec!["fs:*", "llm:*"]);
+    }
+
+    // T-SCN-08
+    #[tokio::test]
+    async fn get_manifest_returns_none_for_unknown_agent() {
+        let vfs = make_vfs_with(&[("/bin/researcher@1.0.0/manifest.yaml", MANIFEST_YAML)]).await;
+        let scanner = ManifestScanner::new(vfs);
+        let m = scanner.get_manifest("unknown-agent", "alice").await;
+        assert!(m.is_none());
+    }
+
+    // T-SCN-09
+    #[tokio::test]
+    async fn get_manifest_falls_back_to_user_dir() {
+        let vfs =
+            make_vfs_with(&[("/users/alice/bin/explorer@0.1.0/manifest.yaml", CAPS_YAML)]).await;
+        let scanner = ManifestScanner::new(vfs);
+        // Not in /bin — should find it in user dir
+        let m = scanner.get_manifest("explorer", "alice").await;
+        assert!(m.is_some());
+        assert_eq!(m.unwrap().metadata.name, "explorer");
+    }
+
+    // T-SCN-10
+    #[tokio::test]
+    async fn get_manifest_prefers_system_over_user() {
+        let vfs = make_vfs_with(&[
+            ("/bin/explorer@0.1.0/manifest.yaml", CAPS_YAML),
+            ("/users/alice/bin/explorer@0.1.0/manifest.yaml", CAPS_YAML),
+        ])
+        .await;
+        let scanner = ManifestScanner::new(vfs);
+        // System version found first — user version ignored
+        let m = scanner.get_manifest("explorer", "alice").await.unwrap();
+        assert_eq!(m.metadata.name, "explorer");
     }
 }

@@ -85,6 +85,8 @@ impl ProcHandler {
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
         ));
+        let tool_registry: Arc<Mutex<Option<Arc<ToolRegistry>>>> =
+            Arc::new(Mutex::new(None));
         let agent_manager = InnerAgentManager::new(
             Arc::clone(&process_table),
             runtime_dir.clone(),
@@ -95,6 +97,7 @@ impl ProcHandler {
             None,
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
+            Arc::clone(&tool_registry),
         );
         Self {
             process_table,
@@ -109,7 +112,7 @@ impl ProcHandler {
             active_invocations,
             active_sessions,
             service_manager: Arc::new(Mutex::new(None)),
-            tool_registry: Arc::new(Mutex::new(None)),
+            tool_registry,
             tracer: Tracer::noop(),
             history_store: None,
             signal_handler,
@@ -136,6 +139,8 @@ impl ProcHandler {
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
         ));
+        let tool_registry: Arc<Mutex<Option<Arc<ToolRegistry>>>> =
+            Arc::new(Mutex::new(None));
         let agent_manager = InnerAgentManager::new(
             Arc::clone(&process_table),
             runtime_dir.clone(),
@@ -146,6 +151,7 @@ impl ProcHandler {
             None,
             Arc::clone(&active_invocations),
             Arc::clone(&active_sessions),
+            Arc::clone(&tool_registry),
         );
         Self {
             process_table,
@@ -160,7 +166,7 @@ impl ProcHandler {
             active_invocations,
             active_sessions,
             service_manager: Arc::new(Mutex::new(None)),
-            tool_registry: Arc::new(Mutex::new(None)),
+            tool_registry,
             tracer: Tracer::noop(),
             history_store: None,
             signal_handler,
@@ -212,6 +218,7 @@ impl ProcHandler {
             self.manifest_scanner.clone(),
             Arc::clone(&self.active_invocations),
             Arc::clone(&self.active_sessions),
+            Arc::clone(&self.tool_registry),
         );
 
         self
@@ -219,7 +226,7 @@ impl ProcHandler {
 
     pub fn with_manifest_scanner(mut self, scanner: Arc<ManifestScanner>) -> Self {
         self.manifest_scanner = Some(scanner.clone());
-        
+
         self.agent_manager = InnerAgentManager::new(
             Arc::clone(&self.process_table),
             self.runtime_dir.clone(),
@@ -230,6 +237,7 @@ impl ProcHandler {
             Some(scanner),
             Arc::clone(&self.active_invocations),
             Arc::clone(&self.active_sessions),
+            Arc::clone(&self.tool_registry),
         );
 
         self
@@ -257,6 +265,7 @@ impl ProcHandler {
             self.manifest_scanner.clone(),
             Arc::clone(&self.active_invocations),
             Arc::clone(&self.active_sessions),
+            Arc::clone(&self.tool_registry),
         );
 
         self

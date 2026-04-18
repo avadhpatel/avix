@@ -1,5 +1,6 @@
 pub mod approval_token;
 pub mod boot;
+pub mod capability_resolver;
 pub mod hil;
 pub mod hil_manager;
 pub mod ipc_server;

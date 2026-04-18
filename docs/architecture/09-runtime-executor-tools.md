@@ -252,6 +252,48 @@ service tools dispatched via `router.svc → llm.svc`. They are granted individu
 `CapabilityToken.granted_tools` but are NOT listed in `CapabilityToolMap` — listing
 them there would incorrectly treat them as Cat2 and register them via `ipc.tool-add`.
 
+### Capability Resolution at Spawn (`CapabilityResolver`)
+
+When `AgentManager::spawn()` mints the agent's `CapabilityToken`, it dynamically
+resolves `granted_tools` from the agent manifest's `spec.requestedCapabilities` using
+`kernel::capability_resolver::CapabilityResolver`.
+
+**Manifest lookup**: `ManifestScanner::get_manifest(name, username)` searches
+`/bin/<name>@*/manifest.yaml` (system scope first, then
+`/users/<username>/bin/<name>@*/manifest.yaml`). The full `AgentManifest` is returned,
+not a summary, so `spec.requested_capabilities` is available.
+
+**Capability group format**: `<namespace>:<filter>`
+
+The filter is **always a path prefix**, not a semantic keyword:
+
+| Group | Matching rule | Example tools granted |
+|---|---|---|
+| `fs:*` | ToolRegistry tools starting with `fs/` | `fs/read`, `fs/write`, … |
+| `llm:*` | ToolRegistry tools starting with `llm/` | `llm/complete`, `llm/embed`, … |
+| `workspace:project` | ToolRegistry tools starting with `workspace/project` | `workspace/project/list`, `workspace/project/create` |
+| `kernel:*` | All SyscallRegistry entries | `kernel/proc/spawn`, … |
+| `kernel:proc` | SyscallRegistry entries with `domain == "proc"` | `kernel/proc/spawn`, `kernel/proc/kill`, … |
+| `proc:*` | SyscallRegistry entries with `domain == "proc"` | same as `kernel:proc` |
+
+This handles arbitrarily nested tool names (`workspace/project/list`) and syscalls
+uniformly — the prefix match covers both.
+
+**ALWAYS_PRESENT tools** (`cap/request-tool`, `cap/escalate`, `cap/list`, `job/watch`)
+are always appended to the resolved list regardless of what the manifest requests
+(Architecture Invariant 13).
+
+**Fallback chain** (warn + degrade, never error):
+1. `manifest_scanner` not wired → grant ALWAYS_PRESENT only.
+2. Manifest not found for the agent name → grant ALWAYS_PRESENT only.
+3. `ToolRegistry` not yet populated (services still starting) → grant ALWAYS_PRESENT only.
+4. A capability group matches nothing registered → silently skip (debug log); continue.
+
+**Wiring**: `AgentManager` holds `Arc<Mutex<Option<Arc<ToolRegistry>>>>` — the same Arc
+shared with `ProcHandler.tool_registry`. When `ProcHandler::set_tool_registry()` is
+called in Phase 3, `AgentManager` sees the updated value automatically on the next spawn
+without any rebuild.
+
 ```
 Capability key       → Cat2 tool names stored in granted_tools
 ─────────────────────────────────────────────────────────────────────
