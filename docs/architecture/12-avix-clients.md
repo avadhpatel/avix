@@ -18,6 +18,7 @@
   - `list_sessions(username)` → `Vec<Value>` — active sessions via `proc/session-list`
   - `get_session(session_id)` → `Option<Value>` — detail via `proc/session-get`
   - `resume_session(session_id, input)` → `Value` — resume idle session via `proc/session-resume`
+  - `delete_session(session_id)` → `()` — delete session record via `proc/session-delete` (idempotent)
 - `commands/spawn_agent.rs` — spawn with typed params
 - `state.rs` — `AppState` (`RwLock`): config, dispatcher, emitter, `NotificationStore`, agents `Vec<ActiveAgent>`, connection_status, server_handle, pending_hils `hil_id→(pid,token)`, emit_callback. Runs `start_event_bridge()` to relay ATP events to the UI callback. Forwarded event names:
 
@@ -54,6 +55,19 @@
 | `avix agent show <id>` | Show invocation detail + conversation |
 
 All agent commands accept `--json` for machine-readable output.
+
+### Session commands
+
+All session commands run under `avix client session` and operate on the authenticated
+user's sessions only. Ownership is enforced server-side: accessing or mutating another
+user's session returns `EPERM`. Operator and admin roles bypass the ownership check.
+
+| Subcommand | Description |
+|-----------|-------------|
+| `avix client session list [--username] [--status]` | List sessions (defaults to current user) |
+| `avix client session show <session_id>` | Show session details |
+| `avix client session resume <session_id> [--input]` | Resume an idle or paused session |
+| `avix client session delete <session_id> [--force]` | Delete a session record (prompts unless `--force`) |
 
 ## Tauri Commands / Events
 

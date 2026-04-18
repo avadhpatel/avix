@@ -604,6 +604,14 @@ impl ProcHandler {
         }
     }
 
+    pub async fn delete_session(&self, session_id: &Uuid) -> Result<(), AvixError> {
+        let store = self
+            .session_store
+            .as_ref()
+            .ok_or_else(|| AvixError::NotFound("session store not configured".into()))?;
+        store.delete(session_id).await
+    }
+
     pub async fn resume_session(
         &self,
         session_id: &Uuid,

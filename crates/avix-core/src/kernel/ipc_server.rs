@@ -357,12 +357,30 @@ async fn dispatch_request(
 
         "kernel/proc/session/get" => {
             let session_id = params["id"].as_str().unwrap_or("");
+            let caller_identity = params["caller_identity"].as_str().unwrap_or("");
+            let is_privileged = params["is_privileged"].as_bool().unwrap_or(false);
             let uuid = match uuid::Uuid::parse_str(session_id) {
                 Ok(u) => u,
                 Err(_) => return JsonRpcResponse::err(id, -32002, "invalid session ID", None),
             };
             match proc_handler.get_session(&uuid).await {
-                Ok(Some(session)) => JsonRpcResponse::ok(id, json!(session)),
+                Ok(Some(session)) => {
+                    if !session_ownership_ok(&session.username, caller_identity, is_privileged) {
+                        tracing::warn!(
+                            session_id,
+                            caller_identity,
+                            session_owner = %session.username,
+                            "EPERM: session/get ownership check failed"
+                        );
+                        return JsonRpcResponse::err(
+                            id,
+                            -32001,
+                            "EPERM: session belongs to another user",
+                            None,
+                        );
+                    }
+                    JsonRpcResponse::ok(id, json!(session))
+                }
                 Ok(None) => JsonRpcResponse::err(
                     id,
                     -32003,
@@ -378,12 +396,37 @@ async fn dispatch_request(
 
         "kernel/proc/session/pause" => {
             let session_id = params["session_id"].as_str().unwrap_or("");
+            let caller_identity = params["caller_identity"].as_str().unwrap_or("");
+            let is_privileged = params["is_privileged"].as_bool().unwrap_or(false);
             let uuid = match uuid::Uuid::parse_str(session_id) {
                 Ok(u) => u,
                 Err(_) => return JsonRpcResponse::err(id, -32002, "invalid session ID", None),
             };
             match proc_handler.get_session(&uuid).await {
-                Ok(Some(session)) if session.owner_pid != 0 => {
+                Ok(Some(session)) => {
+                    if !session_ownership_ok(&session.username, caller_identity, is_privileged) {
+                        tracing::warn!(
+                            session_id,
+                            caller_identity,
+                            session_owner = %session.username,
+                            "EPERM: session/pause ownership check failed"
+                        );
+                        return JsonRpcResponse::err(
+                            id,
+                            -32001,
+                            "EPERM: session belongs to another user",
+                            None,
+                        );
+                    }
+                    if session.owner_pid == 0 {
+                        // Session has no owner PID (no active agents).
+                        return JsonRpcResponse::err(
+                            id,
+                            -32001,
+                            "session has no active owner pid",
+                            None,
+                        );
+                    }
                     // Pause via the session owner — this cascades to all other PIDs automatically.
                     match proc_handler.pause_agent(session.owner_pid).await {
                         Ok(()) => JsonRpcResponse::ok(id, json!({ "ok": true })),
@@ -392,10 +435,6 @@ async fn dispatch_request(
                             JsonRpcResponse::err(id, -32000, &e.to_string(), None)
                         }
                     }
-                }
-                Ok(Some(_)) => {
-                    // Session has no owner PID (no active agents).
-                    JsonRpcResponse::err(id, -32001, "session has no active owner pid", None)
                 }
                 Ok(None) => JsonRpcResponse::err(
                     id,
@@ -413,32 +452,105 @@ async fn dispatch_request(
         "kernel/proc/session/resume" => {
             let session_id = params["session_id"].as_str().unwrap_or("");
             let input = params["input"].as_str();
+            let caller_identity = params["caller_identity"].as_str().unwrap_or("");
+            let is_privileged = params["is_privileged"].as_bool().unwrap_or(false);
             let uuid = match uuid::Uuid::parse_str(session_id) {
                 Ok(u) => u,
                 Err(_) => return JsonRpcResponse::err(id, -32002, "invalid session ID", None),
             };
-            // If the session is Paused with active PIDs, send SIGRESUME to all PIDs rather
-            // than spawning a new invocation.
+            // Ownership check before any state mutation.
             match proc_handler.get_session(&uuid).await {
-                Ok(Some(session))
-                    if matches!(session.status, crate::session::SessionStatus::Paused)
-                        && !session.pids.is_empty() =>
-                {
-                    let pids = session.pids.clone();
-                    for pid in pids {
-                        let _ = proc_handler.resume_agent(pid).await;
+                Ok(Some(session)) => {
+                    if !session_ownership_ok(&session.username, caller_identity, is_privileged) {
+                        tracing::warn!(
+                            session_id,
+                            caller_identity,
+                            session_owner = %session.username,
+                            "EPERM: session/resume ownership check failed"
+                        );
+                        return JsonRpcResponse::err(
+                            id,
+                            -32001,
+                            "EPERM: session belongs to another user",
+                            None,
+                        );
                     }
-                    JsonRpcResponse::ok(id, json!({ "ok": true }))
-                }
-                _ => {
-                    // Idle/Running session — spawn a new invocation (existing path).
-                    match proc_handler.resume_session(&uuid, input).await {
-                        Ok(pid) => JsonRpcResponse::ok(id, json!({ "pid": pid })),
-                        Err(e) => {
-                            warn!(error = %e, "kernel/proc/session/resume failed");
-                            JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                    // If Paused with active PIDs, send SIGRESUME rather than spawning new invocation.
+                    if matches!(session.status, crate::session::SessionStatus::Paused)
+                        && !session.pids.is_empty()
+                    {
+                        let pids = session.pids.clone();
+                        for pid in pids {
+                            let _ = proc_handler.resume_agent(pid).await;
+                        }
+                        JsonRpcResponse::ok(id, json!({ "ok": true }))
+                    } else {
+                        // Idle/Running session — spawn a new invocation.
+                        match proc_handler.resume_session(&uuid, input).await {
+                            Ok(pid) => JsonRpcResponse::ok(id, json!({ "pid": pid })),
+                            Err(e) => {
+                                warn!(error = %e, "kernel/proc/session/resume failed");
+                                JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                            }
                         }
                     }
+                }
+                Ok(None) => JsonRpcResponse::err(
+                    id,
+                    -32003,
+                    &format!("session {session_id} not found"),
+                    None,
+                ),
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/session/resume failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
+                }
+            }
+        }
+
+        "kernel/proc/session/delete" => {
+            let session_id = params["session_id"].as_str().unwrap_or("");
+            let caller_identity = params["caller_identity"].as_str().unwrap_or("");
+            let is_privileged = params["is_privileged"].as_bool().unwrap_or(false);
+            let uuid = match uuid::Uuid::parse_str(session_id) {
+                Ok(u) => u,
+                Err(_) => return JsonRpcResponse::err(id, -32002, "invalid session ID", None),
+            };
+            // Ownership check — fetch record first; non-existent is a no-op (idempotent).
+            match proc_handler.get_session(&uuid).await {
+                Ok(Some(session)) => {
+                    if !session_ownership_ok(&session.username, caller_identity, is_privileged) {
+                        tracing::warn!(
+                            session_id,
+                            caller_identity,
+                            session_owner = %session.username,
+                            "EPERM: session/delete ownership check failed"
+                        );
+                        return JsonRpcResponse::err(
+                            id,
+                            -32001,
+                            "EPERM: session belongs to another user",
+                            None,
+                        );
+                    }
+                }
+                Ok(None) => {
+                    // Idempotent — deleting a non-existent session is a no-op.
+                    tracing::debug!(session_id, "session/delete: session not found, treating as no-op");
+                    return JsonRpcResponse::ok(id, json!({ "deleted": session_id }));
+                }
+                Err(e) => {
+                    return JsonRpcResponse::err(id, -32000, &e.to_string(), None);
+                }
+            }
+            match proc_handler.delete_session(&uuid).await {
+                Ok(()) => {
+                    tracing::info!(session_id, caller_identity, "deleted session");
+                    JsonRpcResponse::ok(id, json!({ "deleted": session_id }))
+                }
+                Err(e) => {
+                    warn!(error = %e, "kernel/proc/session/delete failed");
+                    JsonRpcResponse::err(id, -32000, &e.to_string(), None)
                 }
             }
         }
@@ -574,6 +686,16 @@ async fn dispatch_request(
     }
 }
 
+/// Returns `true` when the caller is allowed to operate on the session.
+///
+/// Rules:
+/// - Empty `caller_identity` means a kernel-internal call — always allowed.
+/// - `is_privileged` (operator / admin role) bypasses the ownership check.
+/// - Otherwise the session's `username` must match `caller_identity`.
+fn session_ownership_ok(session_username: &str, caller_identity: &str, is_privileged: bool) -> bool {
+    caller_identity.is_empty() || is_privileged || session_username == caller_identity
+}
+
 async fn kill_proc(id: &str, pid: u64, table: &Arc<ProcessTable>) -> JsonRpcResponse {
     match table
         .set_status(Pid::from_u64(pid), ProcessStatus::Stopped)
@@ -615,6 +737,7 @@ async fn stat_proc(id: &str, pid: u64, table: &Arc<ProcessTable>) -> JsonRpcResp
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::persistence::SessionStore as PersistentSessionStore;
     use tempfile::TempDir;
 
     fn make_proc_handler(dir: &TempDir) -> Arc<ProcHandler> {
@@ -837,5 +960,177 @@ mod tests {
         let resp = dispatch_request("req-1", "kernel/proc/bogus-new-op", json!({}), ph, root).await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
+    }
+
+    async fn make_proc_handler_with_sessions(
+        dir: &TempDir,
+    ) -> (Arc<ProcHandler>, Arc<PersistentSessionStore>) {
+        let table = Arc::new(ProcessTable::new());
+        let yaml_path = dir.path().join("agents.yaml");
+        let master_key = b"test-master-key-32-bytes-padded!".to_vec();
+        let store = Arc::new(
+            PersistentSessionStore::open(dir.path().join("sessions.redb"))
+                .await
+                .unwrap(),
+        );
+        let ph = Arc::new(
+            ProcHandler::new(table, yaml_path, master_key)
+                .with_session_store(Arc::clone(&store)),
+        );
+        (ph, store)
+    }
+
+    async fn seed_session(store: &PersistentSessionStore, username: &str) -> uuid::Uuid {
+        let record = crate::session::SessionRecord::new(
+            uuid::Uuid::new_v4(),
+            username.to_string(),
+            "test-agent".to_string(),
+            "test title".to_string(),
+            "test goal".to_string(),
+            0,
+        );
+        store.create(&record).await.unwrap();
+        record.id
+    }
+
+    // T-SM-01: session/get with correct caller succeeds
+    #[tokio::test]
+    async fn session_get_correct_caller_succeeds() {
+        let dir = TempDir::new().unwrap();
+        let (ph, store) = make_proc_handler_with_sessions(&dir).await;
+        let root = make_avix_root(&dir);
+        let session_id = seed_session(&store, "alice").await;
+
+        let resp = dispatch_request(
+            "req-1",
+            "kernel/proc/session/get",
+            json!({ "id": session_id.to_string(), "caller_identity": "alice", "is_privileged": false }),
+            Arc::clone(&ph),
+            root,
+        )
+        .await;
+        assert!(resp.error.is_none(), "expected ok, got {:?}", resp.error);
+    }
+
+    // T-SM-02: session/get with wrong caller returns EPERM
+    #[tokio::test]
+    async fn session_get_wrong_caller_returns_eperm() {
+        let dir = TempDir::new().unwrap();
+        let (ph, store) = make_proc_handler_with_sessions(&dir).await;
+        let root = make_avix_root(&dir);
+        let session_id = seed_session(&store, "alice").await;
+
+        let resp = dispatch_request(
+            "req-1",
+            "kernel/proc/session/get",
+            json!({ "id": session_id.to_string(), "caller_identity": "bob", "is_privileged": false }),
+            Arc::clone(&ph),
+            root,
+        )
+        .await;
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    // T-SM-03: session/get with is_privileged=true bypasses ownership check
+    #[tokio::test]
+    async fn session_get_privileged_bypasses_ownership() {
+        let dir = TempDir::new().unwrap();
+        let (ph, store) = make_proc_handler_with_sessions(&dir).await;
+        let root = make_avix_root(&dir);
+        let session_id = seed_session(&store, "alice").await;
+
+        let resp = dispatch_request(
+            "req-1",
+            "kernel/proc/session/get",
+            json!({ "id": session_id.to_string(), "caller_identity": "bob", "is_privileged": true }),
+            Arc::clone(&ph),
+            root,
+        )
+        .await;
+        assert!(resp.error.is_none(), "privileged caller should bypass ownership check");
+    }
+
+    // T-SM-04: session/delete removes session when caller owns it
+    #[tokio::test]
+    async fn session_delete_owner_removes_session() {
+        let dir = TempDir::new().unwrap();
+        let (ph, store) = make_proc_handler_with_sessions(&dir).await;
+        let root = make_avix_root(&dir);
+        let session_id = seed_session(&store, "alice").await;
+
+        let del_resp = dispatch_request(
+            "req-1",
+            "kernel/proc/session/delete",
+            json!({ "session_id": session_id.to_string(), "caller_identity": "alice", "is_privileged": false }),
+            Arc::clone(&ph),
+            root.clone(),
+        )
+        .await;
+        assert!(del_resp.error.is_none(), "delete should succeed for owner");
+        assert_eq!(del_resp.result.unwrap()["deleted"], session_id.to_string());
+
+        // Verify it's gone
+        let get_resp = dispatch_request(
+            "req-2",
+            "kernel/proc/session/get",
+            json!({ "id": session_id.to_string(), "caller_identity": "alice", "is_privileged": false }),
+            Arc::clone(&ph),
+            root,
+        )
+        .await;
+        assert_eq!(get_resp.error.as_ref().unwrap().code, -32003, "session should be gone after delete");
+    }
+
+    // T-SM-05: session/delete returns EPERM when caller doesn't own session
+    #[tokio::test]
+    async fn session_delete_non_owner_returns_eperm() {
+        let dir = TempDir::new().unwrap();
+        let (ph, store) = make_proc_handler_with_sessions(&dir).await;
+        let root = make_avix_root(&dir);
+        let session_id = seed_session(&store, "alice").await;
+
+        let resp = dispatch_request(
+            "req-1",
+            "kernel/proc/session/delete",
+            json!({ "session_id": session_id.to_string(), "caller_identity": "bob", "is_privileged": false }),
+            Arc::clone(&ph),
+            root,
+        )
+        .await;
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    // T-SM-06: session/delete is idempotent for non-existent session
+    #[tokio::test]
+    async fn session_delete_nonexistent_is_noop() {
+        let dir = TempDir::new().unwrap();
+        let (ph, _store) = make_proc_handler_with_sessions(&dir).await;
+        let root = make_avix_root(&dir);
+        let fake_id = uuid::Uuid::new_v4().to_string();
+
+        let resp = dispatch_request(
+            "req-1",
+            "kernel/proc/session/delete",
+            json!({ "session_id": fake_id, "caller_identity": "alice", "is_privileged": false }),
+            ph,
+            root,
+        )
+        .await;
+        assert!(resp.error.is_none(), "deleting non-existent session should be a no-op");
+    }
+
+    // T-SM-07: session_ownership_ok helper unit tests
+    #[test]
+    fn session_ownership_ok_rules() {
+        // Empty caller_identity (kernel-internal) → always allowed
+        assert!(session_ownership_ok("alice", "", false));
+        // Matching username → allowed
+        assert!(session_ownership_ok("alice", "alice", false));
+        // Mismatched username, not privileged → denied
+        assert!(!session_ownership_ok("alice", "bob", false));
+        // Mismatched username, privileged → allowed
+        assert!(session_ownership_ok("alice", "bob", true));
     }
 }

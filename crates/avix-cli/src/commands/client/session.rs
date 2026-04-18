@@ -1,3 +1,5 @@
+use std::io::Write as _;
+
 use anyhow::Result;
 use clap::Subcommand;
 
@@ -28,6 +30,14 @@ pub enum SessionCmd {
         /// Input to resume with
         #[arg(long)]
         input: Option<String>,
+    },
+    /// Delete a session record
+    Delete {
+        /// Session ID
+        session_id: String,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -147,6 +157,38 @@ pub async fn run(sub: SessionCmd, json: bool) -> Result<()> {
                     format!("Resumed session, PID: {}", b["pid"].as_u64().unwrap_or(0))
                 },
                 &body,
+            );
+        }
+
+        SessionCmd::Delete { session_id, force } => {
+            if !force {
+                print!("Delete session {}? [y/N] ", session_id);
+                std::io::stdout().flush().ok();
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).ok();
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    emit(json, |_: &()| "Aborted".to_string(), ());
+                    return Ok(());
+                }
+            }
+            let dispatcher = connect_config(None, None).await?;
+            let reply = dispatcher
+                .call(&AtpCmd_::new(
+                    "proc",
+                    "session-delete",
+                    "",
+                    serde_json::json!({ "session_id": session_id }),
+                ))
+                .await?;
+            if !reply.ok {
+                anyhow::bail!(reply
+                    .message
+                    .unwrap_or_else(|| "delete session failed".into()));
+            }
+            emit(
+                json,
+                |_: &()| format!("Deleted session {}", session_id),
+                (),
             );
         }
     }

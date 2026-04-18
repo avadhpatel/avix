@@ -62,14 +62,28 @@ pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
             tracing::info!(op, ipc_method = %ipc_method, "forwarding to kernel IPC");
             ipc_forward(&id, &ipc_method, cmd.cmd.body, ctx.ipc.as_ref()).await
         }
-        "session-list" | "session-get" | "session-resume" => {
-            // Transform kebab-case to path: session-list -> kernel/proc/session/list
-            let ipc_method = format!("kernel/proc/{}", op.replace('-', "/"));
-            tracing::info!(op, ipc_method = %ipc_method, "forwarding session op to kernel IPC");
+        "session-list" => {
+            // Inject caller_identity as username so users see only their own sessions by default.
+            let ipc_method = "kernel/proc/session/list";
+            tracing::info!(op, "forwarding session-list to kernel IPC");
             let mut body = cmd.cmd.body;
             if body["username"].as_str().unwrap_or("").is_empty() {
                 body["username"] = serde_json::json!(cmd.caller_identity);
             }
+            ipc_forward(&id, ipc_method, body, ctx.ipc.as_ref()).await
+        }
+        "session-get" | "session-pause" | "session-resume" | "session-delete" => {
+            // Transform kebab-case to path: session-get -> kernel/proc/session/get
+            let ipc_method = format!("kernel/proc/{}", op.replace('-', "/"));
+            tracing::info!(op, ipc_method = %ipc_method, "forwarding session op to kernel IPC");
+            // Inject caller context so the IPC server can enforce ownership.
+            let is_privileged = matches!(
+                cmd.caller_role,
+                crate::types::Role::Operator | crate::types::Role::Admin
+            );
+            let mut body = cmd.cmd.body;
+            body["caller_identity"] = serde_json::json!(cmd.caller_identity);
+            body["is_privileged"] = serde_json::json!(is_privileged);
             ipc_forward(&id, &ipc_method, body, ctx.ipc.as_ref()).await
         }
         "package/install-agent"
@@ -236,5 +250,34 @@ mod tests {
         let reply = handle(cmd, &ctx).await;
         assert!(reply.ok);
         assert_eq!(spy.last_params().await["username"].as_str(), Some("bob"));
+    }
+
+    // T-SM-09: session-delete injects caller_identity and is_privileged=false for user role
+    #[tokio::test]
+    async fn session_delete_injects_caller_context() {
+        let spy = CapturingIpcRouter::new(json!({ "deleted": "sess-abc" }));
+        let ctx = make_capturing_ctx(Arc::clone(&spy)).await;
+        let mut cmd = make_cmd("session-delete");
+        cmd.cmd.body = json!({ "session_id": "sess-abc" });
+        let reply = handle(cmd, &ctx).await;
+        assert!(reply.ok);
+        let params = spy.last_params().await;
+        assert_eq!(params["caller_identity"].as_str(), Some("alice"), "caller_identity must be injected");
+        assert_eq!(params["is_privileged"].as_bool(), Some(false), "user role → is_privileged=false");
+        assert_eq!(params["session_id"].as_str(), Some("sess-abc"), "session_id must be preserved");
+    }
+
+    // T-SM-10: session-get injects is_privileged=true for admin role
+    #[tokio::test]
+    async fn session_get_admin_injects_privileged_true() {
+        let spy = CapturingIpcRouter::new(json!({ "id": "sess-xyz", "username": "alice" }));
+        let ctx = make_capturing_ctx(Arc::clone(&spy)).await;
+        let mut cmd = make_cmd("session-get");
+        cmd.caller_role = crate::types::Role::Admin;
+        cmd.cmd.body = json!({ "id": "sess-xyz" });
+        let reply = handle(cmd, &ctx).await;
+        assert!(reply.ok);
+        let params = spy.last_params().await;
+        assert_eq!(params["is_privileged"].as_bool(), Some(true), "admin role → is_privileged=true");
     }
 }

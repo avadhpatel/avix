@@ -128,6 +128,40 @@ registry is `None` at factory construction (phase 2). Phase 3 calls
 executors receive `RegistryRef::Real(Arc<ToolRegistry>)` when the registry is
 available, or fall back to `RegistryRef::Mock` (no Cat1 lookups) otherwise.
 
+#### Per-Agent Tool State (available vs unavailable)
+
+When an agent reads `/tools/<namespace>/<tool>.yaml` from the VFS, the `state:` field
+reflects whether the agent holds the required capability grant:
+
+```yaml
+state: available      # token.has_tool(cap) == true for all capabilities_required
+state: unavailable    # token is missing one or more capabilities_required
+```
+
+Unavailable tools also include `request_access: cap/request-tool` so the LLM knows how
+to ask for access.
+
+This filtering is implemented in `VfsRouter::generate_tool_yaml()` which reads a
+`VfsCallerContext` from `VfsRouter.caller` (a `RwLock`). The context is set per-agent by
+`RuntimeExecutor::init_vfs_caller()`:
+
+```rust
+pub async fn init_vfs_caller(&self) {
+    let Some(vfs) = &self.vfs else { return };
+    let ctx = VfsCallerContext {
+        username: self.spawned_by.clone(),
+        crews: vec![],       // crew info not needed for tool state
+        is_admin: false,     // capability grants do the real check
+        token: Some(self.token.clone()),
+    };
+    vfs.set_caller(Some(ctx)).await;
+}
+```
+
+`init_vfs_caller()` is called from `IpcExecutorFactory::launch()` immediately after
+`executor.with_vfs(Arc::clone(&vfs))`. The shared `VfsRouter` is passed into
+`IpcExecutorFactory` at construction via `.with_vfs(Arc::clone(&self.vfs))`.
+
 ### Category 2: Avix Behaviour Tools
 
 Control the agent's own runtime state. These tools are **not** hard-coded in any

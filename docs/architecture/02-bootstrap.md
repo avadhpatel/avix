@@ -189,7 +189,7 @@ layer, no agent permissions. These are kernel-internal writes.
 - Load `AVIX_MASTER_KEY` from configured source → held in memory only; **env var zeroed immediately**
 - Validate — halt with structured error on any failure
 - Create `SignalChannelRegistry` (shared between `IpcExecutorFactory` and `ProcHandler`)
-- Create `IpcExecutorFactory` (with shared `AtpEventBus` and `SignalChannelRegistry`)
+- Create `IpcExecutorFactory` (with shared `AtpEventBus`, `SignalChannelRegistry`, and `.with_vfs(Arc::clone(&vfs))` so each launched executor gets per-agent tool state filtering)
 - Create `ProcHandler` (with `SignalChannelRegistry` → wires `SignalHandler` to factory channels)
 - Start `KernelIpcServer` on `kernel.sock`
 

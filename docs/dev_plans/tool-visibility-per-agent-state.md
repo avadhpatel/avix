@@ -249,12 +249,14 @@ Add to `bootstrap::executor_factory` tests:
 
 ## Success Criteria
 
-- [ ] `VfsRouter.caller` is set to the agent's `VfsCallerContext` when `init_vfs_caller` is called
-- [ ] Agent reading `/tools/fs/read.yaml` sees `state: available` if token grants `fs/read`
-- [ ] Agent reading `/tools/kernel/proc/kill.yaml` sees `state: unavailable` if token lacks `agent:kill`
-- [ ] Unavailable tool YAML includes `request_access: cap/request-tool`
-- [ ] No change to tools that have no `capabilities_required` (still `available`)
-- [ ] `cargo check --package avix-core` clean, all new tests pass
+✅ COMPLETE (commit `accb915`, 2026-04-17)
+
+- [x] `VfsRouter.caller` is set to the agent's `VfsCallerContext` when `init_vfs_caller` is called
+- [x] Agent reading `/tools/fs/read.yaml` sees `state: available` if token grants `fs/read`
+- [x] Agent reading `/tools/kernel/proc/kill.yaml` sees `state: unavailable` if token lacks `agent:kill`
+- [x] Unavailable tool YAML includes `request_access: cap/request-tool`
+- [x] No change to tools that have no `capabilities_required` (still `available`)
+- [x] `cargo check --package avix-core` clean, all new tests pass
 
 ---
 

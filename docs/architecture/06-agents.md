@@ -633,3 +633,38 @@ ATP query interface:
 
 See `docs/architecture/14-agent-persistence.md` for full specification.
 
+---
+
+## Session Management
+
+Sessions group one or more invocations into a logical conversation thread. Sessions
+are created only by the kernel at spawn time — there is no ATP endpoint to create one
+directly.
+
+### ATP session operations
+
+All session ops are in the `proc` domain (min role: `user`). The gateway injects
+`caller_identity` and `is_privileged` before forwarding to the IPC server. The IPC
+server checks `session.username == caller_identity` for each op; mismatches return
+`EPERM`. Operator and admin roles set `is_privileged: true`, bypassing the check.
+
+| ATP op | IPC method | Ownership enforced | Description |
+|--------|------------|--------------------|-------------|
+| `proc/session-list` | `kernel/proc/session/list` | By username filter | List sessions for a user |
+| `proc/session-get` | `kernel/proc/session/get` | Yes | Fetch a single session by UUID |
+| `proc/session-pause` | `kernel/proc/session/pause` | Yes | Pause an active session (sends SIGPAUSE to owner PID) |
+| `proc/session-resume` | `kernel/proc/session/resume` | Yes | Resume a paused session (SIGRESUME) or spawn new invocation for idle session |
+| `proc/session-delete` | `kernel/proc/session/delete` | Yes | Delete a session record (idempotent — no-op if not found) |
+
+### CLI
+
+```
+avix client session list [--username <u>] [--status <s>]
+avix client session show <session_id>
+avix client session resume <session_id> [--input <text>]
+avix client session delete <session_id> [--force]
+```
+
+`--force` skips the confirmation prompt on `delete`. Without it the CLI asks
+`Delete session <id>? [y/N]`.
+

@@ -380,7 +380,7 @@ For every `TextDelta` chunk, `run_turn_streaming` emits an `agent.output.chunk` 
 
 ```rust
 bus.agent_output_chunk(
-    &self.session_id,
+    &self.atp_session_id,   // ATP connection session ID — for ownership gate routing
     self.pid.as_u32(),
     &turn_id.to_string(),
     &text,          // the token delta
@@ -391,6 +391,18 @@ bus.agent_output_chunk(
 
 A final sentinel is emitted with `text_delta: ""` and `is_final: true` after the stream
 ends, allowing clients to stop streaming indicators.
+
+**Session ID distinction:** `RuntimeExecutor` carries two session IDs:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `session_id` | `String` | Logical agent session UUID — groups invocations, shown in SessionPage |
+| `atp_session_id` | `String` | ATP connection session ID — from login JWT, used by the gateway ownership gate |
+
+All `AtpEventBus.*` calls use `&self.atp_session_id`. Using `&self.session_id` would cause
+the ownership gate (`conn.session_id == event.owner_session`) to silently drop the event.
+`atp_session_id` is threaded from `ValidatedCmd.caller_session_id` through `SpawnParams`
+into `RuntimeExecutor` at spawn time.
 
 ---
 

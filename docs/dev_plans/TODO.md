@@ -15,10 +15,12 @@
 | gap-A | ✅ Done | Registry wiring & discovery — real `ToolRegistry` wired into `IpcExecutorFactory`, Cat1 descriptors merged into `current_tool_list()`, `sys/tools` Cat2 discovery tool, `llm/*` removed from `CapabilityToolMap` ([plan](tool-visibility-gap-A-registry-wiring-and-discovery.md)) |
 | gap-B | ✅ Done | Cat1 IPC dispatch — `dispatch_via_router` fully wired, `dispatch_cat1_tool` + `dispatch_kernel_syscall` over fresh Unix sockets, execute permission check ([plan](tool-visibility-gap-B-cat1-ipc-dispatch.md)) |
 | Phase 4a | ✅ Done | `ToolPermissions` struct with owner/crew/all fields — implemented as part of gap-B permission check |
+| Phase 4b | ✅ Done | `ToolPermissions` wired from `tool.yaml` into `ToolEntry` via `ToolScanner` ([plan](tool-visibility-per-agent-state.md)) |
+| Phase 4c | ✅ Done | Per-agent tool state: `init_vfs_caller()` sets `VfsCallerContext` on VFS; `IpcExecutorFactory` wires VFS + calls `init_vfs_caller` at spawn; `agent.spawned` event emitted (commit `accb915`) |
 
 ---
 
-## Remaining Items (Phase 4+)
+## Remaining Items (Phase 5+)
 
 ### 1. Linux-Style Permission Model (rwx)
 
@@ -65,76 +67,31 @@ return tool_permissions.all perms
 
 ---
 
-### 2. Per-Agent Tool State (available vs unavailable)
+### 2. Per-Agent Tool State (available vs unavailable) — ✅ RESOLVED
 
-**Goal**: Show `state: unavailable` for tools the agent doesn't have capability for.
+**Commit**: `accb915` (2026-04-17). See [tool-visibility-per-agent-state.md](tool-visibility-per-agent-state.md).
 
-**Required Changes**:
-
-| File | Change |
-|------|--------|
-| `src/tool_registry/state.rs` (NEW) | Define `ToolAccessState` enum + method to compute from token |
-| `src/memfs/router.rs` | Pass agent context to `generate_tool_yaml()` to compute per-agent state |
-
-**Design**:
-```rust
-// In src/tool_registry/state.rs
-pub enum ToolAccessState {
-    Available,    // Agent has the required capability
-    Unavailable,  // Agent does NOT have the required capability
-}
-
-impl ToolEntry {
-    pub fn access_state(&self, token: &CapabilityToken) -> ToolAccessState {
-        // Check if all required capabilities are in token
-        if self.capabilities_required.iter().all(|c| token.has_capability(c)) {
-            ToolAccessState::Available
-        } else {
-            ToolAccessState::Unavailable
-        }
-    }
-}
-```
-
-**VFS Changes**:
-- Need to pass agent's username/role/crews to VFS read context
-- Tool YAML should show `state: unavailable` + `capabilities_required` when access denied
-- This requires changes to how VFS resolves caller identity (probably from ATP token)
+- `RuntimeExecutor::init_vfs_caller()` builds `VfsCallerContext` from agent token + `spawned_by` and calls `vfs.set_caller()`
+- `IpcExecutorFactory` now holds `vfs: Option<Arc<VfsRouter>>`, wires it via `with_vfs()` at spawn, and calls `init_vfs_caller()` 
+- `generate_tool_yaml()` already had the per-agent logic; it now executes because caller is no longer `None`
+- Unavailable tools show `state: unavailable` + `request_access: cap/request-tool`
 
 ---
 
-### 3. HIL Path for Requesting Access
+### 3. HIL Path for Requesting Access — ✅ RESOLVED
 
-**Goal**: When agent sees unavailable tool, it can request access via `cap/request-tool`.
-
-**Required Changes**:
-
-| File | Change |
-|------|--------|
-| `src/vfs/tools_provider.rs` or `src/memfs/router.rs` | Add `request_access: cap/request-tool` to unavailable tool YAML |
-
-**YAML Output for Unavailable Tool**:
-```yaml
-name: kernel/proc/kill
-description: Terminate an agent process
-capabilities_required:
-  - agent:kill
-state: unavailable
-owner: kernel
-request_access: cap/request-tool
-# Agent figures out the right reason to request
-```
+Already emitted in `generate_tool_yaml()` as part of the per-agent tool state fix above.
 
 ---
 
 ## Implementation Order
 
-1. **Phase 4a**: Implement `ToolPermissions` struct + default to all r--
-2. **Phase 4b**: Update scanner to read permissions from tool.yaml
-3. **Phase 4c**: Add permissions to VFS output
-4. **Phase 5a**: Implement per-agent access state from CapabilityToken
-5. **Phase 5b**: Wire agent context into VFS reads
-6. **Phase 5c**: Add HIL path reference to unavailable tools
+1. **Phase 4a**: ✅ Implement `ToolPermissions` struct + default to all r--
+2. **Phase 4b**: ✅ Update scanner to read permissions from tool.yaml
+3. **Phase 4c**: ✅ Add permissions to VFS output + per-agent tool state (commit `accb915`)
+4. **Phase 5a**: Implement Linux-style rwx permission enforcement in `generate_tool_yaml()`
+5. **Phase 5b**: Wire crew membership into `VfsCallerContext` at spawn
+6. **Phase 5c**: Enforce write/execute permissions at tool dispatch time
 
 ---
 

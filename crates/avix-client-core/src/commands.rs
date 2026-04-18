@@ -242,6 +242,21 @@ pub async fn get_session(
     }
 }
 
+/// Delete a session by ID. Idempotent — returns Ok if session does not exist.
+pub async fn delete_session(
+    dispatcher: &Dispatcher,
+    session_id: &str,
+) -> Result<(), ClientError> {
+    dispatch(
+        dispatcher,
+        "proc",
+        "session-delete",
+        serde_json::json!({ "session_id": session_id }),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Resume an idle session with a new input string.
 pub async fn resume_session(
     dispatcher: &Dispatcher,
