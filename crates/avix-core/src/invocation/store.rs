@@ -4,7 +4,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use redb::{Database, ReadableTable, TableDefinition};
 use tokio::sync::Mutex;
-use tracing::warn;
+use tracing::{instrument, warn};
 
 use super::conversation::ConversationEntry;
 use super::record::{InvocationRecord, InvocationStatus};
@@ -20,13 +20,15 @@ const TABLE: TableDefinition<&str, &str> = TableDefinition::new("invocations");
 /// written to `<root>/users/<username>/agents/<agent>/invocations/`.
 ///
 /// The `local` provider is optional. When absent, only redb is used (useful in tests).
+#[derive(Debug)]
 pub struct InvocationStore {
     db: Arc<Mutex<Database>>,
     local: Option<Arc<LocalProvider>>,
 }
 
 impl InvocationStore {
-    pub async fn open(path: impl Into<PathBuf>) -> Result<Self, AvixError> {
+    #[instrument]
+    pub async fn open(path: impl Into<PathBuf> + std::fmt::Debug) -> Result<Self, AvixError> {
         let path = path.into();
         let db = Database::create(&path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         // Ensure the table exists.
@@ -48,6 +50,7 @@ impl InvocationStore {
     }
 
     /// Attach a `LocalProvider` rooted at `<avix_root>/users/` for disk artefacts.
+    #[instrument]
     pub fn with_local(mut self, provider: LocalProvider) -> Self {
         self.local = Some(Arc::new(provider));
         self
@@ -56,6 +59,7 @@ impl InvocationStore {
     // ── Write operations ──────────────────────────────────────────────────────
 
     /// Persist a new `InvocationRecord` (status: Running).
+    #[instrument]
     pub async fn create(&self, record: &InvocationRecord) -> Result<(), AvixError> {
         let json =
             serde_json::to_string(record).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -81,6 +85,7 @@ impl InvocationStore {
     /// Update a record's terminal fields after the agent exits.
     ///
     /// Idempotent: silently succeeds if `id` is not found.
+    #[instrument]
     pub async fn finalize(
         &self,
         id: &str,
@@ -122,6 +127,7 @@ impl InvocationStore {
     }
 
     /// Update only the status of a record (e.g., transition to Idle).
+    #[instrument]
     pub async fn update_status(&self, id: &str, status: InvocationStatus) -> Result<(), AvixError> {
         let mut record = match self.get(id).await? {
             Some(r) => r,
@@ -156,6 +162,7 @@ impl InvocationStore {
     /// It updates tokens/tool_calls and writes conversation to disk.
     ///
     /// Idempotent: silently succeeds if `id` is not found.
+    #[instrument]
     pub async fn persist_interim(
         &self,
         id: &str,
@@ -208,6 +215,7 @@ impl InvocationStore {
     /// It updates tokens/tool_calls and writes structured conversation to disk.
     ///
     /// Idempotent: silently succeeds if `id` is not found.
+    #[instrument]
     pub async fn persist_interim_structured(
         &self,
         id: &str,
@@ -253,6 +261,7 @@ impl InvocationStore {
     ///
     /// Each entry is `{"role": "<role>", "content": "<content>"}`.
     /// Written to `<username>/agents/<agent_name>/invocations/<id>/conversation.jsonl`.
+    #[instrument]
     pub async fn write_conversation(
         &self,
         id: &str,
@@ -286,6 +295,7 @@ impl InvocationStore {
     ///
     /// Each entry is a `ConversationEntry` with optional tool_calls, files_changed, thought.
     /// Written to `<username>/agents/<agent_name>/invocations/<id>/conversation.jsonl`.
+    #[instrument]
     pub async fn write_conversation_structured(
         &self,
         id: &str,
@@ -316,6 +326,7 @@ impl InvocationStore {
 
     // ── Read operations ───────────────────────────────────────────────────────
 
+    #[instrument]
     pub async fn get(&self, id: &str) -> Result<Option<InvocationRecord>, AvixError> {
         let db = self.db.lock().await;
         let read_txn = db
@@ -337,6 +348,7 @@ impl InvocationStore {
         }
     }
 
+    #[instrument]
     pub async fn list_for_user(&self, username: &str) -> Result<Vec<InvocationRecord>, AvixError> {
         Ok(self
             .list_all()
@@ -346,6 +358,7 @@ impl InvocationStore {
             .collect())
     }
 
+    #[instrument]
     pub async fn list_for_agent(
         &self,
         username: &str,
@@ -359,6 +372,7 @@ impl InvocationStore {
             .collect())
     }
 
+    #[instrument]
     pub async fn list_for_session(
         &self,
         session_id: &str,
@@ -373,6 +387,7 @@ impl InvocationStore {
 
     /// Read the conversation.jsonl for an invocation and parse it as structured entries.
     /// Returns an empty vec if the file does not exist.
+    #[instrument]
     pub async fn read_conversation(
         &self,
         id: &str,
@@ -408,6 +423,7 @@ impl InvocationStore {
     }
 
     /// Admin-only: returns all invocations across all users.
+    #[instrument]
     pub async fn list_all(&self) -> Result<Vec<InvocationRecord>, AvixError> {
         let db = self.db.lock().await;
         let read_txn = db
@@ -431,6 +447,7 @@ impl InvocationStore {
 
     // ── Disk artefact helpers ─────────────────────────────────────────────────
 
+    #[instrument]
     async fn write_yaml_artefact(&self, record: &InvocationRecord) {
         let provider = match &self.local {
             Some(p) => p,
@@ -460,6 +477,7 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[instrument]
     async fn open_store() -> InvocationStore {
         let dir = tempdir().unwrap();
         InvocationStore::open(dir.path().join("inv.redb"))
@@ -467,6 +485,7 @@ mod tests {
             .unwrap()
     }
 
+    #[instrument]
     fn make_record(id: &str, username: &str, agent: &str) -> InvocationRecord {
         InvocationRecord::new(
             id.into(),

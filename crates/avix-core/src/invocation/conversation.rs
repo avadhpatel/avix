@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 /// Role in a conversation turn.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,12 +35,14 @@ pub struct ConversationEntry {
 
 impl ConversationEntry {
     /// Parse a JSON line that may be in v1 (flat) or v2 (structured) format.
+    #[instrument]
     pub fn from_json_line(line: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(line)
     }
 
     /// Create a simple entry from role and content (v1 compatibility).
-    pub fn from_role_content(role: Role, content: impl Into<String>) -> Self {
+    #[instrument]
+    pub fn from_role_content(role: Role, content: impl Into<String> + std::fmt::Debug) -> Self {
         Self {
             role,
             content: content.into(),

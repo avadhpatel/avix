@@ -1,10 +1,12 @@
 use crate::error::AvixError;
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tracing::instrument;
 
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
-pub fn encode<T: Serialize>(msg: &T) -> Result<Vec<u8>, AvixError> {
+#[instrument]
+pub fn encode<T: Serialize + std::fmt::Debug>(msg: &T) -> Result<Vec<u8>, AvixError> {
     let body = serde_json::to_vec(msg).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
     if body.len() > MAX_FRAME_BYTES {
         return Err(AvixError::ConfigParse("message exceeds 16 MB limit".into()));
@@ -16,6 +18,7 @@ pub fn encode<T: Serialize>(msg: &T) -> Result<Vec<u8>, AvixError> {
     Ok(buf)
 }
 
+#[instrument]
 pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, AvixError> {
     if bytes.len() < 4 {
         return Err(AvixError::ConfigParse("frame too short".into()));
@@ -24,7 +27,8 @@ pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, AvixError> {
     serde_json::from_slice(body).map_err(|e| AvixError::ConfigParse(e.to_string()))
 }
 
-pub async fn read_from<R: AsyncRead + Unpin, T: DeserializeOwned>(
+#[instrument]
+pub async fn read_from<R: AsyncRead + Unpin + std::fmt::Debug, T: DeserializeOwned>(
     reader: &mut R,
 ) -> Result<T, AvixError> {
     let mut len_buf = [0u8; 4];
@@ -44,7 +48,8 @@ pub async fn read_from<R: AsyncRead + Unpin, T: DeserializeOwned>(
     serde_json::from_slice(&body).map_err(|e| AvixError::ConfigParse(e.to_string()))
 }
 
-pub async fn write_to<W: AsyncWrite + Unpin, T: Serialize>(
+#[instrument]
+pub async fn write_to<W: AsyncWrite + Unpin + std::fmt::Debug, T: Serialize + std::fmt::Debug>(
     writer: &mut W,
     msg: &T,
 ) -> Result<(), AvixError> {
@@ -60,6 +65,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[instrument]
     #[test]
     fn test_encode_then_decode_roundtrip() {
         let msg = json!({"hello": "world", "count": 42});
@@ -71,6 +77,7 @@ mod tests {
         assert_eq!(decoded["count"], 42);
     }
 
+    #[instrument]
     #[test]
     fn test_decode_too_short_returns_error() {
         let short = &[1u8, 2, 3]; // only 3 bytes, need at least 4
@@ -80,6 +87,7 @@ mod tests {
         assert!(err.contains("frame too short"), "got: {err}");
     }
 
+    #[instrument]
     #[test]
     fn test_decode_invalid_json_body_returns_error() {
         // Build a frame with correct length prefix but invalid JSON body
@@ -93,6 +101,7 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[instrument]
     #[test]
     fn test_encode_simple_struct() {
         #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
@@ -109,6 +118,7 @@ mod tests {
         assert_eq!(decoded, msg);
     }
 
+    #[instrument]
     #[tokio::test]
     async fn test_write_to_and_read_from_cursor() {
         use tokio::io::BufReader;
@@ -122,6 +132,7 @@ mod tests {
         assert_eq!(decoded["method"], "test/call");
     }
 
+    #[instrument]
     #[tokio::test]
     async fn test_read_from_invalid_json_returns_error() {
         use tokio::io::BufReader;

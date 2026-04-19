@@ -6,6 +6,7 @@ use crate::error::AvixError;
 ///
 /// Rooted at a directory on the real filesystem. All paths are relative to the root.
 /// Path traversal (`..`) is rejected at the `resolve_path` boundary.
+#[derive(Debug)]
 pub struct LocalProvider {
     root: PathBuf,
 }

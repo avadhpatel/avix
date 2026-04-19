@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 // ── InvocationStatus ──────────────────────────────────────────────────────────
 
@@ -48,6 +49,7 @@ pub struct InvocationRecord {
 }
 
 impl InvocationRecord {
+    #[instrument]
     pub fn new(
         id: String,
         agent_name: String,
@@ -79,6 +81,7 @@ impl InvocationRecord {
 mod tests {
     use super::*;
 
+    #[instrument]
     fn make_record() -> InvocationRecord {
         InvocationRecord::new(
             "inv-001".into(),

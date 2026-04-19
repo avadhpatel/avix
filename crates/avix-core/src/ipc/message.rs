@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 /// A JSON-RPC 2.0 notification — no `id` field, no response expected.
 /// Used for signals delivered to agents and for jobs.emit / jobs.complete / jobs.fail.
@@ -11,7 +12,8 @@ pub struct JsonRpcNotification {
 }
 
 impl JsonRpcNotification {
-    pub fn new(method: impl Into<String>, params: serde_json::Value) -> Self {
+    #[instrument]
+    pub fn new(method: impl Into<String> + std::fmt::Debug, params: serde_json::Value) -> Self {
         Self {
             jsonrpc: "2.0".into(),
             method: method.into(),
@@ -32,6 +34,7 @@ pub enum IpcMessage {
 impl IpcMessage {
     /// Parse a raw JSON value into an IpcMessage.
     /// Presence of the `id` key determines which variant.
+    #[instrument]
     pub fn from_value(v: serde_json::Value) -> Result<Self, serde_json::Error> {
         if v.get("id").is_some() {
             serde_json::from_value(v).map(IpcMessage::Request)
@@ -68,6 +71,7 @@ pub struct JsonRpcResponse {
 }
 
 impl JsonRpcResponse {
+    #[instrument]
     pub fn ok(id: &str, result: serde_json::Value) -> Self {
         Self {
             jsonrpc: "2.0".into(),
@@ -77,6 +81,7 @@ impl JsonRpcResponse {
         }
     }
 
+    #[instrument]
     pub fn err(id: &str, code: i32, message: &str, data: Option<serde_json::Value>) -> Self {
         Self {
             jsonrpc: "2.0".into(),

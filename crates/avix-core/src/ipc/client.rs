@@ -5,13 +5,14 @@ use crate::ipc::{
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::net::UnixStream;
+use tracing::instrument;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_millis(5_000);
 
 /// A stateless IPC client that opens a fresh Unix socket connection per call.
 ///
 /// Follows ADR-05: no persistent multiplexed channels.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IpcClient {
     target: PathBuf,
     timeout: Duration,
@@ -19,6 +20,7 @@ pub struct IpcClient {
 
 impl IpcClient {
     /// Create a client that connects to `target`.
+    #[instrument]
     pub fn new(target: PathBuf) -> Self {
         Self {
             target,
@@ -27,12 +29,14 @@ impl IpcClient {
     }
 
     /// Override the per-call timeout (default 5 s).
+    #[instrument]
     pub fn with_timeout(self, d: Duration) -> Self {
         Self { timeout: d, ..self }
     }
 
     /// Send a request and wait for a response.
     /// Opens a fresh connection, writes the request frame, reads the response frame, closes.
+    #[instrument]
     pub async fn call(&self, req: JsonRpcRequest) -> Result<JsonRpcResponse, AvixError> {
         let target = self.target.clone();
         let fut = async move {
@@ -51,6 +55,7 @@ impl IpcClient {
 
     /// Send a notification (fire-and-forget — no response read).
     /// Opens a fresh connection, writes the frame, closes immediately.
+    #[instrument]
     pub async fn notify(&self, notif: JsonRpcNotification) -> Result<(), AvixError> {
         let mut conn = UnixStream::connect(&self.target).await.map_err(|e| {
             AvixError::Io(format!(

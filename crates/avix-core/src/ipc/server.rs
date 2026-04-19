@@ -6,15 +6,17 @@ use std::sync::Arc;
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::UnixListener;
 use tokio::sync::watch;
+use tracing::instrument;
 
 /// Handle to cancel a running `IpcServer`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IpcServerHandle {
     shutdown_tx: watch::Sender<bool>,
 }
 
 impl IpcServerHandle {
     /// Signal the server to stop accepting new connections and drain in-flight calls.
+    #[instrument]
     pub fn cancel(&self) {
         let _ = self.shutdown_tx.send(true);
     }
@@ -24,6 +26,7 @@ impl IpcServerHandle {
 ///
 /// Each accepted connection is handled in an independent tokio task.
 /// One request is read per connection; a response (if any) is written; connection closes.
+#[derive(Debug)]
 pub struct IpcServer {
     path: PathBuf,
     listener: UnixListener,
@@ -33,6 +36,7 @@ pub struct IpcServer {
 impl IpcServer {
     /// Bind to `path`. Removes a stale socket file if one already exists.
     /// Returns the server and a handle that can be used to cancel it.
+    #[instrument]
     pub async fn bind(path: PathBuf) -> Result<(Self, IpcServerHandle), AvixError> {
         // Remove stale socket from a previous run.
         if path.exists() {
@@ -70,6 +74,7 @@ impl IpcServer {
     }
 
     /// The socket path this server is bound to.
+    #[instrument]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -81,6 +86,7 @@ impl IpcServer {
     /// `LlmIpcServer` to stream `llm.stream.chunk` notifications followed by a
     /// final `JsonRpcResponse` on the same connection — one logical call, one
     /// connection (ADR-05 spirit preserved).
+    #[instrument(skip(handler))]
     pub async fn serve_bidir<F, Fut>(mut self, handler: F) -> Result<(), AvixError>
     where
         F: Fn(IpcMessage, OwnedWriteHalf) -> Fut + Send + Sync + 'static,
@@ -119,6 +125,7 @@ impl IpcServer {
     ///
     /// `handler` is called for every incoming message.  Return `Some(response)` to send a
     /// reply; return `None` to close the connection silently (used for notifications).
+    #[instrument(skip(handler))]
     pub async fn serve<F, Fut>(mut self, handler: F) -> Result<(), AvixError>
     where
         F: Fn(IpcMessage) -> Fut + Send + Sync + 'static,
@@ -156,6 +163,7 @@ impl IpcServer {
     }
 }
 
+#[instrument(skip(handler))]
 async fn handle_connection<F, Fut>(conn: tokio::net::UnixStream, handler: Arc<F>)
 where
     F: Fn(IpcMessage) -> Fut + Send + Sync,
@@ -188,6 +196,7 @@ where
     // Connection drops here, closing both halves.
 }
 
+#[instrument(skip(handler))]
 async fn handle_connection_bidir<F, Fut>(conn: tokio::net::UnixStream, handler: Arc<F>)
 where
     F: Fn(IpcMessage, OwnedWriteHalf) -> Fut + Send + Sync,

@@ -1,20 +1,24 @@
 use crate::types::pid::Pid;
 use std::path::{Path, PathBuf};
+use tracing::instrument;
 
 /// Resolved OS path to the kernel socket.
 /// Services read this from `AVIX_KERNEL_SOCK`; this function provides the default.
+#[instrument]
 pub fn kernel_sock_path(run_dir: &Path) -> PathBuf {
     run_dir.join("kernel.sock")
 }
 
 /// Resolved OS path to the router socket.
 /// Services read this from `AVIX_ROUTER_SOCK`.
+#[instrument]
 pub fn router_sock_path(run_dir: &Path) -> PathBuf {
     run_dir.join("router.sock")
 }
 
 /// Resolved OS path for an agent's inbound signal socket.
 /// Path: `<run_dir>/agents/<pid>.sock`
+#[instrument]
 pub fn agent_sock_path(run_dir: &Path, pid: Pid) -> PathBuf {
     run_dir
         .join("agents")
@@ -23,6 +27,7 @@ pub fn agent_sock_path(run_dir: &Path, pid: Pid) -> PathBuf {
 
 /// Resolved OS path for a named service socket.
 /// Path: `<run_dir>/services/<name>.sock`
+#[instrument]
 pub fn svc_sock_path(run_dir: &Path, name: &str) -> PathBuf {
     run_dir.join("services").join(format!("{name}.sock"))
 }
@@ -32,6 +37,7 @@ mod tests {
     use super::*;
     use crate::types::pid::Pid;
 
+    #[instrument]
     #[test]
     fn kernel_sock_path_is_under_run_dir() {
         let dir = std::path::Path::new("/run/avix");
@@ -41,6 +47,7 @@ mod tests {
         );
     }
 
+    #[instrument]
     #[test]
     fn router_sock_path_is_under_run_dir() {
         let dir = std::path::Path::new("/run/avix");
@@ -50,6 +57,7 @@ mod tests {
         );
     }
 
+    #[instrument]
     #[test]
     fn agent_sock_path_uses_pid() {
         let dir = std::path::Path::new("/run/avix");
@@ -60,6 +68,7 @@ mod tests {
         );
     }
 
+    #[instrument]
     #[test]
     fn svc_sock_path_uses_name() {
         let dir = std::path::Path::new("/run/avix");
