@@ -24,14 +24,17 @@ pub async fn insert(&self, entry: ProcessEntry) {
         self.inner.write().await.insert(entry.pid.as_u64(), entry);
     }
 
+    #[instrument]
     pub async fn remove(&self, pid: Pid) {
         self.inner.write().await.remove(&pid.as_u64());
     }
 
+    #[instrument]
     pub async fn get(&self, pid: Pid) -> Option<ProcessEntry> {
         self.inner.read().await.get(&pid.as_u64()).cloned()
     }
 
+    #[instrument]
     pub async fn set_status(&self, pid: Pid, status: ProcessStatus) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
         match guard.get_mut(&pid.as_u64()) {
@@ -43,10 +46,12 @@ pub async fn insert(&self, entry: ProcessEntry) {
         }
     }
 
+    #[instrument]
     pub async fn list_all(&self) -> Vec<ProcessEntry> {
         self.inner.read().await.values().cloned().collect()
     }
 
+    #[instrument]
     pub async fn list_by_kind(&self, kind: ProcessKind) -> Vec<ProcessEntry> {
         self.inner
             .read()
@@ -57,6 +62,7 @@ pub async fn insert(&self, entry: ProcessEntry) {
             .collect()
     }
 
+    #[instrument]
     pub async fn list_by_status(&self, status: ProcessStatus) -> Vec<ProcessEntry> {
         self.inner
             .read()
@@ -67,6 +73,7 @@ pub async fn insert(&self, entry: ProcessEntry) {
             .collect()
     }
 
+    #[instrument]
     pub async fn list_children(&self, parent: Pid) -> Vec<ProcessEntry> {
         self.inner
             .read()
@@ -77,6 +84,7 @@ pub async fn insert(&self, entry: ProcessEntry) {
             .collect()
     }
 
+    #[instrument]
     pub async fn find_by_name(&self, name: &str) -> Option<ProcessEntry> {
         self.inner
             .read()
@@ -86,12 +94,14 @@ pub async fn insert(&self, entry: ProcessEntry) {
             .cloned()
     }
 
+    #[instrument]
     pub async fn count(&self) -> usize {
         self.inner.read().await.len()
     }
 
     /// Update the capability fields for an agent: the granted tool names and optional expiry.
     /// Called by `RuntimeExecutor` at spawn and on token renewal.
+    #[instrument]
     pub async fn set_token(
         &self,
         pid: Pid,
@@ -111,6 +121,7 @@ pub async fn insert(&self, entry: ProcessEntry) {
 
     /// Increment the tool-chain depth counter for the current turn.
     /// Called each time a tool call is dispatched within a turn.
+    #[instrument]
     pub async fn increment_chain_depth(&self, pid: Pid) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
         match guard.get_mut(&pid.as_u64()) {
@@ -123,6 +134,7 @@ pub async fn insert(&self, entry: ProcessEntry) {
     }
 
     /// Reset the tool-chain depth to 0 at the start of each new turn.
+    #[instrument]
     pub async fn reset_chain_depth(&self, pid: Pid) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
         match guard.get_mut(&pid.as_u64()) {
@@ -136,6 +148,7 @@ pub async fn insert(&self, entry: ProcessEntry) {
 
     /// Accumulate tokens consumed from the latest LLM response into the lifetime counter.
     /// Also refreshes `last_activity_at`.
+    #[instrument]
     pub async fn record_tokens(&self, pid: Pid, tokens: u64) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
         match guard.get_mut(&pid.as_u64()) {
@@ -151,6 +164,7 @@ pub async fn insert(&self, entry: ProcessEntry) {
     /// Update both `status` and `waiting_on` together.
     ///
     /// Pass `waiting_on: None` for any state other than `Waiting`.
+    #[instrument]
     pub async fn set_state(
         &self,
         pid: Pid,
@@ -170,6 +184,7 @@ pub async fn insert(&self, entry: ProcessEntry) {
 
     /// Increment the lifetime tool-call counter.
     /// Also refreshes `last_activity_at`.
+    #[instrument]
     pub async fn increment_tool_calls_total(&self, pid: Pid) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
         match guard.get_mut(&pid.as_u64()) {
@@ -183,6 +198,7 @@ pub async fn insert(&self, entry: ProcessEntry) {
     }
 
     /// Update the agent's current context-window token usage.
+    #[instrument]
     pub async fn update_context(&self, pid: Pid, used: u64) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
         match guard.get_mut(&pid.as_u64()) {
@@ -199,6 +215,7 @@ pub async fn insert(&self, entry: ProcessEntry) {
     /// Updates `last_signal_received`. Increments `pending_signal_count`; the
     /// caller is responsible for decrementing it via `resolve_pending_signal`
     /// once the signal has been handled.
+    #[instrument]
     pub async fn record_signal(&self, pid: Pid, signal_name: &str) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
         match guard.get_mut(&pid.as_u64()) {
@@ -212,6 +229,7 @@ pub async fn insert(&self, entry: ProcessEntry) {
     }
 
     /// Decrement `pending_signal_count` by one (floored at 0) after a signal is handled.
+    #[instrument]
     pub async fn resolve_pending_signal(&self, pid: Pid) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
         match guard.get_mut(&pid.as_u64()) {
@@ -224,6 +242,7 @@ pub async fn insert(&self, entry: ProcessEntry) {
     }
 
     /// Refresh `last_activity_at` to now. Called after any agent action.
+    #[instrument]
     pub async fn touch_activity(&self, pid: Pid) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
         match guard.get_mut(&pid.as_u64()) {

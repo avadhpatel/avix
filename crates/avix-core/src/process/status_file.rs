@@ -3,6 +3,8 @@ use serde::Serialize;
 
 use super::entry::{ProcessEntry, ProcessStatus, WaitingOn};
 
+use tracing::instrument;
+
 /// Serialisable snapshot of `/proc/<pid>/status.yaml`.
 ///
 /// Constructed from a `ProcessEntry` (plus any live pipe records) and
@@ -80,6 +82,7 @@ impl AgentStatusFile {
     ///
     /// `pipes` is the list of pipe connections currently open for this agent;
     /// pass `vec![]` when the caller cannot enumerate them.
+    #[instrument]
     pub fn from_entry(entry: &ProcessEntry, pipes: Vec<AgentStatusPipe>) -> Self {
         let wall_time_sec = (Utc::now() - entry.spawned_at).num_seconds().max(0) as u64;
 
@@ -119,6 +122,7 @@ impl AgentStatusFile {
     }
 
     /// Serialise to YAML bytes.
+    #[instrument]
     pub fn to_yaml(&self) -> Result<Vec<u8>, serde_yaml::Error> {
         serde_yaml::to_string(self).map(|s| s.into_bytes())
     }
