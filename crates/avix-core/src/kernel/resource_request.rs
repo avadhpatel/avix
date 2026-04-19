@@ -9,6 +9,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::error::AvixError;
@@ -186,6 +187,7 @@ impl KernelResourceHandler {
     ///
     /// First validates that `capability_token_signature` matches the token presented by the
     /// agent — returns `AvixError::CapabilityDenied` if the signature is invalid.
+    #[instrument(skip(self, req, current_token))]
     pub fn handle(
         &self,
         req: &ResourceRequest,

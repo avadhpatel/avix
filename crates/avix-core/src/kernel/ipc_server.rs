@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use serde_json::json;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, instrument};
 
 use crate::error::AvixError;
 use crate::ipc::message::{IpcMessage, JsonRpcResponse};
@@ -43,6 +43,7 @@ impl KernelIpcServer {
     }
 
     /// Bind the socket and start serving. Returns a handle to cancel the server.
+    #[instrument(skip(self))]
     pub async fn start(self) -> Result<IpcServerHandle, AvixError> {
         let (server, handle) = IpcServer::bind(self.sock_path.clone()).await?;
         let path = self.sock_path.clone();
@@ -70,6 +71,7 @@ impl KernelIpcServer {
 }
 
 /// Route one IPC message to the appropriate kernel handler.
+#[instrument(skip(proc_handler, vfs))]
 async fn handle_message(
     msg: IpcMessage,
     proc_handler: Arc<ProcHandler>,
@@ -97,6 +99,7 @@ async fn handle_message(
     }
 }
 
+#[instrument(skip(proc_handler, vfs, params))]
 async fn dispatch_request(
     id: &str,
     method: &str,
@@ -799,10 +802,12 @@ async fn dispatch_request(
 /// - Empty `caller_identity` means a kernel-internal call — always allowed.
 /// - `is_privileged` (operator / admin role) bypasses the ownership check.
 /// - Otherwise the session's `username` must match `caller_identity`.
+#[instrument]
 fn session_ownership_ok(session_username: &str, caller_identity: &str, is_privileged: bool) -> bool {
     caller_identity.is_empty() || is_privileged || session_username == caller_identity
 }
 
+#[instrument]
 async fn kill_proc(id: &str, pid: u64, table: &Arc<ProcessTable>) -> JsonRpcResponse {
     match table
         .set_status(Pid::from_u64(pid), ProcessStatus::Stopped)
@@ -816,6 +821,7 @@ async fn kill_proc(id: &str, pid: u64, table: &Arc<ProcessTable>) -> JsonRpcResp
     }
 }
 
+#[instrument]
 async fn stat_proc(id: &str, pid: u64, table: &Arc<ProcessTable>) -> JsonRpcResponse {
     match table.get(Pid::from_u64(pid)).await {
         Some(entry) => {

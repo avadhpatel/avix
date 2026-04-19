@@ -1,4 +1,6 @@
 use crate::error::AvixError;
+use tracing::instrument;
+
 use crate::signal::kind::SignalKind;
 use crate::signal::SignalBus;
 use crate::types::Pid;
@@ -22,6 +24,7 @@ impl HilApprover {
         Self { pid, bus }
     }
 
+    #[instrument(skip(self))]
     pub async fn await_approval(
         &self,
         hil_id: &str,

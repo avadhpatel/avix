@@ -4,6 +4,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
+use tracing::instrument;
 
 use crate::error::AvixError;
 use crate::gateway::atp::frame::AtpEvent;
@@ -45,6 +46,7 @@ impl HilManager {
 
     /// Called by RuntimeExecutor when a HIL event is triggered.
     /// Writes the VFS file, pushes hil.request event, starts timeout timer.
+    #[instrument(skip(self))]
     pub async fn open(self: &Arc<Self>, req: HilRequest) -> Result<(), AvixError> {
         let hil_id = req.hil_id.clone();
         let pid = req.pid;
@@ -82,6 +84,7 @@ impl HilManager {
     }
 
     /// Called when a SIGRESUME with approvalToken arrives.
+    #[instrument(skip(self))]
     pub async fn resolve(
         &self,
         hil_id: &str,

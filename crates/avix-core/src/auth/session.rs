@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tracing::instrument;
 
 use crate::types::{Pid, Role};
 
@@ -37,6 +38,7 @@ pub struct SessionEntry {
 }
 
 impl SessionEntry {
+    #[instrument(skip(self))]
     pub fn is_expired(&self) -> bool {
         let elapsed = Utc::now()
             .signed_duration_since(self.connected_at)
@@ -66,6 +68,7 @@ impl SessionEntry {
     }
 
     /// True when the 60-second reconnect grace window has expired.
+    #[instrument(skip(self))]
     pub fn grace_expired(&self) -> bool {
         match self.idle_since {
             Some(t) => Utc::now().signed_duration_since(t) > chrono::Duration::seconds(60),

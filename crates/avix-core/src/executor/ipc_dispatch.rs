@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use tracing::{debug, warn, instrument};
+
 use crate::error::AvixError;
 use crate::ipc::{
     frame,
@@ -7,7 +9,6 @@ use crate::ipc::{
 };
 use crate::llm_svc::adapter::AvixToolCall;
 use tokio::net::UnixStream;
-use tracing::{debug, warn};
 
 /// Dispatch a Cat1 tool call over a local IPC socket (ADR-05: fresh connection per call).
 ///
@@ -16,6 +17,7 @@ use tracing::{debug, warn};
 ///
 /// If `caller_scoped` is true, a `_caller` object is injected into the request params
 /// containing the agent PID and session ID (Architecture § _caller injection).
+#[instrument(skip(call, descriptor, runtime_dir))]
 pub async fn dispatch_cat1_tool(
     call: &AvixToolCall,
     descriptor: &serde_json::Value,

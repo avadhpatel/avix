@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::router::ALWAYS_PRESENT;
 use crate::syscall::SyscallRegistry;
@@ -52,6 +52,7 @@ impl<'a> CapabilityResolver<'a> {
     ///
     /// The result is deduplicated and sorted. `ALWAYS_PRESENT` tools are
     /// always included.
+    #[instrument(skip(self))]
     pub async fn resolve(&self, capabilities: &[String]) -> Vec<String> {
         let mut granted: BTreeSet<String> = BTreeSet::new();
 

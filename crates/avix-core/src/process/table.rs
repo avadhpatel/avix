@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::instrument;
 
 use chrono::{DateTime, Utc};
 
@@ -18,7 +19,8 @@ impl ProcessTable {
         Self::default()
     }
 
-    pub async fn insert(&self, entry: ProcessEntry) {
+    #[instrument]
+pub async fn insert(&self, entry: ProcessEntry) {
         self.inner.write().await.insert(entry.pid.as_u64(), entry);
     }
 

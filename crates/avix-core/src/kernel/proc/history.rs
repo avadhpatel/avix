@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use uuid::Uuid;
+use tracing::instrument;
 
 use crate::error::AvixError;
 use crate::history::record::{MessageRecord, PartRecord};
@@ -19,6 +20,7 @@ impl HistoryManager {
         self
     }
 
+    #[instrument(skip(self))]
     pub async fn create_message(&self, msg: &MessageRecord) -> Result<(), AvixError> {
         match &self.store {
             Some(s) => s.create_message(msg).await,
@@ -33,6 +35,7 @@ impl HistoryManager {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn list_messages(&self, session_id: &Uuid) -> Result<Vec<MessageRecord>, AvixError> {
         match &self.store {
             Some(s) => s.list_messages(session_id).await,
@@ -40,6 +43,7 @@ impl HistoryManager {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn create_part(&self, part: &PartRecord) -> Result<(), AvixError> {
         match &self.store {
             Some(s) => s.create_part(part).await,
@@ -47,6 +51,7 @@ impl HistoryManager {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn get_part(&self, id: &Uuid) -> Result<Option<PartRecord>, AvixError> {
         match &self.store {
             Some(s) => s.get_part(id).await,
@@ -54,6 +59,7 @@ impl HistoryManager {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn list_parts(&self, message_id: &Uuid) -> Result<Vec<PartRecord>, AvixError> {
         match &self.store {
             Some(s) => s.list_parts(message_id).await,

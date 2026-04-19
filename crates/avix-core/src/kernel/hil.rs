@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::types::Pid;
 
@@ -56,6 +57,7 @@ pub struct HilRequest {
 
 impl HilRequest {
     /// The VFS path where this request is written.
+    #[instrument]
     pub fn vfs_path(&self) -> String {
         format!("/proc/{}/hil-queue/{}.yaml", self.pid, self.hil_id)
     }

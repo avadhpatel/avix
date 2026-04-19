@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::instrument;
 
 use crate::tool_registry::ToolRegistry;
 
@@ -18,31 +19,38 @@ impl MockKernelHandle {
         Self::default()
     }
 
+    #[instrument(skip_all)]
     pub async fn record_proc_spawn(&self, agent_name: &str) {
         self.proc_spawns.lock().await.insert(agent_name.to_string());
     }
 
+    #[instrument(skip_all)]
     pub async fn received_proc_spawn(&self, agent_name: &str) -> bool {
         self.proc_spawns.lock().await.contains(agent_name)
     }
 
+    #[instrument(skip_all)]
     pub async fn record_proc_kill(&self, pid: u64) {
         self.proc_kills.lock().await.insert(pid);
     }
 
+    #[instrument(skip_all)]
     pub async fn received_proc_kill(&self, pid: u64) -> bool {
         self.proc_kills.lock().await.contains(&pid)
     }
 
+    #[instrument(skip_all)]
     pub async fn auto_approve_resource_request(&self) {
         *self.auto_approve_rr.lock().await = true;
     }
 
+    #[instrument(skip_all)]
     pub async fn is_auto_approve(&self) -> bool {
         *self.auto_approve_rr.lock().await
     }
 
     /// List tools from an optional real registry, filtered by namespace/keyword/granted_only.
+    #[instrument(skip(self, token))]
     pub async fn list_tools(
         &self,
         namespace: String,

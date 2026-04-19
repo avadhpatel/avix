@@ -16,7 +16,7 @@ use futures::SinkExt;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn, instrument};
 
 use crate::auth::atp_token::{ATPTokenClaims, ATPTokenStore};
 use crate::auth::service::AuthService;
@@ -304,6 +304,7 @@ async fn handle_ws_upgrade(
 
 // ── Connection loop ────────────────────────────────────────────────────────────
 
+#[instrument(skip(state))]
 async fn run_connection(
     ws: WebSocket,
     state: AppState,

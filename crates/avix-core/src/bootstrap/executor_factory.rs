@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{info, warn, instrument};
 
 use crate::executor::factory::AgentExecutorFactory;
 use crate::executor::runtime_executor::RuntimeExecutor;
@@ -74,6 +74,7 @@ impl IpcExecutorFactory {
     }
 
     /// Wire in the real `ToolRegistry` after phase3 construction.
+    #[instrument(skip(self, registry))]
     pub async fn set_tool_registry(&self, registry: Arc<ToolRegistry>) {
         *self.tool_registry.lock().await = Some(registry);
         info!("real ToolRegistry injected into IpcExecutorFactory");
@@ -91,6 +92,7 @@ impl IpcExecutorFactory {
 }
 
 impl AgentExecutorFactory for IpcExecutorFactory {
+    #[instrument(skip_all)]
     fn launch(&self, params: SpawnParams) -> tokio::task::AbortHandle {
         // Derive the llm.svc socket from the agent's runtime_dir.  By the time
         // an agent is launched phase-3 will have started llm.svc at this path.

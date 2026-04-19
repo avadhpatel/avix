@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tracing::instrument;
+
 use crate::invocation::conversation::{ConversationEntry, Role};
 use crate::memfs::VfsRouter;
 use crate::memory_svc::{
@@ -27,6 +29,7 @@ impl MemoryManager {
     }
 
     /// Append a conversation message to the history.
+    #[instrument(skip(self))]
     pub fn push_conversation_message(&mut self, role: &str, content: &str) {
         let r = match role {
             "assistant" => Role::Assistant,
@@ -41,6 +44,7 @@ impl MemoryManager {
     /// Build the memory context block and store it in `memory_context`.
     ///
     /// No-op when no VFS is attached.
+    #[instrument(skip(self, vfs))]
     pub async fn init_memory_context(
         &mut self,
         vfs: Option<&Arc<VfsRouter>>,
@@ -50,6 +54,7 @@ impl MemoryManager {
         self.memory_context = self.build_memory_context_block(vfs, spawned_by, agent_name).await;
     }
 
+    #[instrument(skip(self, vfs))]
     pub async fn build_memory_context_block(
         &self,
         vfs: Option<&Arc<VfsRouter>>,
@@ -134,6 +139,7 @@ impl MemoryManager {
     }
 
     /// Write a session summary to episodic memory when SIGSTOP fires.
+    #[instrument(skip(self, granted_tools))]
     pub async fn auto_log_session_end(
         &self,
         pid: u64,

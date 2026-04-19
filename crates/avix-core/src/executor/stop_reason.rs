@@ -1,4 +1,6 @@
 use crate::llm_client::{LlmCompleteResponse, StopReason};
+use tracing::instrument;
+
 use crate::llm_svc::adapter::AvixToolCall;
 use crate::types::tool::ToolName;
 
@@ -8,6 +10,7 @@ pub enum TurnAction {
     SummariseContext,
 }
 
+#[instrument(skip(resp))]
 pub fn interpret_stop_reason(resp: &LlmCompleteResponse) -> TurnAction {
     match resp.stop_reason {
         StopReason::EndTurn | StopReason::StopSequence => {

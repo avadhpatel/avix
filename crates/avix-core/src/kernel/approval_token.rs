@@ -1,8 +1,10 @@
-use crate::error::AvixError;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::instrument;
+
+use crate::error::AvixError;
 
 #[derive(Default)]
 pub struct ApprovalTokenStore {
@@ -14,6 +16,7 @@ impl ApprovalTokenStore {
         Self::default()
     }
 
+    #[instrument(skip(self))]
     pub async fn create(&self, _hil_id: &str) -> String {
         let token_id = uuid::Uuid::new_v4().to_string();
         let used = Arc::new(AtomicBool::new(false));
@@ -23,6 +26,7 @@ impl ApprovalTokenStore {
 
     /// Register a pre-existing token string (e.g. from a HilRequest built externally).
     /// If the token is already registered this is a no-op.
+    #[instrument(skip(self))]
     pub async fn register(&self, token_id: &str) {
         let mut guard = self.tokens.write().await;
         guard
@@ -30,6 +34,7 @@ impl ApprovalTokenStore {
             .or_insert_with(|| Arc::new(AtomicBool::new(false)));
     }
 
+    #[instrument(skip(self))]
     pub async fn consume(&self, token_id: &str) -> Result<(), AvixError> {
         let guard = self.tokens.read().await;
         let used = guard

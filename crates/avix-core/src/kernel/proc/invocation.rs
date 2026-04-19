@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tracing::instrument;
+
 use crate::error::AvixError;
 use crate::invocation::{InvocationRecord, InvocationStatus, InvocationStore};
 
@@ -17,6 +19,7 @@ impl InvocationManager {
         self
     }
 
+    #[instrument(skip(self))]
     pub async fn list_invocations(
         &self,
         username: &str,
@@ -46,6 +49,7 @@ impl InvocationManager {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn get_invocation(
         &self,
         invocation_id: &str,
@@ -56,12 +60,14 @@ impl InvocationManager {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn update_status(&self, invocation_id: &str, status: InvocationStatus) -> Result<(), AvixError> {
         let store = self.store.as_ref()
             .ok_or_else(|| AvixError::NotFound("invocation store not configured".into()))?;
         store.update_status(invocation_id, status).await
     }
 
+    #[instrument(skip(self))]
     pub async fn snapshot_invocation(&self, id: &str) -> Result<InvocationRecord, AvixError> {
         let store = self.store.as_ref()
             .ok_or_else(|| AvixError::NotFound("invocation store not configured".into()))?;

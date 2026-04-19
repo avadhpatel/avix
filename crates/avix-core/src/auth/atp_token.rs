@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::instrument;
 
 use crate::error::AvixError;
 use crate::types::Role;
@@ -31,6 +32,7 @@ pub struct ATPTokenClaims {
 }
 
 impl ATPTokenClaims {
+    #[instrument(skip(self))]
     pub fn is_expired(&self) -> bool {
         self.exp < Utc::now()
     }
@@ -45,6 +47,7 @@ impl ATPTokenClaims {
 pub struct ATPToken;
 
 impl ATPToken {
+    #[instrument(skip(claims, secret))]
     pub fn issue(claims: ATPTokenClaims, secret: &str) -> Result<String, AvixError> {
         let json =
             serde_json::to_string(&claims).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -53,6 +56,7 @@ impl ATPToken {
         Ok(format!("{payload}.{sig}"))
     }
 
+    #[instrument(skip(token, secret))]
     pub fn validate(token: &str, secret: &str) -> Result<ATPTokenClaims, AvixError> {
         let parts: Vec<&str> = token.splitn(2, '.').collect();
         if parts.len() != 2 {
@@ -107,10 +111,12 @@ impl ATPTokenStore {
         }
     }
 
+    #[instrument(skip(self, claims))]
     pub async fn issue(&self, claims: ATPTokenClaims) -> Result<String, AvixError> {
         ATPToken::issue(claims, &self.secret)
     }
 
+    #[instrument(skip(self, token))]
     pub async fn validate(&self, token: &str) -> Result<ATPTokenClaims, AvixError> {
         let claims = ATPToken::validate(token, &self.secret)?;
         if self.revoked.read().await.contains(&claims.session_id) {
@@ -119,11 +125,13 @@ impl ATPTokenStore {
         Ok(claims)
     }
 
+    #[instrument(skip(self))]
     pub async fn revoke(&self, session_id: &str) {
         self.revoked.write().await.insert(session_id.to_string());
     }
 
     /// Returns `true` when the token is valid and expires within 5 minutes.
+    #[instrument(skip(self, token))]
     pub async fn is_expiring_soon(&self, token: &str) -> Result<bool, AvixError> {
         let claims = self.validate(token).await?;
         Ok(claims.is_expiring_soon())

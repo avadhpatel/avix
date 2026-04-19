@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tracing::instrument;
 use uuid::Uuid;
 
 use super::atp_token::{ATPTokenClaims, ATPTokenStore};
@@ -31,6 +32,7 @@ impl AuthService {
         }
     }
 
+    #[instrument(skip(self, credential))]
     pub async fn login(
         &self,
         identity_name: &str,
@@ -81,6 +83,7 @@ impl AuthService {
         Ok(entry)
     }
 
+    #[instrument(skip(self))]
     pub async fn validate_session(&self, session_id: &str) -> Result<SessionEntry, AvixError> {
         let guard = self.sessions.read().await;
         let entry = guard
@@ -92,6 +95,7 @@ impl AuthService {
         Ok(entry.clone())
     }
 
+    #[instrument(skip(self))]
     pub async fn revoke_session(&self, session_id: &str) -> Result<(), AvixError> {
         self.sessions
             .write()
@@ -101,12 +105,14 @@ impl AuthService {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn active_session_count(&self) -> usize {
         self.sessions.read().await.len()
     }
 
     /// Validate the current token and issue a fresh one with a new expiry.
     /// Returns `(new_token_string, new_claims)`.
+    #[instrument(skip(self, old_token, token_store))]
     pub async fn refresh_token(
         &self,
         old_token: &str,

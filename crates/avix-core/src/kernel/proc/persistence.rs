@@ -1,9 +1,12 @@
 use std::path::PathBuf;
 
+use tracing::instrument;
+
 use crate::error::AvixError;
 
 use super::types::{AgentRecord, AgentsYaml};
 
+#[instrument(skip(path))]
 pub async fn load_agents_yaml(path: &PathBuf) -> Result<AgentsYaml, AvixError> {
     if !path.exists() {
         return Ok(AgentsYaml { agents: Vec::new() });
@@ -12,6 +15,7 @@ pub async fn load_agents_yaml(path: &PathBuf) -> Result<AgentsYaml, AvixError> {
     serde_yaml::from_str(&yaml).map_err(|e| AvixError::ConfigParse(e.to_string()))
 }
 
+#[instrument(skip(path, agents))]
 pub async fn save_agents_yaml(path: &PathBuf, agents: &AgentsYaml) -> Result<(), AvixError> {
     let yaml = serde_yaml::to_string(agents).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
     let tmp_path = path.with_extension("tmp");
@@ -20,6 +24,7 @@ pub async fn save_agents_yaml(path: &PathBuf, agents: &AgentsYaml) -> Result<(),
     Ok(())
 }
 
+#[instrument(skip(path))]
 pub async fn persist_agent_record(
     path: &PathBuf,
     pid: u64,

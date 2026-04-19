@@ -1,4 +1,6 @@
 use crate::memfs::{VfsPath, VfsRouter};
+use tracing::instrument;
+
 use crate::params::defaults::{system_agent_defaults, DefaultsFile, DefaultsLayer};
 use crate::params::limits::{system_agent_limits, LimitsFile, LimitsLayer};
 
@@ -8,6 +10,7 @@ use crate::params::limits::{system_agent_limits, LimitsFile, LimitsLayer};
 /// agents spawned later can read system defaults from `/kernel/defaults/`.
 /// All paths written here are kernel-owned ephemeral trees — they are
 /// re-created on every boot, never persisted to disk.
+#[instrument(skip(vfs))]
 pub async fn run(vfs: &VfsRouter) {
     // System defaults — serialised from typed structs (no hard-coded YAML strings)
     let agent_defaults_yaml =

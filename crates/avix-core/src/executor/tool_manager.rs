@@ -6,6 +6,8 @@ use super::tool_registration::{cat2_tool_descriptor, compute_cat2_tools};
 use super::validation::ToolBudgets;
 
 /// Manages the category-2 tool list, budgets, and HIL gating for an agent session.
+use tracing::instrument;
+
 pub struct ToolManager {
     /// Current tool descriptors sent to the LLM each turn.
     pub tool_list: Vec<serde_json::Value>,
@@ -35,6 +37,7 @@ impl ToolManager {
     }
 
     /// Rebuild `tool_list` from Cat2 tools + Cat1 descriptors, excluding removed tools.
+    #[instrument(skip(self, token))]
     pub fn refresh_tool_list(&mut self, token: &CapabilityToken, spawned_by: &str) {
         let cat2 = compute_cat2_tools(token, spawned_by);
         let removed = &self.removed_tools;
@@ -57,6 +60,7 @@ impl ToolManager {
     }
 
     /// Return tool descriptors filtered to exclude removed tools.
+    #[instrument(skip(self))]
     pub fn current_tool_list(&self) -> Vec<serde_json::Value> {
         self.tool_list
             .iter()

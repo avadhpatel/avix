@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use tracing::instrument;
 
 use crate::executor::ipc_dispatch::dispatch_cat1_tool;
 use crate::executor::syscall_dispatch::dispatch_kernel_syscall;
@@ -24,6 +25,7 @@ impl RuntimeExecutor {
     /// Updates atomic tracking flags immediately **and** forwards the signal onto
     /// the in-process channel so an in-flight `run_with_client` loop can react
     /// without waiting for the current LLM call to complete.
+    #[instrument(skip(self))]
     pub async fn deliver_signal(&self, signal: &str) {
         *self.last_signal_received.lock().await = Some(signal.to_string());
         self.pending_signal_count.fetch_add(1, Ordering::AcqRel);
@@ -199,6 +201,7 @@ impl RuntimeExecutor {
     }
 
     /// Restore executor state from a named snapshot stored in the VFS.
+    #[instrument(skip(self))]
     pub async fn restore_from_snapshot(
         &mut self,
         snapshot_name: &str,
@@ -283,6 +286,7 @@ impl RuntimeExecutor {
     /// Looks up the tool's descriptor from the real `ToolRegistry` (wired in gap-A),
     /// checks execute permission, then dispatches over a fresh Unix socket (ADR-05).
     /// Kernel tools (no `ipc` binding) are forwarded to the kernel IPC server.
+    #[instrument(skip(self, call))]
     pub async fn dispatch_via_router(
         &self,
         call: &AvixToolCall,
@@ -354,6 +358,7 @@ impl RuntimeExecutor {
         .await
     }
 
+    #[instrument(skip(self, call))]
     pub async fn dispatch_category2(
         &mut self,
         call: &AvixToolCall,

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{info, warn, instrument};
 use uuid::Uuid;
 
 use crate::agent_manifest::{AgentManifestSummary, ManifestScanner};
@@ -177,6 +177,7 @@ impl ProcHandler {
 
     /// Override the signal channel registry (used by bootstrap to share it with
     /// `IpcExecutorFactory` so both sides reference the same map).
+    #[instrument(skip_all)]
     pub fn with_signal_channels(mut self, channels: SignalChannelRegistry) -> Self {
         // Rebuild signal_handler with the new registry.
         self.signal_handler = Arc::new(SignalHandler::new(
@@ -191,11 +192,13 @@ impl ProcHandler {
         self
     }
 
+    #[instrument(skip_all)]
     pub fn with_tracer(mut self, tracer: Arc<Tracer>) -> Self {
         self.tracer = tracer;
         self
     }
 
+    #[instrument(skip_all)]
     pub fn with_invocation_store(mut self, store: Arc<InvocationStore>) -> Self {
         self.invocation_store = Some(store.clone());
 
@@ -224,6 +227,7 @@ impl ProcHandler {
         self
     }
 
+    #[instrument(skip_all)]
     pub fn with_manifest_scanner(mut self, scanner: Arc<ManifestScanner>) -> Self {
         self.manifest_scanner = Some(scanner.clone());
 
@@ -243,6 +247,7 @@ impl ProcHandler {
         self
     }
 
+    #[instrument(skip_all)]
     pub fn with_session_store(mut self, store: Arc<PersistentSessionStore>) -> Self {
         self.session_store = Some(store.clone());
 
@@ -271,19 +276,23 @@ impl ProcHandler {
         self
     }
 
+    #[instrument(skip_all)]
     pub fn with_history_store(mut self, store: Arc<HistoryStore>) -> Self {
         self.history_store = Some(store);
         self
     }
 
+    #[instrument(skip_all)]
     pub fn process_table(&self) -> &Arc<ProcessTable> {
         &self.process_table
     }
 
+    #[instrument(skip(self, sm))]
     pub async fn set_service_manager(&self, sm: Arc<ServiceManager>) {
         *self.service_manager.lock().await = Some(sm);
     }
 
+    #[instrument(skip(self, tr))]
     pub async fn set_tool_registry(&self, tr: Arc<ToolRegistry>) {
         *self.tool_registry.lock().await = Some(tr);
     }
@@ -310,6 +319,7 @@ impl ProcHandler {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn list_tools(&self) -> ToolListResponse {
         if let Some(tr) = self.tool_registry.lock().await.as_ref() {
             let tools = tr.list_all().await;
@@ -332,6 +342,7 @@ impl ProcHandler {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn abort_agent(&self, pid: u64) {
         self.agent_manager.abort_agent(pid).await;
         let mut handles = self.task_handles.lock().await;
@@ -383,6 +394,7 @@ impl ProcHandler {
         self.finalize_session_for_pid(pid, &status).await;
     }
 
+    #[instrument(skip(self))]
     pub async fn finalize_session_for_pid(&self, pid: u64, status: &InvocationStatus) {
         let session_id_str = self.active_sessions.lock().await.remove(&pid);
         let sid = match session_id_str {
@@ -410,6 +422,7 @@ impl ProcHandler {
         }
     }
 
+    #[instrument(skip(self, name, goal, session_id, atp_session_id, caller_identity))]
     pub async fn spawn(
         &self,
         name: &str,
@@ -434,6 +447,7 @@ impl ProcHandler {
         self.agent_manager.list_installed(username).await
     }
 
+    #[instrument(skip(self))]
     pub async fn list_invocations(
         &self,
         username: &str,
@@ -465,6 +479,7 @@ impl ProcHandler {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn get_invocation(
         &self,
         invocation_id: &str,
@@ -475,6 +490,7 @@ impl ProcHandler {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn list_invocations_for_session(
         &self,
         session_id: &str,
@@ -485,6 +501,7 @@ impl ProcHandler {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn read_invocation_conversation(
         &self,
         invocation_id: &str,
@@ -502,6 +519,7 @@ impl ProcHandler {
             .await
     }
 
+    #[instrument(skip(self))]
     pub async fn snapshot_invocation(&self, id: &str) -> Result<InvocationRecord, AvixError> {
         let store = self
             .invocation_store
@@ -532,6 +550,7 @@ impl ProcHandler {
             .ok_or_else(|| AvixError::NotFound(format!("invocation {id} not found")))
     }
 
+    #[instrument(skip(self))]
     pub async fn create_message(&self, msg: &MessageRecord) -> Result<(), AvixError> {
         match &self.history_store {
             Some(s) => s.create_message(msg).await,
@@ -539,6 +558,7 @@ impl ProcHandler {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn get_message(&self, id: &Uuid) -> Result<Option<MessageRecord>, AvixError> {
         match &self.history_store {
             Some(s) => s.get_message(id).await,
@@ -546,6 +566,7 @@ impl ProcHandler {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn list_messages(&self, session_id: &Uuid) -> Result<Vec<MessageRecord>, AvixError> {
         match &self.history_store {
             Some(s) => s.list_messages(session_id).await,
@@ -553,6 +574,7 @@ impl ProcHandler {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn create_part(&self, part: &PartRecord) -> Result<(), AvixError> {
         match &self.history_store {
             Some(s) => s.create_part(part).await,
@@ -560,6 +582,7 @@ impl ProcHandler {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn get_part(&self, id: &Uuid) -> Result<Option<PartRecord>, AvixError> {
         match &self.history_store {
             Some(s) => s.get_part(id).await,
@@ -567,6 +590,7 @@ impl ProcHandler {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn list_parts(&self, message_id: &Uuid) -> Result<Vec<PartRecord>, AvixError> {
         match &self.history_store {
             Some(s) => s.list_parts(message_id).await,
@@ -574,6 +598,7 @@ impl ProcHandler {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn create_session(
         &self,
         username: &str,
@@ -599,6 +624,7 @@ impl ProcHandler {
         Ok(record)
     }
 
+    #[instrument(skip(self))]
     pub async fn list_sessions(&self, username: &str) -> Result<Vec<SessionRecord>, AvixError> {
         match &self.session_store {
             Some(s) => s.list_for_user(username).await,
@@ -606,6 +632,7 @@ impl ProcHandler {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn get_session(&self, session_id: &Uuid) -> Result<Option<SessionRecord>, AvixError> {
         match &self.session_store {
             Some(s) => s.get(session_id).await,
@@ -613,6 +640,7 @@ impl ProcHandler {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn delete_session(&self, session_id: &Uuid) -> Result<(), AvixError> {
         let store = self
             .session_store
@@ -621,6 +649,7 @@ impl ProcHandler {
         store.delete(session_id).await
     }
 
+    #[instrument(skip(self))]
     pub async fn resume_session(
         &self,
         session_id: &Uuid,
@@ -663,14 +692,17 @@ impl ProcHandler {
         Ok(pid)
     }
 
+    #[instrument(skip(self))]
     pub async fn pause_agent(&self, pid: u64) -> Result<(), AvixError> {
         self.signal_handler.pause_agent(pid).await
     }
 
+    #[instrument(skip(self))]
     pub async fn resume_agent(&self, pid: u64) -> Result<(), AvixError> {
         self.signal_handler.resume_agent(pid).await
     }
 
+    #[instrument(skip(self))]
     pub async fn send_signal(
         &self,
         pid: u64,
@@ -680,10 +712,12 @@ impl ProcHandler {
         self.signal_handler.send_signal(pid, signal, payload).await
     }
 
+    #[instrument(skip(self))]
     pub async fn load_agents_yaml(&self) -> Result<AgentsYaml, AvixError> {
         load_agents_yaml(&self.agents_yaml_path).await
     }
 
+    #[instrument(skip(self))]
     pub async fn remove_agent_record(&self, pid: u64) -> Result<(), AvixError> {
         let mut agents = load_agents_yaml(&self.agents_yaml_path).await.unwrap_or_default();
         agents.agents.retain(|a| a.pid != pid);

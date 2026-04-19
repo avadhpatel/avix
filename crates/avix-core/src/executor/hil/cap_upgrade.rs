@@ -1,4 +1,6 @@
 use crate::error::AvixError;
+use tracing::instrument;
+
 use crate::signal::kind::SignalKind;
 use crate::signal::SignalBus;
 use crate::types::{token::CapabilityToken, Pid};
@@ -16,6 +18,7 @@ impl CapabilityUpgrader {
         Self { pid, token, bus }
     }
 
+    #[instrument(skip(self))]
     pub async fn request_tool(
         &mut self,
         _tool: &str,

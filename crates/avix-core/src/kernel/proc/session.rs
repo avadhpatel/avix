@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use uuid::Uuid;
 
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, instrument};
 use crate::error::AvixError;
 use crate::session::{PersistentSessionStore, SessionRecord};
 
@@ -19,6 +19,7 @@ impl SessionManager {
         self
     }
 
+    #[instrument(skip(self))]
     pub async fn create_session(
         &self,
         username: &str,
@@ -42,6 +43,7 @@ impl SessionManager {
         Ok(record)
     }
 
+    #[instrument(skip(self))]
     pub async fn list_sessions(&self, username: &str) -> Result<Vec<SessionRecord>, AvixError> {
         debug!(username, "listing sessions for user");
         match &self.store {
@@ -54,6 +56,7 @@ impl SessionManager {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn get_session(&self, session_id: &Uuid) -> Result<Option<SessionRecord>, AvixError> {
         debug!(session_id = %session_id, "getting session");
         match &self.store {
@@ -70,6 +73,7 @@ impl SessionManager {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn update_session(&self, session: &SessionRecord) -> Result<(), AvixError> {
         let store = self.store.as_ref()
             .ok_or_else(|| AvixError::NotFound("session store not configured".into()))?;

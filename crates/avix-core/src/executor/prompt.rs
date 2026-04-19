@@ -1,4 +1,7 @@
 #[allow(clippy::too_many_arguments)]
+use tracing::instrument;
+
+#[instrument(skip(tool_budgets, pending_messages, tools))]
 pub fn build_system_prompt(
     pid: u64,
     agent_name: &str,

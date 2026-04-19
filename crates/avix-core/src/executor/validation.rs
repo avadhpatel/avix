@@ -1,4 +1,6 @@
 use crate::error::AvixError;
+use tracing::instrument;
+
 use crate::llm_svc::adapter::AvixToolCall;
 use crate::types::token::CapabilityToken;
 use std::collections::HashMap;
@@ -18,14 +20,17 @@ pub struct ToolBudgets {
 }
 
 impl ToolBudgets {
+    #[instrument(skip(self))]
     pub fn set(&mut self, tool: &str, budget: u32) {
         self.budgets.insert(tool.to_string(), budget);
     }
 
+    #[instrument(skip(self))]
     pub fn remaining(&self, tool: &str) -> Option<u32> {
         self.budgets.get(tool).copied()
     }
 
+    #[instrument(skip(self))]
     pub fn decrement(&mut self, tool: &str) {
         if let Some(b) = self.budgets.get_mut(tool) {
             *b = b.saturating_sub(1);
@@ -39,6 +44,7 @@ impl ToolBudgets {
 /// 1. Token expiry — an expired token blocks all tool calls without exception.
 /// 2. Capability grant — always-present tools bypass this check (Invariant 13).
 /// 3. Budget — if a per-tool budget is set, it must be > 0. Decremented on success.
+#[instrument(skip(token, call, budgets))]
 pub fn validate_tool_call(
     token: &CapabilityToken,
     call: &AvixToolCall,

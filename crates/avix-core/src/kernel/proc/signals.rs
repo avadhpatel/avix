@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, instrument};
 
 use crate::error::AvixError;
 use crate::invocation::{InvocationStatus, InvocationStore};
@@ -65,6 +65,7 @@ impl SignalHandler {
         futures::future::join_all(futs).await;
     }
 
+    #[instrument(skip(self))]
     pub async fn pause_agent(&self, pid: u64) -> Result<(), AvixError> {
         info!(pid, "pausing agent");
 
@@ -129,6 +130,7 @@ impl SignalHandler {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn resume_agent(&self, pid: u64) -> Result<(), AvixError> {
         info!(pid, "resuming agent");
 
@@ -192,6 +194,7 @@ impl SignalHandler {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn send_signal(
         &self,
         pid: u64,

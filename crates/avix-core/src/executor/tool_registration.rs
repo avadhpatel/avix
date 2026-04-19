@@ -1,4 +1,6 @@
 use crate::types::capability_map::CapabilityToolMap;
+use tracing::instrument;
+
 use crate::types::{token::CapabilityToken, tool::ToolVisibility};
 use std::collections::HashSet;
 
@@ -10,6 +12,7 @@ use std::collections::HashSet;
 ///   2. Scans all known Cat2 gated tools; includes each one that appears in the token.
 ///
 /// All Cat2 tools are scoped to the agent's owning user (ToolVisibility::User).
+#[instrument(skip(token))]
 pub fn compute_cat2_tools(
     token: &CapabilityToken,
     username: &str,

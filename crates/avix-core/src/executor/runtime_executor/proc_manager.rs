@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tracing::instrument;
+
 use crate::memfs::{VfsPath, VfsRouter};
 
 use super::RuntimeExecutor;
@@ -7,11 +9,13 @@ use super::RuntimeExecutor;
 impl RuntimeExecutor {
     /// Write `/proc/<pid>/status.yaml` and `/proc/<pid>/resolved.yaml` to the VFS.
     /// Must be called after `with_vfs()`. No-op when no VFS is attached.
+    #[instrument(skip(self))]
     pub async fn init_proc_files(&self) {
         self.init_proc_files_for(&self.spawned_by.clone(), &[]).await;
     }
 
     /// Like `init_proc_files`, but with explicit username and crew memberships.
+    #[instrument(skip(self))]
     pub async fn init_proc_files_for(&self, username: &str, crews: &[String]) {
         let vfs = match &self.vfs {
             Some(v) => Arc::clone(v),

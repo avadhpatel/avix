@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use tracing::instrument;
+
 use crate::error::AvixError;
 use crate::memfs::{LocalProvider, VfsRouter};
 
@@ -13,6 +15,7 @@ use crate::memfs::{LocalProvider, VfsRouter};
 ///   `/bin`       → `{root}/data/bin`     (system-installed agents)
 ///
 /// Ephemeral paths (`/proc/`, `/kernel/`) are NOT mounted — they stay in `MemFs`.
+#[instrument(skip(vfs, root))]
 pub async fn mount_persistent_trees(vfs: &VfsRouter, root: &Path) -> Result<(), AvixError> {
     let mounts = [
         ("/etc/avix", root.join("etc")),

@@ -1,4 +1,6 @@
 use crate::config::CredentialType;
+use tracing::instrument;
+
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
@@ -11,6 +13,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// uses constant-time comparison via `hmac::Mac::verify_slice`.
 ///
 /// For `password`: placeholder — accepts any non-empty value until bcrypt is wired up.
+#[instrument(skip(credential, presented))]
 pub fn validate_credential(credential: &CredentialType, presented: &str) -> bool {
     match credential {
         CredentialType::ApiKey { key_hash, .. } => verify_api_key(key_hash, presented),
@@ -18,6 +21,7 @@ pub fn validate_credential(credential: &CredentialType, presented: &str) -> bool
     }
 }
 
+#[instrument(skip(key_hash, presented))]
 fn verify_api_key(key_hash: &str, presented: &str) -> bool {
     let hex_part = match key_hash.strip_prefix("hmac-sha256:") {
         Some(h) => h,

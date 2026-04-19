@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, instrument};
 use uuid::Uuid;
 
 use crate::agent_manifest::{AgentManifestSummary, ManifestScanner};
@@ -62,6 +62,7 @@ impl AgentManager {
         }
     }
 
+    #[instrument(skip(self, name, goal, session_id, atp_session_id, caller_identity))]
     pub async fn spawn(
         &self,
         name: &str,
@@ -213,6 +214,7 @@ impl AgentManager {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn list(&self) -> Result<Vec<super::types::ActiveAgent>, AvixError> {
         debug!("listing active agents");
 
@@ -237,6 +239,7 @@ impl AgentManager {
         Ok(active)
     }
 
+    #[instrument(skip(self))]
     pub async fn abort_agent(&self, pid: u64) {
         info!(pid, "aborting agent");
 
@@ -255,6 +258,7 @@ impl AgentManager {
         self.finalize_invocation(pid, InvocationStatus::Killed, Some("killed".into())).await;
     }
 
+    #[instrument(skip(self))]
     pub async fn list_installed(&self, username: &str) -> Vec<AgentManifestSummary> {
         match &self.manifest_scanner {
             Some(scanner) => scanner.scan(username).await,
@@ -262,18 +266,22 @@ impl AgentManager {
         }
     }
 
+    #[instrument(skip_all)]
     pub fn process_table(&self) -> &Arc<ProcessTable> {
         &self.process_table
     }
 
+    #[instrument(skip_all)]
     pub fn task_handles(&self) -> &Arc<Mutex<HashMap<u64, tokio::task::AbortHandle>>> {
         &self.task_handles
     }
 
+    #[instrument(skip_all)]
     pub fn active_invocations(&self) -> &Arc<Mutex<HashMap<u64, String>>> {
         &self.active_invocations
     }
 
+    #[instrument(skip_all)]
     pub fn active_sessions(&self) -> &Arc<Mutex<HashMap<u64, String>>> {
         &self.active_sessions
     }

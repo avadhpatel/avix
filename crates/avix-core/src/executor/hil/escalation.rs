@@ -1,4 +1,6 @@
 use crate::error::AvixError;
+use tracing::instrument;
+
 use crate::signal::kind::SignalKind;
 use crate::signal::SignalBus;
 use crate::types::Pid;
@@ -26,6 +28,7 @@ impl Escalator {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn escalate(
         &mut self,
         _situation: &str,

@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use tracing::{debug, warn, instrument};
+
 use crate::error::AvixError;
 use crate::ipc::{
     frame,
@@ -7,13 +9,13 @@ use crate::ipc::{
 };
 use crate::llm_svc::adapter::AvixToolCall;
 use tokio::net::UnixStream;
-use tracing::{debug, warn};
 
 /// Dispatch a kernel syscall tool call to the kernel IPC server.
 ///
 /// Kernel tools (namespace `kernel/`) have no `IpcBinding` in their registry entry — they
 /// are handled by the kernel's own IPC server (`AVIX_KERNEL_SOCK` / `runtime_dir/kernel.sock`).
 /// `_caller` is always injected since kernel syscalls are always caller-scoped.
+#[instrument(skip(call, runtime_dir))]
 pub async fn dispatch_kernel_syscall(
     call: &AvixToolCall,
     agent_pid: u64,

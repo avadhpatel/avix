@@ -22,6 +22,7 @@ use crate::signal::kind::Signal;
 use crate::tool_registry::ToolRegistry;
 use crate::trace::Tracer;
 use crate::types::{token::CapabilityToken, tool::ToolVisibility, Pid};
+use tracing::instrument;
 
 use super::memory::MemoryManager;
 use super::mock_kernel::MockKernelHandle;
@@ -61,6 +62,7 @@ impl MockToolRegistry {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn tools_registered_by_pid(&self, pid: u64) -> HashSet<String> {
         self.registered
             .lock()
@@ -71,6 +73,7 @@ impl MockToolRegistry {
             .collect()
     }
 
+    #[instrument(skip(self))]
     pub async fn all_registered(&self) -> Vec<(u64, String)> {
         self.registered
             .lock()
@@ -199,6 +202,7 @@ pub(crate) enum RegistryRef {
 
 impl RuntimeExecutor {
     /// Internal constructor accepting any `RegistryRef` variant.
+    #[instrument(skip(params, registry_ref))]
     pub(crate) async fn spawn_with_registry_ref(
         params: SpawnParams,
         registry_ref: RegistryRef,
@@ -297,24 +301,28 @@ impl RuntimeExecutor {
     }
 
     /// Attach an `AtpEventBus` so tool-call and tool-result events are published live.
+    #[instrument(skip_all)]
     pub fn with_event_bus(mut self, bus: Arc<AtpEventBus>) -> Self {
         self.event_bus = Some(bus);
         self
     }
 
     /// Attach a `Tracer` so LLM calls, tool calls, and exits are written to trace files.
+    #[instrument(skip_all)]
     pub fn with_tracer(mut self, tracer: Arc<Tracer>) -> Self {
         self.tracer = Some(tracer);
         self
     }
 
     /// Attach a `KernelResourceHandler` for `cap/request-tool` and token renewal.
+    #[instrument(skip_all)]
     pub fn with_resource_handler(mut self, handler: Arc<KernelResourceHandler>) -> Self {
         self.resource_handler = Some(handler);
         self
     }
 
     /// Attach a `MemFs` handle so `pipe/open` writes `/proc/<pid>/pipes/<pipeId>.yaml`.
+    #[instrument(skip_all)]
     pub fn with_vfs(mut self, vfs: Arc<VfsRouter>) -> Self {
         self.vfs = Some(vfs);
         self
@@ -323,6 +331,7 @@ impl RuntimeExecutor {
     /// Set the VFS caller context from this executor's token so `/tools/**` reads
     /// return `state: available/unavailable` per the agent's actual capability grants.
     /// Call this after `with_vfs()` in any async context.
+    #[instrument(skip(self))]
     pub async fn init_vfs_caller(&self) {
         let Some(vfs) = &self.vfs else { return };
         let ctx = VfsCallerContext {
@@ -340,6 +349,7 @@ impl RuntimeExecutor {
     }
 
     /// Attach an `InvocationStore` so conversation history is flushed to disk on shutdown.
+    #[instrument(skip_all)]
     pub fn with_invocation_store(
         mut self,
         store: Arc<crate::invocation::InvocationStore>,
@@ -351,6 +361,7 @@ impl RuntimeExecutor {
     }
 
     /// Attach a `SessionStore` so session status is updated on Idle transitions.
+    #[instrument(skip_all)]
     pub fn with_session_store(
         mut self,
         store: Arc<crate::session::PersistentSessionStore>,
@@ -360,12 +371,14 @@ impl RuntimeExecutor {
     }
 
     /// Set snapshot interval — persist_interim is called after every N tool calls.
+    #[instrument(skip_all)]
     pub fn with_snapshot_interval(mut self, interval: u32) -> Self {
         self.snapshot_interval = Some(interval);
         self
     }
 
     /// Attach a `MemoryService` so SIGSTOP auto-logs the session to episodic memory.
+    #[instrument(skip_all)]
     pub fn with_memory_svc(mut self, svc: Arc<crate::memory_svc::service::MemoryService>) -> Self {
         self.memory.memory_svc = Some(svc);
         self
@@ -374,6 +387,7 @@ impl RuntimeExecutor {
     // ── Memory delegates ──────────────────────────────────────────────────────
 
     /// Initialise the memory VFS tree for this agent (dirs under `/users/<owner>/memory/<agent>/`).
+    #[instrument(skip(self))]
     pub async fn init_memory_tree(&self) {
         let vfs = match &self.vfs {
             Some(v) => Arc::clone(v),
@@ -393,6 +407,7 @@ impl RuntimeExecutor {
     }
 
     /// Build and store the memory context block from existing VFS records.
+    #[instrument(skip(self))]
     pub async fn init_memory_context(&mut self) {
         let vfs = self.vfs.clone();
         let spawned_by = self.spawned_by.clone();
@@ -403,6 +418,7 @@ impl RuntimeExecutor {
     }
 
     /// Record a conversation message in the history (for session auto-log).
+    #[instrument(skip(self))]
     pub fn push_conversation_message(&mut self, role: &str, content: &str) {
         self.memory.push_conversation_message(role, content);
     }
@@ -410,6 +426,7 @@ impl RuntimeExecutor {
     // ── Tool delegates ────────────────────────────────────────────────────────
 
     /// Rebuild tool_list from Cat2 tools + Cat1 descriptors from registry, excluding removed tools.
+    #[instrument(skip(self))]
     pub async fn refresh_tool_list(&mut self) {
         // Collect Cat1 tool names from the token (those not already registered as Cat2).
         let granted_tools: Vec<String> = self.token.granted_tools.clone();
@@ -463,31 +480,37 @@ impl RuntimeExecutor {
         );
     }
 
+    #[instrument(skip_all)]
     pub fn current_tool_list(&self) -> Vec<serde_json::Value> {
         self.tools.current_tool_list()
     }
 
     /// Returns true if this tool is a registered Category 2 tool for this agent.
+    #[instrument(skip_all)]
     pub fn is_cat2_tool(&self, name: &str) -> bool {
         self.tools.is_cat2_tool(name)
     }
 
+    #[instrument(skip(self))]
     pub async fn handle_tool_changed(&mut self, op: &str, tool_name: &str, _reason: &str) {
         self.tools.handle_tool_changed(op, tool_name);
     }
 
     /// Set a per-tool call budget.
+    #[instrument(skip_all)]
     pub fn set_tool_budget(&mut self, tool: &str, n: u32) {
         self.tools.set_tool_budget(tool, n);
     }
 
     /// Register a tool that requires HIL approval before dispatch.
+    #[instrument(skip_all)]
     pub fn require_hil_for(&mut self, tool: &str) {
         self.tools.require_hil_for(tool);
     }
 
     // ── System prompt ─────────────────────────────────────────────────────────
 
+    #[instrument(skip_all)]
     pub fn build_system_prompt_str(&self) -> String {
         let tool_list = self.current_tool_list();
         let base = build_system_prompt(
@@ -519,50 +542,60 @@ impl RuntimeExecutor {
     }
 
     /// Accessor for the system prompt (for tests and context inspection).
+    #[instrument(skip_all)]
     pub fn system_prompt(&self) -> String {
         self.build_system_prompt_str()
     }
 
     /// Public accessor kept for backward compat with existing tests.
+    #[instrument(skip_all)]
     pub fn build_system_prompt(&self) -> String {
         self.build_system_prompt_str()
     }
 
+    #[instrument(skip_all)]
     pub fn inject_pending_message(&mut self, msg: String) {
         self.pending_messages.push(msg);
     }
 
     // ── Accessors ─────────────────────────────────────────────────────────────
 
+    #[instrument(skip_all)]
     pub fn pid(&self) -> Pid {
         self.pid
     }
 
     /// Return the current goal (used in tests and restore verification).
+    #[instrument(skip_all)]
     pub fn goal(&self) -> &str {
         &self.goal
     }
 
     /// Return the current capability token.
+    #[instrument(skip_all)]
     pub fn token(&self) -> &CapabilityToken {
         &self.token
     }
 
     /// Return a clone of the signal sender for external signal delivery.
+    #[instrument(skip_all)]
     pub fn signal_sender(&self) -> mpsc::Sender<Signal> {
         self.signal_tx.clone()
     }
 
     // ── Mock / test helpers ───────────────────────────────────────────────────
 
+    #[instrument(skip_all)]
     pub fn push_llm_response(&self, resp: LlmCompleteResponse) {
         self.llm_queue.lock().unwrap().push(resp);
     }
 
+    #[instrument(skip_all)]
     pub fn llm_call_count(&self) -> usize {
         self.call_log.lock().unwrap().len()
     }
 
+    #[instrument(skip_all)]
     pub fn call_messages(&self, idx: usize) -> Vec<serde_json::Value> {
         self.call_log
             .lock()
@@ -573,11 +606,13 @@ impl RuntimeExecutor {
     }
 
     /// Set the token's expiry to `now + d`. Used in tests to simulate near-expiry tokens.
+    #[instrument(skip_all)]
     pub fn set_token_expiry_in(&mut self, d: Duration) {
         self.token.expires_at = chrono::Utc::now()
             + chrono::Duration::from_std(d).unwrap_or(chrono::Duration::hours(1));
     }
 
+    #[instrument(skip_all)]
     pub fn on_fs_read(&self, path: &str, content: &[u8]) {
         self.fs_data
             .lock()
@@ -585,13 +620,15 @@ impl RuntimeExecutor {
             .insert(path.to_string(), content.to_vec());
     }
 
+    #[instrument(skip_all)]
     pub fn set_max_tool_chain_length(&mut self, max: usize) {
         self.max_tool_chain_length = max;
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-    pub async fn shutdown(&mut self) {
+    #[instrument(skip(self))]
+pub async fn shutdown(&mut self) {
         self.shutdown_with_status(crate::invocation::InvocationStatus::Completed, None)
             .await;
     }
@@ -601,6 +638,7 @@ impl RuntimeExecutor {
     /// Called after a successful turn when the agent is waiting for the next message.
     /// Unlike `shutdown_with_status`, this does NOT deregister Cat2 tools — the executor
     /// stays alive and can accept another goal via `wait_for_next_goal`.
+    #[instrument(skip(self))]
     pub async fn idle(&mut self) {
         tracing::debug!(pid = self.pid.as_u64(), "executor transitioning to idle");
 
@@ -632,6 +670,7 @@ impl RuntimeExecutor {
     ///
     /// Handles `SIGPAUSE`/`SIGRESUME` while waiting. Returns `Some(goal)` on `SIGSTART`,
     /// `None` if the executor is killed or the signal channel is closed.
+    #[instrument(skip(self))]
     pub async fn wait_for_next_goal(&mut self) -> Option<String> {
         use std::sync::atomic::Ordering;
         // Take ownership so we can freely borrow `self` inside the loop.

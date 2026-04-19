@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{info, warn, instrument};
 
 use crate::error::AvixError;
 use crate::invocation::{InvocationStatus, InvocationStore};
@@ -15,6 +15,7 @@ use crate::types::Pid;
 /// Any PID in agents.yaml that is not yet registered in the process table is re-adopted
 /// as Running. PIDs already present in the table are skipped (idempotent).
 /// Links: docs/dev_plans/PROJECT-SPAWN-001-dev-plan.md#detailed-implementation-guidance
+#[instrument]
 pub async fn phase3_re_adopt(
     process_table: Arc<ProcessTable>,
     agents_yaml_path: PathBuf,
@@ -79,6 +80,7 @@ pub async fn phase3_re_adopt(
 ///   3. For each affected session: clear `pids`, then transition status:
 ///      `Running`  → `Idle`  (allow user to resume via `session resume`)
 ///      `Paused`   → `Idle`  (in-memory pause state is lost; allow resumption)
+#[instrument(skip_all)]
 pub async fn phase3_crash_recovery(
     invocation_store: Arc<InvocationStore>,
     session_store: Arc<PersistentSessionStore>,

@@ -1,6 +1,7 @@
 use crate::config::{LlmConfig, ProviderAuth};
 use crate::error::AvixError;
 use crate::ipc::message::{JsonRpcErrorCode, JsonRpcRequest, JsonRpcResponse};
+use tracing::instrument;
 use crate::llm_client::{LlmClient, LlmCompleteRequest, StreamChunk};
 use crate::llm_svc::adapter::{
     AvixEmbedRequest, AvixImageRequest, AvixSpeechRequest, AvixTranscribeRequest, EmbedInput,
@@ -136,7 +137,8 @@ impl LlmService {
         }
     }
 
-    pub(crate) async fn dispatch(&self, req: &JsonRpcRequest) -> JsonRpcResponse {
+    #[instrument(skip(self))]
+pub(crate) async fn dispatch(&self, req: &JsonRpcRequest) -> JsonRpcResponse {
         let result = match req.method.as_str() {
             "llm/complete" => self.handle_complete(&req.params).await,
             "llm/generate-image" => self.handle_generate_image(&req.params).await,
