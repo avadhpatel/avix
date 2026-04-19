@@ -4,6 +4,7 @@ use crate::params::defaults::{AgentDefaults, DefaultsFile};
 use crate::params::limits::{AgentLimits, LimitsFile};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing::instrument;
 
 // ── Output: ResolvedConfig ─────────────────────────────────────────────────────
 
@@ -93,18 +94,21 @@ pub type Annotations = HashMap<String, Annotation>;
 
 // ── ResolverInput ─────────────────────────────────────────────────────────────
 
+#[derive(Debug)]
 pub struct LayeredDefaults {
     pub vfs_path: String,
     pub source: AnnotationSource,
     pub defaults: AgentDefaults,
 }
 
+#[derive(Debug)]
 pub struct LayeredLimits {
     pub vfs_path: String,
     pub limits: AgentLimits,
 }
 
 /// All inputs needed to produce a `ResolvedConfig`.
+#[derive(Debug)]
 pub struct ResolverInput {
     pub system_defaults: AgentDefaults,
     pub system_defaults_path: String,
@@ -198,6 +202,7 @@ pub struct ParamResolver;
 impl ParamResolver {
     /// Run the full resolution algorithm.
     /// Returns the resolved config and a provenance map.
+    #[instrument]
     pub fn resolve(
         input: &ResolverInput,
     ) -> Result<(ResolvedConfig, Annotations), ResolutionError> {
@@ -439,6 +444,7 @@ impl ParamResolver {
         Ok((resolved, annotations))
     }
 
+    #[instrument]
     fn compute_effective_limits(input: &ResolverInput) -> AgentLimits {
         let mut effective = input.system_limits.clone();
         for ll in &input.crew_limits {
@@ -452,6 +458,7 @@ impl ParamResolver {
 }
 
 // Helper: find the vfs_path of the limits file that most constrained entrypoint fields
+#[instrument]
 fn effective_limits_path_for_entrypoint(input: &ResolverInput) -> Option<String> {
     // Last crew limit or user limit that has entrypoint constraints
     if let Some(ul) = &input.user_limits {
@@ -467,6 +474,7 @@ fn effective_limits_path_for_entrypoint(input: &ResolverInput) -> Option<String>
     Some(input.system_limits_path.clone())
 }
 
+#[instrument]
 fn effective_limits_path_for_environment(input: &ResolverInput) -> Option<String> {
     if let Some(ul) = &input.user_limits {
         if ul.limits.environment.is_some() {
@@ -481,6 +489,7 @@ fn effective_limits_path_for_environment(input: &ResolverInput) -> Option<String
     Some(input.system_limits_path.clone())
 }
 
+#[instrument]
 fn effective_enum_limits_path(input: &ResolverInput) -> String {
     effective_limits_path_for_entrypoint(input).unwrap_or_else(|| input.system_limits_path.clone())
 }
@@ -488,15 +497,18 @@ fn effective_enum_limits_path(input: &ResolverInput) -> String {
 // ── ResolverInputLoader ───────────────────────────────────────────────────────
 
 /// Loads `ResolverInput` from the VFS for a given user and their crew memberships.
+#[derive(Debug)]
 pub struct ResolverInputLoader<'a> {
     vfs: &'a VfsRouter,
 }
 
 impl<'a> ResolverInputLoader<'a> {
+    #[instrument]
     pub fn new(vfs: &'a VfsRouter) -> Self {
         Self { vfs }
     }
 
+    #[instrument]
     pub async fn load(
         &self,
         username: &str,
@@ -579,6 +591,7 @@ impl<'a> ResolverInputLoader<'a> {
         })
     }
 
+    #[instrument]
     async fn read_defaults(&self, path: &str) -> Result<Option<AgentDefaults>, AvixError> {
         let vfs_path = VfsPath::parse(path)
             .map_err(|e| AvixError::ConfigParse(format!("invalid path {path}: {e}")))?;
@@ -593,6 +606,7 @@ impl<'a> ResolverInputLoader<'a> {
         }
     }
 
+    #[instrument]
     async fn read_limits(&self, path: &str) -> Result<Option<AgentLimits>, AvixError> {
         let vfs_path = VfsPath::parse(path)
             .map_err(|e| AvixError::ConfigParse(format!("invalid path {path}: {e}")))?;
@@ -617,6 +631,7 @@ mod tests {
     use crate::params::defaults::{EntrypointDefaults, EnvironmentDefaults};
     use crate::params::limits::{EntrypointLimits, EnvironmentLimits};
 
+    #[instrument]
     fn base_input() -> ResolverInput {
         ResolverInput {
             system_defaults: crate::params::defaults::system_agent_defaults(),

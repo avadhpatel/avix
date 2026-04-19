@@ -1,6 +1,7 @@
 use crate::error::AvixError;
 use crate::params::resolver::{Annotations, ResolvedConfig};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 // ── Metadata ──────────────────────────────────────────────────────────────────
 
@@ -47,8 +48,9 @@ pub struct ResolvedFile {
 
 impl ResolvedFile {
     /// Build a new `ResolvedFile`.
+    #[instrument]
     pub fn new(
-        username: impl Into<String>,
+        username: impl Into<String> + std::fmt::Debug,
         pid: Option<u64>,
         crews: Vec<String>,
         resolved: ResolvedConfig,
@@ -74,10 +76,12 @@ impl ResolvedFile {
     }
 
     #[allow(clippy::should_implement_trait)]
+    #[instrument]
     pub fn from_str(s: &str) -> Result<Self, AvixError> {
         serde_yaml::from_str(s).map_err(|e| AvixError::ConfigParse(e.to_string()))
     }
 
+    #[instrument]
     pub fn to_yaml(&self) -> Result<String, AvixError> {
         serde_yaml::to_string(self).map_err(|e| AvixError::ConfigParse(e.to_string()))
     }

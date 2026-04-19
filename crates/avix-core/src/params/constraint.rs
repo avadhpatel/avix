@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 /// A numeric min/max (inclusive) constraint.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -12,6 +13,7 @@ pub struct RangeConstraint {
 impl RangeConstraint {
     /// Returns the tightest (intersection) range of `self` and `other`.
     /// For min: highest value wins. For max: lowest value wins.
+    #[instrument]
     pub fn intersect(&self, other: &Self) -> Self {
         let min = match (self.min, other.min) {
             (Some(a), Some(b)) => Some(a.max(b)),
@@ -29,6 +31,7 @@ impl RangeConstraint {
     }
 
     /// Clamp `value` into `[min, max]`. Returns the clamped value.
+    #[instrument]
     pub fn clamp(&self, value: f64) -> f64 {
         let v = if let Some(lo) = self.min {
             value.max(lo)
@@ -43,6 +46,7 @@ impl RangeConstraint {
     }
 
     /// Returns `true` if `value` satisfies this constraint.
+    #[instrument]
     pub fn allows(&self, value: f64) -> bool {
         if let Some(lo) = self.min {
             if value < lo {
@@ -66,6 +70,7 @@ pub struct EnumConstraint {
 
 impl EnumConstraint {
     /// Returns the intersection of allowed values.
+    #[instrument]
     pub fn intersect(&self, other: &Self) -> Self {
         let values = self
             .values
@@ -77,6 +82,7 @@ impl EnumConstraint {
     }
 
     /// Returns `true` if `value` is in the allowed set.
+    #[instrument]
     pub fn allows(&self, value: &str) -> bool {
         self.values.iter().any(|v| v == value)
     }
@@ -90,6 +96,7 @@ pub struct SetConstraint {
 
 impl SetConstraint {
     /// Returns the intersection of allowed items.
+    #[instrument]
     pub fn intersect(&self, other: &Self) -> Self {
         let allowed = self
             .allowed
@@ -101,11 +108,13 @@ impl SetConstraint {
     }
 
     /// Returns `true` if `item` is in the allowed set.
+    #[instrument]
     pub fn allows(&self, item: &str) -> bool {
         self.allowed.iter().any(|v| v == item)
     }
 
     /// Returns only the items from `list` that are allowed.
+    #[instrument]
     pub fn filter(&self, list: &[String]) -> Vec<String> {
         list.iter().filter(|v| self.allows(v)).cloned().collect()
     }
@@ -120,6 +129,7 @@ pub struct BoolConstraint {
 
 impl BoolConstraint {
     /// Returns `true` if `v` satisfies this constraint.
+    #[instrument]
     pub fn allows(&self, v: bool) -> bool {
         match self.value {
             Some(locked) => v == locked,
@@ -128,6 +138,7 @@ impl BoolConstraint {
     }
 
     /// Apply tightest constraint: if either side locks the value, that wins.
+    #[instrument]
     pub fn intersect(&self, other: &Self) -> Self {
         // If either side is locked, that locked value wins.
         // If both sides lock to different values, self takes precedence

@@ -2,6 +2,7 @@ use crate::error::AvixError;
 use crate::params::constraint::{BoolConstraint, EnumConstraint, RangeConstraint, SetConstraint};
 use crate::params::defaults::AgentDefaults;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 // ── Sub-structs ───────────────────────────────────────────────────────────────
 
@@ -78,6 +79,7 @@ pub struct LimitViolation {
 impl AgentLimits {
     /// Returns the tightest combination of `self` and `other` for every field.
     /// `None` on either side means "unconstrained at that layer" — the other side wins.
+    #[instrument]
     pub fn intersect(&self, other: &AgentLimits) -> AgentLimits {
         AgentLimits {
             entrypoint: intersect_option(
@@ -106,6 +108,7 @@ impl AgentLimits {
 
     /// Check that every set field in `defaults` satisfies the corresponding constraint.
     /// Returns `Err` with a list of violations; `Ok(())` if all constraints pass.
+    #[instrument]
     pub fn check_defaults(&self, defaults: &AgentDefaults) -> Result<(), Vec<LimitViolation>> {
         let mut violations = Vec::new();
 
@@ -163,7 +166,12 @@ impl AgentLimits {
     }
 }
 
-fn intersect_option<T: Clone>(a: Option<&T>, b: Option<&T>, f: impl Fn(&T, &T) -> T) -> Option<T> {
+#[instrument(skip(f))]
+fn intersect_option<T: Clone + std::fmt::Debug>(
+    a: Option<&T>,
+    b: Option<&T>,
+    f: impl Fn(&T, &T) -> T,
+) -> Option<T> {
     match (a, b) {
         (Some(x), Some(y)) => Some(f(x, y)),
         (Some(x), None) => Some(x.clone()),
@@ -172,6 +180,7 @@ fn intersect_option<T: Clone>(a: Option<&T>, b: Option<&T>, f: impl Fn(&T, &T) -
     }
 }
 
+#[instrument]
 fn intersect_entrypoint(a: &EntrypointLimits, b: &EntrypointLimits) -> EntrypointLimits {
     EntrypointLimits {
         model_preference: intersect_option(
@@ -192,6 +201,7 @@ fn intersect_entrypoint(a: &EntrypointLimits, b: &EntrypointLimits) -> Entrypoin
     }
 }
 
+#[instrument]
 fn intersect_tools(a: &ToolsLimits, b: &ToolsLimits) -> ToolsLimits {
     ToolsLimits {
         required: intersect_option(
@@ -207,6 +217,7 @@ fn intersect_tools(a: &ToolsLimits, b: &ToolsLimits) -> ToolsLimits {
     }
 }
 
+#[instrument]
 fn intersect_memory(a: &MemoryLimits, b: &MemoryLimits) -> MemoryLimits {
     MemoryLimits {
         episodic_enabled: intersect_option(
@@ -222,6 +233,7 @@ fn intersect_memory(a: &MemoryLimits, b: &MemoryLimits) -> MemoryLimits {
     }
 }
 
+#[instrument]
 fn intersect_snapshot(a: &SnapshotLimits, b: &SnapshotLimits) -> SnapshotLimits {
     SnapshotLimits {
         enabled: intersect_option(
@@ -237,6 +249,7 @@ fn intersect_snapshot(a: &SnapshotLimits, b: &SnapshotLimits) -> SnapshotLimits 
     }
 }
 
+#[instrument]
 fn intersect_environment(a: &EnvironmentLimits, b: &EnvironmentLimits) -> EnvironmentLimits {
     EnvironmentLimits {
         temperature: intersect_option(
@@ -291,17 +304,20 @@ pub struct LimitsFile {
 
 impl LimitsFile {
     #[allow(clippy::should_implement_trait)]
+    #[instrument]
     pub fn from_str(s: &str) -> Result<Self, AvixError> {
         serde_yaml::from_str(s).map_err(|e| AvixError::ConfigParse(e.to_string()))
     }
 
     /// Parse `limits:` block as `AgentLimits`.
+    #[instrument]
     pub fn as_agent_limits(&self) -> Result<AgentLimits, AvixError> {
         serde_yaml::from_value(self.limits.clone())
             .map_err(|e| AvixError::ConfigParse(e.to_string()))
     }
 
     /// Serialise an `AgentLimits` into a `LimitsFile` YAML string.
+    #[instrument]
     pub fn from_agent_limits(
         layer: LimitsLayer,
         owner: Option<String>,
@@ -328,6 +344,7 @@ impl LimitsFile {
 // ── System-level limits (compiled in) ────────────────────────────────────────
 
 /// Returns the compiled-in system-level `AgentLimits`.
+#[instrument]
 pub fn system_agent_limits() -> AgentLimits {
     AgentLimits {
         entrypoint: Some(EntrypointLimits {

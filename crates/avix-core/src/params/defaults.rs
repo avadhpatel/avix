@@ -1,5 +1,6 @@
 use crate::error::AvixError;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 // ── Sub-structs ───────────────────────────────────────────────────────────────
 
@@ -80,6 +81,7 @@ pub struct AgentDefaults {
 impl AgentDefaults {
     /// Apply `other` on top of `self`: fields set in `other` override `self`.
     /// Fields absent in `other` (None) keep the value from `self`.
+    #[instrument]
     pub fn merge_over(&self, other: &AgentDefaults) -> AgentDefaults {
         AgentDefaults {
             entrypoint: merge_option(
@@ -107,7 +109,8 @@ impl AgentDefaults {
     }
 }
 
-fn merge_option<T: Clone>(
+#[instrument(skip(merge_fn))]
+fn merge_option<T: Clone + std::fmt::Debug>(
     base: Option<&T>,
     over: Option<&T>,
     merge_fn: impl Fn(&T, &T) -> T,
@@ -120,6 +123,7 @@ fn merge_option<T: Clone>(
     }
 }
 
+#[instrument]
 fn merge_entrypoint(base: &EntrypointDefaults, over: &EntrypointDefaults) -> EntrypointDefaults {
     EntrypointDefaults {
         model_preference: over
@@ -131,6 +135,7 @@ fn merge_entrypoint(base: &EntrypointDefaults, over: &EntrypointDefaults) -> Ent
     }
 }
 
+#[instrument]
 fn merge_memory(base: &MemoryDefaults, over: &MemoryDefaults) -> MemoryDefaults {
     MemoryDefaults {
         episodic_enabled: over.episodic_enabled.or(base.episodic_enabled),
@@ -143,6 +148,7 @@ fn merge_memory(base: &MemoryDefaults, over: &MemoryDefaults) -> MemoryDefaults 
     }
 }
 
+#[instrument]
 fn merge_snapshot(base: &SnapshotDefaults, over: &SnapshotDefaults) -> SnapshotDefaults {
     SnapshotDefaults {
         enabled: over.enabled.or(base.enabled),
@@ -153,6 +159,7 @@ fn merge_snapshot(base: &SnapshotDefaults, over: &SnapshotDefaults) -> SnapshotD
     }
 }
 
+#[instrument]
 fn merge_environment(
     base: &EnvironmentDefaults,
     over: &EnvironmentDefaults,
@@ -163,6 +170,7 @@ fn merge_environment(
     }
 }
 
+#[instrument]
 fn merge_permissions_hint(
     base: &PermissionsHintDefaults,
     over: &PermissionsHintDefaults,
@@ -209,17 +217,20 @@ pub struct DefaultsFile {
 
 impl DefaultsFile {
     #[allow(clippy::should_implement_trait)]
+    #[instrument]
     pub fn from_str(s: &str) -> Result<Self, AvixError> {
         serde_yaml::from_str(s).map_err(|e| AvixError::ConfigParse(e.to_string()))
     }
 
     /// Parse `defaults:` block as `AgentDefaults`.
+    #[instrument]
     pub fn as_agent_defaults(&self) -> Result<AgentDefaults, AvixError> {
         serde_yaml::from_value(self.defaults.clone())
             .map_err(|e| AvixError::ConfigParse(e.to_string()))
     }
 
     /// Serialise an `AgentDefaults` into a `DefaultsFile` YAML string.
+    #[instrument]
     pub fn from_agent_defaults(
         layer: DefaultsLayer,
         owner: Option<String>,
@@ -244,6 +255,7 @@ impl DefaultsFile {
 // ── System-level defaults (compiled in) ──────────────────────────────────────
 
 /// Returns the compiled-in system-level `AgentDefaults`.
+#[instrument]
 pub fn system_agent_defaults() -> AgentDefaults {
     AgentDefaults {
         entrypoint: Some(EntrypointDefaults {
