@@ -8,6 +8,9 @@ use super::super::service::{CallerContext, MemoryService};
 use super::super::sharing::load_grant;
 use super::super::store;
 
+use tracing::instrument;
+
+#[instrument]
 pub async fn handle(
     svc: &MemoryService,
     params: Value,
@@ -111,6 +114,7 @@ pub async fn handle(
     }))
 }
 
+#[instrument]
 fn record_to_json(r: &MemoryRecord, scope: &str) -> Value {
     let summary_len = r.spec.content.len().min(200);
     json!({

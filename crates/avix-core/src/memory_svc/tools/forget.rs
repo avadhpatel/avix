@@ -5,6 +5,9 @@ use crate::error::AvixError;
 use super::super::service::{find_record_by_id, CallerContext, MemoryService};
 use super::super::store;
 
+use tracing::instrument;
+
+#[instrument]
 pub async fn handle(
     svc: &MemoryService,
     params: Value,

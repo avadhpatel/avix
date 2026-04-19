@@ -10,6 +10,8 @@ use super::schema::{
 use super::service::MemoryService;
 use super::vfs_layout::memory_agent_grants_path;
 
+use tracing::instrument;
+
 // ── HIL approval handler ──────────────────────────────────────────────────────
 
 /// Called by the kernel's approval handler after `ApprovalToken` is atomically consumed.
@@ -18,6 +20,7 @@ use super::vfs_layout::memory_agent_grants_path;
 /// - **Session scope** → `/proc/services/memory/agents/<target>/grants/<id>.yaml`
 /// - **Permanent scope** → `/users/<owner>/memory/<grantor-agent>/grants/<id>.yaml`
 #[allow(clippy::too_many_arguments)]
+#[instrument]
 pub async fn on_memory_share_approved(
     svc: &MemoryService,
     hil_id: &str,
@@ -74,6 +77,7 @@ pub async fn on_memory_share_approved(
 ///
 /// Scans `/proc/services/memory/agents/<agent>/grants/` and removes entries
 /// where `spec.scope == session` and `spec.sessionId == session_id`.
+#[instrument]
 pub async fn cleanup_session_grants(
     svc: &MemoryService,
     agent_name: &str,
@@ -114,6 +118,7 @@ pub async fn cleanup_session_grants(
 // ── Grant loader helper ───────────────────────────────────────────────────────
 
 /// Read and parse a `MemoryGrant` from a VFS path.
+#[instrument]
 pub async fn load_grant(svc: &MemoryService, path: &str) -> Result<MemoryGrant, AvixError> {
     let vfs_path = VfsPath::parse(path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
     let bytes = svc

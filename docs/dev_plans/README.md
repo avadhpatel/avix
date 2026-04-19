@@ -168,4 +168,9 @@ growth. The LLM summary is the cross-session artifact; the full transcript is ep
 
 - Convert 'auth.conf' file to 'auth.yaml' - everything else is yaml format
 - Separate client.json and server.json - and move both to yaml
+- **`cap/request-tool` fixes** (`cap-request-tool-fixes.md`): (1) HIL flow is a stub —
+  `KernelResourceHandler` always returns `granted: false` without triggering SIGPAUSE /
+  `HilManager::open` / ATP event / SIGRESUME; (2) silent denial when `resource_handler`
+  is None; (3) agent re-requests denied tools within the same turn — record denials in
+  `denied_tools`, surface in prompt Block 4, clear on new user message.
 

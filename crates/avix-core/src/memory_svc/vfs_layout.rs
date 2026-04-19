@@ -4,16 +4,21 @@ use serde::{Deserialize, Serialize};
 use crate::error::AvixError;
 use crate::memfs::{VfsPath, VfsRouter};
 
+use tracing::instrument;
+
 // ── VFS path helpers ──────────────────────────────────────────────────────────
 
+#[instrument]
 pub fn memory_svc_status_path() -> &'static str {
     "/proc/services/memory/status.yaml"
 }
 
+#[instrument]
 pub fn memory_agent_stats_path(agent_name: &str) -> String {
     format!("/proc/services/memory/agents/{}/stats.yaml", agent_name)
 }
 
+#[instrument]
 pub fn memory_agent_grants_path(agent_name: &str, grant_id: &str) -> String {
     format!(
         "/proc/services/memory/agents/{}/grants/{}.yaml",
@@ -52,6 +57,7 @@ pub struct MemoryAgentStats {
 /// Initialise all memory directories for an agent within a user's memory tree.
 ///
 /// Called from `RuntimeExecutor` after VFS setup, before `SIGSTART`. Idempotent.
+#[instrument]
 pub async fn init_user_memory_tree(
     vfs: &VfsRouter,
     owner: &str,
@@ -79,6 +85,7 @@ pub async fn init_user_memory_tree(
 /// Initialise the shared memory tree for a crew.
 ///
 /// Called from the crew creation path. Idempotent.
+#[instrument]
 pub async fn init_crew_memory_tree(vfs: &VfsRouter, crew_name: &str) -> Result<(), AvixError> {
     let base = format!("/crews/{}/memory/shared", crew_name);
 

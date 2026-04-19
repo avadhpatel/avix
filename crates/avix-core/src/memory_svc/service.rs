@@ -11,6 +11,9 @@ use super::store;
 use super::tools;
 use super::vfs_layout::{memory_svc_status_path, MemorySvcStatus};
 
+use tracing::instrument;
+
+#[derive(Debug)]
 pub struct MemoryService {
     pub(super) vfs: Arc<VfsRouter>,
     pub(super) kernel_config: Arc<MemoryConfig>,

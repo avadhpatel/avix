@@ -4,12 +4,15 @@ use crate::error::AvixError;
 
 use super::super::service::{CallerContext, MemoryService};
 
+use tracing::instrument;
+
 /// Handle `memory/share-request`.
 ///
 /// Validates that the caller holds `memory:share` (i.e. `memory/share-request` in
 /// `granted_tools`) and that sharing is within the same owner namespace (v1 constraint).
 /// Full HIL flow (SIGPAUSE / ApprovalToken / SIGRESUME) is wired in memory-gap-G when
 /// the kernel HIL subsystem is available.
+#[instrument]
 pub async fn handle(
     _svc: &MemoryService,
     params: Value,

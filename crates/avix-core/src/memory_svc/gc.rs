@@ -6,6 +6,8 @@ use crate::memfs::{VfsPath, VfsRouter};
 use super::schema::MemoryGrant;
 use super::store;
 
+use tracing::instrument;
+
 // ── GcReport ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default)]
@@ -22,6 +24,7 @@ pub struct GcReport {
 ///
 /// Note: the caller (kernel cron job) is responsible for supplying the list of active
 /// `(owner, agent_name)` pairs from the user registry or process table.
+#[instrument]
 pub async fn gc_episodic_records(
     vfs: &VfsRouter,
     agents: &[(&str, &str)],
@@ -77,6 +80,7 @@ pub async fn gc_episodic_records(
 ///
 /// `agent_names` — the caller (kernel cron job) supplies known active agent names.
 /// Returns the number of grants pruned.
+#[instrument]
 pub async fn prune_expired_grants(vfs: &VfsRouter, agent_names: &[&str]) -> Result<u32, AvixError> {
     let grant_root = "/proc/services/memory/agents";
     let mut pruned = 0u32;

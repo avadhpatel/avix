@@ -3,6 +3,9 @@ use crate::memfs::{VfsPath, VfsRouter};
 
 use super::schema::{MemoryRecord, UserPreferenceModel};
 
+use tracing::instrument;
+
+#[instrument]
 pub async fn write_record(
     vfs: &VfsRouter,
     path: &str,
@@ -13,6 +16,7 @@ pub async fn write_record(
     vfs.write(&vfs_path, yaml.into_bytes()).await
 }
 
+#[instrument]
 pub async fn read_record(vfs: &VfsRouter, path: &str) -> Result<MemoryRecord, AvixError> {
     let vfs_path = VfsPath::parse(path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
     let bytes = vfs
@@ -23,12 +27,14 @@ pub async fn read_record(vfs: &VfsRouter, path: &str) -> Result<MemoryRecord, Av
     MemoryRecord::from_yaml(&yaml)
 }
 
+#[instrument]
 pub async fn delete_record(vfs: &VfsRouter, path: &str) -> Result<(), AvixError> {
     let vfs_path = VfsPath::parse(path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
     vfs.delete(&vfs_path).await
 }
 
 /// List and parse all `.yaml` records (non-.keep) in a VFS directory.
+#[instrument]
 pub async fn list_records(vfs: &VfsRouter, dir: &str) -> Result<Vec<MemoryRecord>, AvixError> {
     let vfs_path = VfsPath::parse(dir).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
     let entries = vfs.list(&vfs_path).await.unwrap_or_default();
@@ -46,6 +52,7 @@ pub async fn list_records(vfs: &VfsRouter, dir: &str) -> Result<Vec<MemoryRecord
 
 // ── Preference model helpers ───────────────────────────────────────────────────
 
+#[instrument]
 pub async fn read_preference_model(
     vfs: &VfsRouter,
     path: &str,
@@ -59,6 +66,7 @@ pub async fn read_preference_model(
     UserPreferenceModel::from_yaml(&yaml)
 }
 
+#[instrument]
 pub async fn write_preference_model(
     vfs: &VfsRouter,
     path: &str,

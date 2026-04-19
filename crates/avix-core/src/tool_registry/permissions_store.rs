@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use redb::{Database, ReadableTable, TableDefinition};
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, instrument};
 
 use crate::error::AvixError;
 
@@ -11,12 +11,14 @@ use super::permissions::ToolPermissions;
 
 const TOOL_PERMS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("tool_permissions");
 
+#[derive(Debug)]
 pub struct ToolPermissionsStore {
     db: Arc<Mutex<Database>>,
     path: PathBuf,
 }
 
 impl ToolPermissionsStore {
+    #[instrument]
     pub async fn open(root: &Path) -> Result<Self, AvixError> {
         let db_path = root.join("kernel/permissions.db");
         if let Some(parent) = db_path.parent() {
@@ -46,6 +48,7 @@ impl ToolPermissionsStore {
         })
     }
 
+    #[instrument]
     pub async fn get(&self, tool_name: &str) -> Result<Option<ToolPermissions>, AvixError> {
         let db = self.db.lock().await;
         let read_txn = db
@@ -68,6 +71,7 @@ impl ToolPermissionsStore {
         }
     }
 
+    #[instrument]
     pub async fn set(&self, tool_name: &str, perms: &ToolPermissions) -> Result<(), AvixError> {
         let db = self.db.lock().await;
         let write_txn = db
@@ -94,6 +98,7 @@ impl ToolPermissionsStore {
         Ok(())
     }
 
+    #[instrument]
     pub async fn list_all(&self) -> Result<Vec<(String, ToolPermissions)>, AvixError> {
         let db = self.db.lock().await;
         let read_txn = db
@@ -116,6 +121,7 @@ impl ToolPermissionsStore {
         Ok(results)
     }
 
+    #[instrument]
     pub async fn delete(&self, tool_name: &str) -> Result<(), AvixError> {
         let db = self.db.lock().await;
         let write_txn = db
@@ -138,6 +144,7 @@ impl ToolPermissionsStore {
         Ok(())
     }
 
+    #[instrument]
     pub fn path(&self) -> &Path {
         &self.path
     }

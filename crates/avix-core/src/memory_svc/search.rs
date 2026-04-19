@@ -1,5 +1,7 @@
 use super::schema::MemoryRecord;
 
+use tracing::instrument;
+
 /// BM25 parameters.
 const K1: f64 = 1.2;
 const B: f64 = 0.75;
@@ -12,6 +14,7 @@ const STOP_WORDS: &[&str] = &[
     "you", "your", "our", "their",
 ];
 
+#[instrument]
 fn tokenize(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_alphanumeric())
         .map(|t| t.to_lowercase())

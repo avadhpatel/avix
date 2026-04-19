@@ -6,6 +6,9 @@ use crate::memory_svc::UserPreferenceModel;
 use super::super::service::{CallerContext, MemoryService};
 use super::super::store;
 
+use tracing::instrument;
+
+#[instrument]
 pub async fn handle(
     svc: &MemoryService,
     _params: Value,

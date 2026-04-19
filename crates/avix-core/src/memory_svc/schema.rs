@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AvixError;
 
+use tracing::instrument;
+
 // ── Enums ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,6 +164,7 @@ impl MemoryRecord {
 }
 
 /// Generate a memory record ID: `"mem-<8 char hex>"`.
+#[instrument]
 pub fn new_memory_id() -> String {
     let id = uuid::Uuid::new_v4();
     format!("mem-{}", &id.simple().to_string()[..8])

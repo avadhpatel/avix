@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use tracing::instrument;
+
 // ── Vector index storage ───────────────────────────────────────────────────────
 
 /// Stored at `/users/<owner>/memory/<agent>/{episodic,semantic}/index/vectors.idx`.
@@ -23,6 +25,7 @@ pub struct VectorEntry {
 
 /// Returns true if the vector index was built with a different model.
 /// A stale index should be rebuilt before use; retrieval falls back to BM25-only.
+#[instrument]
 pub fn is_vector_index_stale(idx: &VectorIndex, current_model: &str) -> bool {
     idx.model.is_empty() || idx.model != current_model
 }
@@ -45,6 +48,7 @@ pub struct FulltextIndex {
 
 /// Compute cosine similarity between two equal-length vectors.
 /// Returns 0.0 if either vector has zero magnitude.
+#[instrument]
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
@@ -61,6 +65,7 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 /// Find the top-k records in the vector index by cosine similarity to the query vector.
 ///
 /// Returns `(id, similarity)` pairs sorted by similarity descending.
+#[instrument]
 pub fn cosine_search(idx: &VectorIndex, query_vector: &[f32], k: usize) -> Vec<(String, f32)> {
     let mut scored: Vec<(String, f32)> = idx
         .entries
@@ -80,6 +85,7 @@ pub fn cosine_search(idx: &VectorIndex, query_vector: &[f32], k: usize) -> Vec<(
 /// `k` is the RRF smoothing parameter — typically 60.
 ///
 /// RRF score = Σ 1 / (k + rank_i) for each list where the item appears.
+#[instrument]
 pub fn rrf_merge(bm25: Vec<(String, f32)>, vector: Vec<(String, f32)>, k: u32) -> Vec<String> {
     let mut rrf_scores: HashMap<String, f64> = HashMap::new();
     for (rank, (id, _)) in bm25.iter().enumerate() {

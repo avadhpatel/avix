@@ -7,23 +7,28 @@ use crate::types::tool::{ToolName, ToolState, ToolVisibility};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock, Semaphore};
+use tracing::instrument;
 
 const EVENT_CAPACITY: usize = 64;
 
+#[derive(Debug)]
 pub struct ToolCallGuard {
     _permit: tokio::sync::OwnedSemaphorePermit,
 }
 
+#[derive(Debug)]
 struct ToolRecord {
     entry: ToolEntry,
     semaphore: Arc<Semaphore>,
 }
 
+#[derive(Debug)]
 pub struct ToolRegistry {
     inner: Arc<RwLock<HashMap<String, ToolRecord>>>,
     events: broadcast::Sender<ToolChangedEvent>,
 }
 
+#[derive(Debug)]
 pub struct EventReceiver(broadcast::Receiver<ToolChangedEvent>);
 
 impl EventReceiver {
