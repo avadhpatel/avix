@@ -2,6 +2,7 @@ use super::PackageType;
 use crate::agent_manifest::AgentManifest;
 use crate::service::ServiceManifest;
 use std::path::Path;
+use tracing::instrument;
 
 #[derive(Debug)]
 pub struct ValidationError {
@@ -9,9 +10,11 @@ pub struct ValidationError {
     pub message: String,
 }
 
+#[derive(Debug)]
 pub struct PackageValidator;
 
 impl PackageValidator {
+    #[instrument]
     pub fn validate(dir: &Path) -> Result<PackageType, Vec<ValidationError>> {
         let pkg_type = PackageType::detect(dir).map_err(|e| {
             vec![ValidationError {
@@ -31,6 +34,7 @@ impl PackageValidator {
         }
     }
 
+    #[instrument]
     fn validate_agent(dir: &Path, errors: &mut Vec<ValidationError>) {
         let manifest_path = dir.join("manifest.yaml");
         match std::fs::read_to_string(&manifest_path) {
@@ -69,6 +73,7 @@ impl PackageValidator {
         }
     }
 
+    #[instrument]
     fn validate_service(dir: &Path, errors: &mut Vec<ValidationError>) {
         let manifest_path = dir.join("manifest.yaml");
         match ServiceManifest::load(&manifest_path) {

@@ -3,7 +3,9 @@ use crate::error::AvixError;
 use crate::packaging::validator::PackageValidator;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use tracing::instrument;
 
+#[derive(Debug)]
 pub struct BuildRequest {
     pub source_dir: PathBuf,
     pub output_dir: PathBuf,
@@ -11,6 +13,7 @@ pub struct BuildRequest {
     pub skip_validation: bool,
 }
 
+#[derive(Debug)]
 pub struct BuildResult {
     pub archive_path: PathBuf,
     pub checksum_entry: String,
@@ -19,9 +22,11 @@ pub struct BuildResult {
     pub version: String,
 }
 
+#[derive(Debug)]
 pub struct PackageBuilder;
 
 impl PackageBuilder {
+    #[instrument]
     pub fn build(req: BuildRequest) -> Result<BuildResult, AvixError> {
         let pkg_type = if req.skip_validation {
             PackageType::detect(&req.source_dir)?
@@ -89,6 +94,7 @@ impl PackageBuilder {
         })
     }
 
+    #[instrument]
     fn create_xz_archive(
         source_dir: &Path,
         dest: &Path,
@@ -111,6 +117,7 @@ impl PackageBuilder {
         Ok(())
     }
 
+    #[instrument(skip(archive))]
     fn add_dir_to_archive(
         archive: &mut tar::Builder<impl std::io::Write>,
         base: &Path,
@@ -146,6 +153,7 @@ impl PackageBuilder {
         Ok(())
     }
 
+    #[instrument]
     fn read_name(dir: &Path, _pkg_type: &PackageType) -> Result<String, AvixError> {
         let content = std::fs::read_to_string(dir.join("manifest.yaml"))
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;

@@ -1,7 +1,9 @@
 use super::PackageType;
 use crate::error::AvixError;
 use std::path::PathBuf;
+use tracing::instrument;
 
+#[derive(Debug)]
 pub struct ScaffoldRequest {
     pub name: String,
     pub pkg_type: PackageType,
@@ -9,9 +11,11 @@ pub struct ScaffoldRequest {
     pub output_dir: PathBuf,
 }
 
+#[derive(Debug)]
 pub struct PackageScaffold;
 
 impl PackageScaffold {
+    #[instrument]
     pub fn create(req: ScaffoldRequest) -> Result<PathBuf, AvixError> {
         let dir = req.output_dir.join(&req.name);
         if dir.exists() {
@@ -27,6 +31,7 @@ impl PackageScaffold {
         Ok(dir)
     }
 
+    #[instrument]
     fn scaffold_agent(dir: &std::path::Path, name: &str, version: &str) -> Result<(), AvixError> {
         std::fs::create_dir_all(dir.join("examples"))
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -50,6 +55,7 @@ impl PackageScaffold {
         Ok(())
     }
 
+    #[instrument]
     fn scaffold_service(dir: &std::path::Path, name: &str, version: &str) -> Result<(), AvixError> {
         std::fs::create_dir_all(dir.join("src"))
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;

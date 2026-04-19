@@ -1,5 +1,6 @@
 use crate::error::AvixError;
 use crate::packaging::trust::{TrustStore, TrustedKey};
+use tracing::instrument;
 
 pub const AVIX_PUBLIC_KEY: &str = include_str!("../../official-pubkey.asc");
 
@@ -9,6 +10,7 @@ pub enum VerifiedBy {
     Trusted(TrustedKey),
 }
 
+#[instrument]
 pub fn verify_signature(
     data: &[u8],
     sig_asc: &str,
@@ -51,6 +53,7 @@ pub fn verify_signature(
     ))
 }
 
+#[instrument]
 fn sig_issuer_fingerprint(sig: &pgp::composed::DetachedSignature) -> Option<String> {
     sig.signature
         .issuer_fingerprint()

@@ -1,6 +1,7 @@
 use crate::error::AvixError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use tracing::instrument;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrustedKey {
@@ -12,6 +13,7 @@ pub struct TrustedKey {
 }
 
 impl TrustedKey {
+    #[instrument]
     pub fn allows_source(&self, source: &str) -> bool {
         if self.allowed_sources.is_empty() {
             return true;
@@ -22,17 +24,20 @@ impl TrustedKey {
     }
 }
 
+#[derive(Debug)]
 pub struct TrustStore {
     dir: PathBuf,
 }
 
 impl TrustStore {
+    #[instrument]
     pub fn new(root: &Path) -> Self {
         Self {
             dir: root.join("etc/avix/trusted-keys"),
         }
     }
 
+    #[instrument]
     pub fn add(
         &self,
         key_asc: &str,
@@ -67,6 +72,7 @@ impl TrustStore {
         Ok(trusted)
     }
 
+    #[instrument]
     pub fn list(&self) -> Result<Vec<TrustedKey>, AvixError> {
         if !self.dir.exists() {
             return Ok(vec![]);
@@ -89,6 +95,7 @@ impl TrustStore {
         Ok(keys)
     }
 
+    #[instrument]
     pub fn remove(&self, fingerprint: &str) -> Result<(), AvixError> {
         let key_path = self.dir.join(format!("{fingerprint}.asc"));
         let meta_path = self.dir.join(format!("{fingerprint}.meta.yaml"));
@@ -102,6 +109,7 @@ impl TrustStore {
         Ok(())
     }
 
+    #[instrument]
     pub fn get(&self, fingerprint: &str) -> Result<Option<(String, TrustedKey)>, AvixError> {
         let key_path = self.dir.join(format!("{fingerprint}.asc"));
         let meta_path = self.dir.join(format!("{fingerprint}.meta.yaml"));
@@ -119,6 +127,7 @@ impl TrustStore {
     }
 }
 
+#[instrument]
 fn extract_fingerprint(key_asc: &str) -> Result<String, AvixError> {
     use pgp::composed::Deserializable;
     use pgp::types::KeyDetails;
@@ -127,6 +136,7 @@ fn extract_fingerprint(key_asc: &str) -> Result<String, AvixError> {
     Ok(hex::encode(pubkey.fingerprint()).to_uppercase())
 }
 
+#[instrument]
 fn glob_match(pattern: &str, value: &str) -> bool {
     if let Some(prefix) = pattern.strip_suffix("/*") {
         return value.starts_with(&format!("{prefix}/")) || value == prefix;

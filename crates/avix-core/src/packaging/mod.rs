@@ -12,6 +12,7 @@ pub use validator::{PackageValidator, ValidationError};
 
 use crate::error::AvixError;
 use std::path::Path;
+use tracing::instrument;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PackageType {
@@ -20,6 +21,7 @@ pub enum PackageType {
 }
 
 impl PackageType {
+    #[instrument]
     pub fn detect(dir: &Path) -> Result<Self, AvixError> {
         let path = dir.join("manifest.yaml");
         let content = std::fs::read_to_string(&path)
