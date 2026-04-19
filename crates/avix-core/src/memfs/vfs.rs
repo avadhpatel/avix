@@ -4,6 +4,7 @@ use tokio::sync::RwLock;
 
 use super::path::VfsPath;
 use crate::error::AvixError;
+use tracing::instrument;
 
 #[derive(Debug, Default)]
 pub struct MemFs {
@@ -11,10 +12,12 @@ pub struct MemFs {
 }
 
 impl MemFs {
+    #[instrument]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[instrument]
     pub async fn write(&self, path: &VfsPath, content: Vec<u8>) -> Result<(), AvixError> {
         self.files
             .write()
@@ -23,6 +26,7 @@ impl MemFs {
         Ok(())
     }
 
+    #[instrument]
     pub async fn read(&self, path: &VfsPath) -> Result<Vec<u8>, AvixError> {
         self.files
             .read()
@@ -32,6 +36,7 @@ impl MemFs {
             .ok_or_else(|| AvixError::ConfigParse(format!("ENOENT: {}", path.as_str())))
     }
 
+    #[instrument]
     pub async fn delete(&self, path: &VfsPath) -> Result<(), AvixError> {
         self.files
             .write()
@@ -41,10 +46,12 @@ impl MemFs {
         Ok(())
     }
 
+    #[instrument]
     pub async fn exists(&self, path: &VfsPath) -> bool {
         self.files.read().await.contains_key(path.as_str())
     }
 
+    #[instrument]
     pub async fn list(&self, dir: &VfsPath) -> Result<Vec<String>, AvixError> {
         let prefix = format!("{}/", dir.as_str().trim_end_matches('/'));
         let guard = self.files.read().await;

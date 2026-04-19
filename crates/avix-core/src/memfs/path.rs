@@ -1,9 +1,11 @@
 use crate::error::AvixError;
+use tracing::instrument;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VfsPath(String);
 
 impl VfsPath {
+    #[instrument]
     pub fn parse(s: &str) -> Result<Self, AvixError> {
         if !s.starts_with('/') {
             return Err(AvixError::ConfigParse(format!(
@@ -18,10 +20,12 @@ impl VfsPath {
         Ok(Self(s.to_string()))
     }
 
+    #[instrument]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    #[instrument]
     pub fn parent(&self) -> Option<VfsPath> {
         let (s, _) = self.0.rsplit_once('/')?;
         if s.is_empty() {
@@ -31,6 +35,7 @@ impl VfsPath {
         }
     }
 
+    #[instrument]
     pub fn file_name(&self) -> Option<&str> {
         self.0.rsplit_once('/').map(|(_, name)| name)
     }
@@ -48,6 +53,7 @@ impl VfsPath {
     /// of calling `fs/write` directly:
     ///   `/users/<user>/memory/`  — user agent memory (read/write via memory.svc)
     ///   `/crews/<crew>/memory/`  — crew shared memory (read/write via memory.svc)
+    #[instrument]
     pub fn is_agent_writable(&self) -> bool {
         let p = self.as_str();
         // Kernel-owned trees

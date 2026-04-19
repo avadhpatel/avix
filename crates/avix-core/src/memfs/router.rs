@@ -6,6 +6,7 @@ use super::local_provider::LocalProvider;
 use super::path::VfsPath;
 use super::vfs::MemFs;
 use crate::error::AvixError;
+use tracing::instrument;
 
 pub struct VfsRouter {
     /// Sorted descending by prefix length so the longest match is found first.
@@ -50,6 +51,7 @@ impl Clone for VfsRouter {
 }
 
 impl VfsRouter {
+    #[instrument]
     pub fn new() -> Self {
         Self {
             mounts: RwLock::new(Vec::new()),
@@ -62,12 +64,14 @@ impl VfsRouter {
     }
 
     /// Set the tool registry for /tools/ VFS population
+    #[instrument]
     pub async fn set_tool_registry(&self, registry: Arc<crate::tool_registry::ToolRegistry>) {
         let mut tr = self.tool_registry.write().await;
         *tr = Some(registry);
     }
 
     /// Set the permissions store for access control
+    #[instrument]
     pub async fn set_permissions_store(
         &self,
         store: Arc<crate::tool_registry::ToolPermissionsStore>,
@@ -77,18 +81,21 @@ impl VfsRouter {
     }
 
     /// Set the caller context for the current request (for access control)
+    #[instrument]
     pub async fn set_caller(&self, caller: Option<VfsCallerContext>) {
         let mut c = self.caller.write().await;
         *c = caller;
     }
 
     /// Get current caller context
+    #[instrument]
     pub async fn caller(&self) -> Option<VfsCallerContext> {
         let c = self.caller.read().await;
         c.clone()
     }
 
     /// Check if caller has permission to access a path
+    #[instrument]
     pub async fn check_access(&self, path: &VfsPath, required: &str) -> Result<(), AvixError> {
         let caller = self.caller.read().await;
         let caller = match caller.as_ref() {
@@ -119,6 +126,7 @@ impl VfsRouter {
     ///
     /// The prefix must start with `/` and must not end with `/`.
     /// Adding a mount with a prefix that already exists replaces it.
+    #[instrument]
     pub async fn mount(&self, prefix: String, provider: LocalProvider) {
         let prefix = prefix.trim_end_matches('/').to_string();
         let mut mounts = self.mounts.write().await;
@@ -130,6 +138,7 @@ impl VfsRouter {
     }
 
     /// Add an in-memory filesystem for a prefix (for /tools, etc.)
+    #[instrument]
     pub async fn mount_memfs(&self, prefix: String, fs: Arc<MemFs>) {
         let prefix = prefix.trim_end_matches('/').to_string();
         let mut mem_mounts = self.mem_mounts.write().await;
@@ -142,6 +151,7 @@ impl VfsRouter {
 
     /// Find the LocalProvider whose prefix is the longest match for `path`.
     /// Returns `(provider_ref, relative_path_within_provider)` or `None`.
+    #[instrument]
     async fn route<'a>(
         &'a self,
         path: &str,
@@ -158,6 +168,7 @@ impl VfsRouter {
 
     // ── Public VFS API (mirrors MemFs exactly) ────────────────────────────────
 
+    #[instrument]
     pub async fn write(&self, path: &VfsPath, content: Vec<u8>) -> Result<(), AvixError> {
         // Check write permission if caller context is set
         if let Some(caller) = self.caller.read().await.as_ref() {
@@ -187,6 +198,7 @@ impl VfsRouter {
         self.default.write(path, content).await
     }
 
+    #[instrument]
     pub async fn read(&self, path: &VfsPath) -> Result<Vec<u8>, AvixError> {
         // Check read permission if caller context is set
         if let Some(caller) = self.caller.read().await.as_ref() {
@@ -249,6 +261,7 @@ impl VfsRouter {
         self.default.read(path).await
     }
 
+    #[instrument]
     async fn populate_tools_memfs(
         fs: &Arc<MemFs>,
         registry: &Arc<crate::tool_registry::ToolRegistry>,
@@ -300,6 +313,7 @@ impl VfsRouter {
         Ok(())
     }
 
+    #[instrument]
     fn generate_tool_yaml(
         entry: &crate::tool_registry::entry::ToolEntry,
         caller: Option<&VfsCallerContext>,
@@ -388,6 +402,7 @@ impl VfsRouter {
         yaml
     }
 
+    #[instrument]
     pub async fn delete(&self, path: &VfsPath) -> Result<(), AvixError> {
         // Check write permission for delete
         if let Some(caller) = self.caller.read().await.as_ref() {
@@ -417,6 +432,7 @@ impl VfsRouter {
         self.default.delete(path).await
     }
 
+    #[instrument]
     pub async fn exists(&self, path: &VfsPath) -> bool {
         let mounts = self.mounts.read().await;
         if let Some((provider, rel)) = self.route(path.as_str(), &mounts).await {
@@ -438,6 +454,7 @@ impl VfsRouter {
         self.default.exists(path).await
     }
 
+    #[instrument]
     pub async fn list(&self, dir: &VfsPath) -> Result<Vec<String>, AvixError> {
         let mounts = self.mounts.read().await;
         if let Some((provider, rel)) = self.route(dir.as_str(), &mounts).await {
@@ -460,6 +477,7 @@ impl VfsRouter {
     /// The MemFS `list()` operation works by prefix scan over keys. Writing `.keep`
     /// guarantees the prefix produces at least one result, making the directory
     /// listable and discoverable. Idempotent — safe to call multiple times.
+    #[instrument]
     pub async fn ensure_dir(&self, path: &VfsPath) -> Result<(), AvixError> {
         let keep_str = format!("{}/.keep", path.as_str().trim_end_matches('/'));
         let keep_path =

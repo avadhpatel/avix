@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::config::users::UsersConfig;
 use crate::types::token::CapabilityToken;
+use tracing::instrument;
 
 #[derive(Debug, Clone)]
 pub struct VfsCallerContext {
@@ -12,6 +13,7 @@ pub struct VfsCallerContext {
 }
 
 impl VfsCallerContext {
+    #[instrument]
     pub async fn from_token(
         root: &Path,
         token: &CapabilityToken,
@@ -44,6 +46,7 @@ impl VfsCallerContext {
         }))
     }
 
+    #[instrument]
     pub fn from_user_info(username: String, crews: Vec<String>, is_admin: bool) -> Self {
         Self {
             username,
@@ -53,6 +56,7 @@ impl VfsCallerContext {
         }
     }
 
+    #[instrument]
     pub fn anonymous() -> Self {
         Self {
             username: "anonymous".to_string(),
@@ -63,6 +67,7 @@ impl VfsCallerContext {
     }
 }
 
+#[derive(Debug)]
 pub struct VfsPermissions {
     pub owner: String,
     pub crew: String,
@@ -70,6 +75,7 @@ pub struct VfsPermissions {
 }
 
 impl Default for VfsPermissions {
+    #[instrument]
     fn default() -> Self {
         Self {
             owner: "rwx".to_string(),
@@ -80,6 +86,7 @@ impl Default for VfsPermissions {
 }
 
 impl VfsPermissions {
+    #[instrument]
     pub fn for_path(path: &str) -> Self {
         match path {
             p if p.starts_with("/tools/") => Self::default(),
@@ -91,6 +98,7 @@ impl VfsPermissions {
         }
     }
 
+    #[instrument]
     pub fn effective_for(&self, caller: &VfsCallerContext) -> String {
         if caller.is_admin {
             return "rwx".to_string();
@@ -104,16 +112,19 @@ impl VfsPermissions {
         self.all.clone()
     }
 
+    #[instrument]
     pub fn can_read(&self, caller: &VfsCallerContext) -> bool {
         let perms = self.effective_for(caller);
         perms.contains('r')
     }
 
+    #[instrument]
     pub fn can_write(&self, caller: &VfsCallerContext) -> bool {
         let perms = self.effective_for(caller);
         perms.contains('w')
     }
 
+    #[instrument]
     pub fn can_execute(&self, caller: &VfsCallerContext) -> bool {
         let perms = self.effective_for(caller);
         perms.contains('x')

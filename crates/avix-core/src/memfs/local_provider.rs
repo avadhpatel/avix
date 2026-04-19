@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::error::AvixError;
+use tracing::instrument;
 
 /// Disk-backed VFS storage provider.
 ///
@@ -12,7 +13,8 @@ pub struct LocalProvider {
 }
 
 impl LocalProvider {
-    pub fn new(root: impl Into<PathBuf>) -> Result<Self, AvixError> {
+    #[instrument]
+    pub fn new(root: impl Into<PathBuf> + std::fmt::Debug) -> Result<Self, AvixError> {
         let root = root.into();
         if !root.exists() {
             std::fs::create_dir_all(&root)
@@ -28,6 +30,7 @@ impl LocalProvider {
     ///
     /// Rejects paths containing `..` segments and any path that would escape the root
     /// after resolution.
+    #[instrument]
     fn resolve_path(&self, rel: &str) -> Result<PathBuf, AvixError> {
         // Strip leading '/' (VFS paths are absolute; LocalProvider expects relative)
         let rel = rel.trim_start_matches('/');
@@ -44,6 +47,7 @@ impl LocalProvider {
         Ok(candidate)
     }
 
+    #[instrument]
     pub async fn read(&self, rel: &str) -> Result<Vec<u8>, AvixError> {
         let path = self.resolve_path(rel)?;
         tokio::fs::read(&path)
@@ -51,6 +55,7 @@ impl LocalProvider {
             .map_err(|e| AvixError::NotFound(format!("read {rel}: {e}")))
     }
 
+    #[instrument]
     pub async fn write(&self, rel: &str, content: Vec<u8>) -> Result<(), AvixError> {
         let path = self.resolve_path(rel)?;
         if let Some(parent) = path.parent() {
@@ -63,6 +68,7 @@ impl LocalProvider {
             .map_err(|e| AvixError::Io(format!("write {rel}: {e}")))
     }
 
+    #[instrument]
     pub async fn delete(&self, rel: &str) -> Result<(), AvixError> {
         let path = self.resolve_path(rel)?;
         tokio::fs::remove_file(&path)
@@ -70,6 +76,7 @@ impl LocalProvider {
             .map_err(|e| AvixError::NotFound(format!("delete {rel}: {e}")))
     }
 
+    #[instrument]
     pub async fn exists(&self, rel: &str) -> bool {
         match self.resolve_path(rel) {
             Ok(path) => path.exists(),
@@ -81,6 +88,7 @@ impl LocalProvider {
     ///
     /// Returns file and directory names (not full paths) under `rel_dir`.
     /// Returns `ENOENT`-style error if the directory does not exist.
+    #[instrument]
     pub async fn list(&self, rel_dir: &str) -> Result<Vec<String>, AvixError> {
         let path = self.resolve_path(rel_dir)?;
         let mut rd = tokio::fs::read_dir(&path)
