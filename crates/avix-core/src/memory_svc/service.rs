@@ -20,11 +20,13 @@ pub struct MemoryService {
 }
 
 impl MemoryService {
+    #[instrument(skip_all)]
     pub fn new(vfs: Arc<VfsRouter>, kernel_config: Arc<MemoryConfig>) -> Self {
         Self { vfs, kernel_config }
     }
 
     /// Called at service startup — writes `/proc/services/memory/status.yaml`.
+    #[instrument(skip(self))]
     pub async fn start(&self) -> Result<(), AvixError> {
         let status = MemorySvcStatus {
             healthy: true,
@@ -42,6 +44,7 @@ impl MemoryService {
     }
 
     /// Dispatch a tool call to the correct handler.
+    #[instrument(skip(self, params))]
     pub async fn dispatch(
         &self,
         tool_name: &str,
@@ -78,6 +81,7 @@ pub struct CallerContext {
 }
 
 impl CallerContext {
+    #[instrument(skip(self))]
     pub fn has_capability(&self, cap: &str) -> bool {
         match cap {
             "memory:read" => self.granted_tools.iter().any(|t| {
@@ -98,10 +102,12 @@ impl CallerContext {
 
 // Make vfs and kernel_config accessible to tool handlers via the service ref
 impl MemoryService {
+    #[instrument(skip(self))]
     pub(super) fn vfs(&self) -> &VfsRouter {
         &self.vfs
     }
 
+    #[instrument(skip(self))]
     pub(super) fn default_retrieve_limit(&self) -> usize {
         self.kernel_config.retrieval.default_limit as usize
     }
@@ -113,6 +119,7 @@ impl MemoryService {
 /// Returns the VFS path of the matching record, or None.
 ///
 /// TODO memory-gap-E: use index for O(1) lookup
+#[instrument(skip(vfs))]
 pub(super) async fn find_record_by_id(
     vfs: &VfsRouter,
     owner: &str,

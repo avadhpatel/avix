@@ -32,12 +32,14 @@ pub struct ToolRegistry {
 pub struct EventReceiver(broadcast::Receiver<ToolChangedEvent>);
 
 impl EventReceiver {
+    #[instrument(skip(self))]
     pub async fn recv(&mut self) -> Option<ToolChangedEvent> {
         self.0.recv().await.ok()
     }
 }
 
 impl ToolRegistry {
+    #[instrument]
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(EVENT_CAPACITY);
         Self {
@@ -46,6 +48,7 @@ impl ToolRegistry {
         }
     }
 
+    #[instrument]
     pub fn new_with_events() -> (Self, EventReceiver) {
         let (tx, rx) = broadcast::channel(EVENT_CAPACITY);
         let reg = Self {
@@ -55,6 +58,7 @@ impl ToolRegistry {
         (reg, EventReceiver(rx))
     }
 
+    #[instrument(skip(self, bus))]
     pub async fn start_atp_bridge(self: Arc<Self>, bus: Arc<AtpEventBus>) {
         let mut rx = self.events.subscribe();
         tokio::spawn(async move {
@@ -67,6 +71,7 @@ impl ToolRegistry {
         });
     }
 
+    #[instrument(skip(self, entries))]
     pub async fn add(&self, _owner: &str, entries: Vec<ToolEntry>) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
         let mut names = Vec::new();
@@ -88,6 +93,7 @@ impl ToolRegistry {
         Ok(())
     }
 
+    #[instrument(skip(self, sysreg))]
     pub async fn add_kernel_syscalls(&self, sysreg: &SyscallRegistry) -> Result<(), AvixError> {
         let mut entries = Vec::new();
         for syscall in sysreg.list() {
@@ -116,6 +122,7 @@ impl ToolRegistry {
         self.add("kernel", entries).await
     }
 
+    #[instrument(skip(self))]
     pub async fn lookup(&self, name: &str) -> Result<ToolEntry, AvixError> {
         self.inner
             .read()
@@ -125,6 +132,7 @@ impl ToolRegistry {
             .ok_or_else(|| AvixError::ConfigParse(format!("tool not found: {name}")))
     }
 
+    #[instrument(skip(self))]
     pub async fn lookup_for_user(&self, name: &str, user: &str) -> Result<ToolEntry, AvixError> {
         let entry = self.lookup(name).await?;
         match &entry.visibility {
@@ -136,6 +144,7 @@ impl ToolRegistry {
         }
     }
 
+    #[instrument(skip(self, names))]
     pub async fn remove(
         &self,
         _owner: &str,
@@ -186,6 +195,7 @@ impl ToolRegistry {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn acquire(&self, name: &str) -> Result<ToolCallGuard, AvixError> {
         let sem = {
             let guard = self.inner.read().await;
@@ -201,6 +211,7 @@ impl ToolRegistry {
         Ok(ToolCallGuard { _permit: permit })
     }
 
+    #[instrument(skip(self))]
     pub async fn set_state(&self, name: &str, state: ToolState) -> Result<(), AvixError> {
         let mut guard = self.inner.write().await;
         guard
@@ -211,11 +222,13 @@ impl ToolRegistry {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn tool_count(&self) -> usize {
         self.inner.read().await.len()
     }
 
     /// Return all tool entries with full details (for /tools/ VFS population)
+    #[instrument(skip(self))]
     pub async fn get_all_entries(&self) -> Vec<ToolEntry> {
         self.inner
             .read()
@@ -228,6 +241,7 @@ impl ToolRegistry {
     /// Return a snapshot of every registered tool with its name, namespace, description,
     /// and current state. The description is extracted from the JSON descriptor's
     /// `"description"` field when present.
+    #[instrument(skip(self))]
     pub async fn list_all(&self) -> Vec<ToolSummary> {
         self.inner
             .read()
