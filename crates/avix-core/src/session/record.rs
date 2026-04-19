@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use tracing::instrument;
+
 // ── SessionStatus ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -44,6 +46,7 @@ pub struct SessionRecord {
 }
 
 impl SessionRecord {
+    #[instrument]
     pub fn new(
         id: Uuid,
         username: String,
@@ -73,26 +76,31 @@ impl SessionRecord {
         }
     }
 
+    #[instrument]
     pub fn mark_idle(&mut self) {
         self.status = SessionStatus::Idle;
         self.last_updated = Utc::now();
     }
 
+    #[instrument]
     pub fn mark_running(&mut self) {
         self.status = SessionStatus::Running;
         self.last_updated = Utc::now();
     }
 
+    #[instrument]
     pub fn mark_completed(&mut self) {
         self.status = SessionStatus::Completed;
         self.last_updated = Utc::now();
     }
 
+    #[instrument]
     pub fn mark_failed(&mut self) {
         self.status = SessionStatus::Failed;
         self.last_updated = Utc::now();
     }
 
+    #[instrument]
     pub fn mark_paused(&mut self) {
         self.status = SessionStatus::Paused;
         self.last_updated = Utc::now();
@@ -100,6 +108,7 @@ impl SessionRecord {
 
     /// Register an additional PID as active in this session (e.g. a child agent).
     /// `owner_pid` is immutable after construction.
+    #[instrument]
     pub fn add_pid(&mut self, pid: u64) {
         if !self.pids.contains(&pid) {
             self.pids.push(pid);
@@ -108,11 +117,13 @@ impl SessionRecord {
     }
 
     /// Remove a PID from the active set (called on agent exit).
+    #[instrument]
     pub fn remove_pid(&mut self, pid: u64) {
         self.pids.retain(|&p| p != pid);
         self.last_updated = Utc::now();
     }
 
+    #[instrument]
     pub fn add_participant(&mut self, agent_name: &str, make_primary: bool) {
         if !self.participants.contains(&agent_name.to_string()) {
             self.participants.push(agent_name.to_string());
@@ -123,6 +134,7 @@ impl SessionRecord {
         self.last_updated = Utc::now();
     }
 
+    #[instrument]
     pub fn set_primary(&mut self, agent_name: &str) {
         let agent_str = agent_name.to_string();
         if self.participants.contains(&agent_str) || agent_name == self.origin_agent.as_str() {
@@ -131,6 +143,7 @@ impl SessionRecord {
         }
     }
 
+    #[instrument]
     pub fn add_tokens(&mut self, tokens: u64) {
         self.tokens_total += tokens;
         self.last_updated = Utc::now();

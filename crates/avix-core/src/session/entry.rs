@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use tracing::instrument;
+
 // ── AgentRole ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -94,6 +96,7 @@ fn default_tty() -> bool {
 
 impl SessionEntry {
     /// Create a new session with sensible defaults.
+    #[instrument]
     pub fn new(
         session_id: String,
         username: String,
@@ -123,13 +126,15 @@ impl SessionEntry {
     }
 
     /// Attach an agent to this session.
+    #[instrument]
     pub fn add_agent(&mut self, pid: u64, name: String, role: AgentRole) {
         self.agents.push(AgentRef { pid, name, role });
         self.last_activity_at = Utc::now();
     }
 
     /// Close the session with a reason.
-    pub fn close(&mut self, reason: impl Into<String>) {
+    #[instrument]
+    pub fn close(&mut self, reason: impl Into<String> + std::fmt::Debug) {
         let now = Utc::now();
         self.state = SessionState::Closed;
         self.closed_at = Some(now);
@@ -138,12 +143,14 @@ impl SessionEntry {
     }
 
     /// Mark session as idle.
+    #[instrument]
     pub fn mark_idle(&mut self) {
         self.state = SessionState::Idle;
         self.last_activity_at = Utc::now();
     }
 
     /// Return to active from idle.
+    #[instrument]
     pub fn mark_active(&mut self) {
         self.state = SessionState::Active;
         self.last_activity_at = Utc::now();
