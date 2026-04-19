@@ -1,21 +1,25 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::instrument;
 
 use crate::error::AvixError;
 use crate::memfs::path::VfsPath;
 use crate::tool_registry::ToolRegistry;
 
+#[derive(Debug)]
 pub struct ToolsMemFs {
     files: Arc<RwLock<std::collections::HashMap<String, Vec<u8>>>>,
 }
 
 impl ToolsMemFs {
+    #[instrument]
     pub fn new() -> Self {
         Self {
             files: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 
+    #[instrument]
     pub async fn populate_from_registry(registry: &Arc<ToolRegistry>) -> Result<(), AvixError> {
         let tools = registry.list_all().await;
         let mut files = self.files.write().await;
@@ -60,6 +64,7 @@ impl ToolsMemFs {
         Ok(())
     }
 
+    #[instrument]
     fn generate_tool_yaml(entry: &crate::tool_registry::entry::ToolEntry) -> String {
         let name = entry.name.as_str();
         let desc = &entry.descriptor;
@@ -101,6 +106,7 @@ impl ToolsMemFs {
         yaml
     }
 
+    #[instrument]
     pub async fn read(&self, path: &VfsPath) -> Result<Vec<u8>, AvixError> {
         self.files
             .read()
@@ -110,6 +116,7 @@ impl ToolsMemFs {
             .ok_or_else(|| AvixError::NotFound(format!("ENOENT: {}", path.as_str())))
     }
 
+    #[instrument]
     pub async fn list(&self, dir: &VfsPath) -> Result<Vec<String>, AvixError> {
         let prefix = format!("{}/", dir.as_str().trim_end_matches('/'));
         let guard = self.files.read().await;
@@ -129,12 +136,14 @@ impl ToolsMemFs {
         Ok(seen.into_iter().collect())
     }
 
+    #[instrument]
     pub async fn exists(&self, path: &VfsPath) -> bool {
         self.files.read().await.contains_key(path.as_str())
     }
 }
 
 impl Default for ToolsMemFs {
+    #[instrument]
     fn default() -> Self {
         Self::new()
     }
