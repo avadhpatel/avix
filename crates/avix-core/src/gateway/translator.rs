@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 use thiserror::Error;
+use tracing::instrument;
 
 use crate::types::role::Role;
 
@@ -21,6 +22,7 @@ pub struct IpcCall {
 pub struct ATPTranslator;
 
 impl ATPTranslator {
+    #[instrument(skip_all)]
     pub fn translate(
         &self,
         cmd: &ATPCommand,

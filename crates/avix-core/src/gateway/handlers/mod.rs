@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde_json::Value;
+use tracing::instrument;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -38,6 +39,8 @@ pub struct LiveIpcRouter {
 }
 
 impl LiveIpcRouter {
+    #[instrument(skip_all)]
+
     pub fn new(client: IpcClient) -> Self {
         Self { client }
     }
@@ -45,6 +48,7 @@ impl LiveIpcRouter {
 
 #[async_trait]
 impl IpcRouter for LiveIpcRouter {
+    #[instrument(skip(self, method, params))]
     async fn call(&self, method: &str, params: Value) -> Result<Value, AtpError> {
         let span = tracing::trace_span!("ipc.call", method = %method);
         let _enter = span.enter();
@@ -73,6 +77,7 @@ pub struct NullIpcRouter;
 
 #[async_trait]
 impl IpcRouter for NullIpcRouter {
+    #[instrument(skip(self))]
     async fn call(&self, _method: &str, _params: Value) -> Result<Value, AtpError> {
         Err(AtpError::new(
             AtpErrorCode::Eunavail,
@@ -97,6 +102,8 @@ pub struct TestIpcRouter {
 }
 
 impl TestIpcRouter {
+    #[instrument(skip_all)]
+
     pub fn new(event_bus: Arc<crate::gateway::event_bus::AtpEventBus>) -> Self {
         Self {
             event_bus,
@@ -107,6 +114,7 @@ impl TestIpcRouter {
 
 #[async_trait]
 impl IpcRouter for TestIpcRouter {
+    #[instrument(skip(self, method, params))]
     async fn call(&self, method: &str, params: Value) -> Result<Value, AtpError> {
         use crate::gateway::atp::types::AtpEventKind;
         use crate::types::Role;
@@ -255,6 +263,7 @@ impl IpcRouter for TestIpcRouter {
     }
 }
 
+#[instrument(skip_all)]
 fn ipc_code_to_atp(msg: &str, code: i32) -> AtpErrorCode {
     match code {
         -32003 => AtpErrorCode::Enotfound,
@@ -284,6 +293,7 @@ pub struct HandlerCtx {
 }
 
 /// Route a validated command to the correct domain handler.
+#[instrument(skip(cmd, ctx), fields(domain = ?cmd.cmd.domain, op = %cmd.cmd.op))]
 pub async fn dispatch(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
     match cmd.cmd.domain {
         AtpDomain::Auth => auth::handle(cmd, ctx).await,
@@ -302,6 +312,7 @@ pub async fn dispatch(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
 }
 
 /// Forward a command body directly to an IPC method and convert the result.
+#[instrument(skip(id, method, params, ipc))]
 pub(super) async fn ipc_forward(
     id: &str,
     method: &str,
@@ -313,6 +324,8 @@ pub(super) async fn ipc_forward(
         Err(e) => AtpReply::err(id, e),
     }
 }
+
+#[instrument(skip_all)]
 
 /// Produce an EPARSE unknown-op reply.
 pub(super) fn unknown_op(id: impl Into<String>, op: &str) -> AtpReply {
@@ -340,13 +353,16 @@ pub(crate) mod test_helpers {
     }
 
     impl MockIpcRouter {
+    #[instrument(skip_all)]
+
         pub fn new() -> Self {
             Self {
                 responses: Mutex::new(HashMap::new()),
             }
         }
 
-        pub async fn set_ok(&self, method: &str, value: Value) {
+        #[instrument(skip(self))]
+pub async fn set_ok(&self, method: &str, value: Value) {
             self.responses
                 .lock()
                 .await
@@ -354,7 +370,8 @@ pub(crate) mod test_helpers {
         }
 
         #[allow(dead_code)]
-        pub async fn set_err(&self, method: &str, err: AtpError) {
+        #[instrument(skip(self, err))]
+pub async fn set_err(&self, method: &str, err: AtpError) {
             self.responses
                 .lock()
                 .await
@@ -364,6 +381,8 @@ pub(crate) mod test_helpers {
 
     #[async_trait]
     impl IpcRouter for MockIpcRouter {
+        #[instrument(skip_all)]
+
         async fn call(&self, method: &str, _params: Value) -> Result<Value, AtpError> {
             self.responses
                 .lock()
@@ -378,6 +397,8 @@ pub(crate) mod test_helpers {
                 })
         }
     }
+
+    #[instrument(skip_all)]
 
     /// Build a minimal `HandlerCtx` with a mock IPC router pre-loaded with one response.
     pub async fn make_test_ctx(method: &str, response: Value) -> HandlerCtx {

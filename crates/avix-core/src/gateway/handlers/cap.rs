@@ -2,7 +2,9 @@ use crate::gateway::atp::frame::AtpReply;
 use crate::gateway::validator::ValidatedCmd;
 
 use super::{ipc_forward, unknown_op, HandlerCtx};
+use tracing::instrument;
 
+#[instrument(skip_all)]
 pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
     let id = cmd.cmd.id.clone();
     let op = cmd.cmd.op.as_str();

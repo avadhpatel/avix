@@ -1,4 +1,5 @@
 use crate::gateway::atp::frame::AtpEvent;
+use tracing::instrument;
 use crate::gateway::atp::types::AtpEventKind;
 use crate::gateway::event_bus::AtpEventBus;
 use crate::types::Role;
@@ -7,6 +8,7 @@ use crate::types::Role;
 ///
 /// Publishes an `fs.changed` ATP event scoped to the session that registered
 /// the watch. The event is delivered only to the owning session (or Operator+).
+#[instrument(skip(bus))]
 pub fn on_vfs_change(bus: &AtpEventBus, path: &str, session_id: &str) {
     let event = AtpEvent::new(
         AtpEventKind::FsChanged,

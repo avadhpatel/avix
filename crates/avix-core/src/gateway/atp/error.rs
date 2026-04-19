@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::instrument;
 
 /// ATP error codes (§9). Serialise as SCREAMING_SNAKE_CASE, e.g. `"EAUTH"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +40,8 @@ pub struct AtpError {
 }
 
 impl AtpError {
+
+    #[instrument(skip(message))]
     pub fn new(code: AtpErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
@@ -47,6 +50,7 @@ impl AtpError {
         }
     }
 
+    #[instrument(skip_all)]
     pub fn with_detail(mut self, detail: serde_json::Value) -> Self {
         self.detail = Some(detail);
         self

@@ -1,5 +1,6 @@
 use crate::auth::atp_token::ATPTokenStore;
 use crate::gateway::acl::{check_admin_port, check_domain_role, check_fs_hard_veto};
+use tracing::instrument;
 use crate::gateway::atp::error::{AtpError, AtpErrorCode};
 use crate::gateway::atp::frame::AtpCmd;
 use crate::gateway::atp::types::AtpDomain;
@@ -14,6 +15,7 @@ pub struct ValidatedCmd {
     pub caller_session_id: String,
 }
 
+#[instrument(skip_all)]
 pub async fn validate_cmd(
     cmd: AtpCmd,
     token_store: &ATPTokenStore,

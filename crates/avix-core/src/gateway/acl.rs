@@ -1,8 +1,10 @@
 use crate::gateway::atp::error::{AtpError, AtpErrorCode};
+use tracing::instrument;
 use crate::gateway::atp::types::AtpDomain;
 use crate::types::Role;
 
 /// Check that `caller` meets the minimum role required for `domain` / `op` (§3.2, §6).
+#[instrument(skip_all)]
 pub fn check_domain_role(domain: AtpDomain, op: &str, caller: Role) -> Result<(), AtpError> {
     let min_role = domain_min_role(domain, op);
     if caller < min_role {
@@ -14,11 +16,13 @@ pub fn check_domain_role(domain: AtpDomain, op: &str, caller: Role) -> Result<()
     Ok(())
 }
 
+
 /// Determines the minimum role required to invoke operations on a given ATP domain (§6).
 /// This enforces access control based on domain sensitivity and operation type.
 /// For domains with operation-specific roles, matches on `op`; otherwise defaults to a fixed role.
 /// Tracing logs every call for audit and debugging.
 /// Links: [ATP Spec §6](https://atproto.com/specs/atp)
+#[instrument(skip_all)]
 fn domain_min_role(domain: AtpDomain, op: &str) -> Role {
     tracing::debug!("domain_min_role: domain={:?}, op={}", domain, op);
     match domain {
@@ -64,8 +68,10 @@ fn domain_min_role(domain: AtpDomain, op: &str) -> Role {
     }
 }
 
+
 /// Check that `caller` is permitted to access a resource owned by `target_owner`.
 /// Users may only target their own resources; `Operator+` may target any.
+#[instrument(skip_all)]
 pub fn check_ownership(
     caller_identity: &str,
     caller_role: Role,
@@ -84,6 +90,7 @@ pub fn check_ownership(
 }
 
 /// Hard-veto writes to `/secrets/` or `/proc/` regardless of role (§10 rules 3 & 4).
+#[instrument(skip_all)]
 pub fn check_fs_hard_veto(path: &str, op: &str) -> Result<(), AtpError> {
     if op != "write" {
         return Ok(());
@@ -99,6 +106,7 @@ pub fn check_fs_hard_veto(path: &str, op: &str) -> Result<(), AtpError> {
 
 /// Some domains/ops are only accessible from the admin port (7701).
 /// `is_admin_port` is set by `GatewayServer` based on which listener accepted the connection.
+#[instrument(skip_all)]
 pub fn check_admin_port(domain: AtpDomain, op: &str, is_admin_port: bool) -> Result<(), AtpError> {
     let requires_admin_port = match domain {
         AtpDomain::Cap => true,

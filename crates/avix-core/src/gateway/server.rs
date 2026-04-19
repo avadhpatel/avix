@@ -50,6 +50,7 @@ pub struct GatewayServer {
 }
 
 impl GatewayServer {
+
     pub fn new(
         config: GatewayConfig,
         auth_svc: Arc<AuthService>,
@@ -95,7 +96,8 @@ impl GatewayServer {
     }
 
     /// Bind to a specific address and return the bound addr (for test: use port 0).
-    pub async fn bind_and_run(
+    #[instrument(skip_all)]
+pub async fn bind_and_run(
         self: Arc<Self>,
         addr: SocketAddr,
         is_admin_port: bool,
@@ -214,6 +216,7 @@ struct LoginRequest {
     credential: String,
 }
 
+#[instrument(skip_all)]
 async fn handle_login(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
@@ -260,6 +263,7 @@ async fn handle_login(
 
 // ── WebSocket upgrade ──────────────────────────────────────────────────────────
 
+#[instrument(skip_all)]
 async fn handle_ws_upgrade(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     ws: WebSocketUpgrade,
@@ -306,7 +310,7 @@ async fn handle_ws_upgrade(
 
 // ── Connection loop ────────────────────────────────────────────────────────────
 
-#[instrument(skip(state))]
+#[instrument(skip_all)]
 async fn run_connection(
     ws: WebSocket,
     state: AppState,
@@ -404,6 +408,7 @@ async fn run_connection(
     writer.abort();
 }
 
+#[instrument(skip_all)]
 async fn handle_text_frame(
     text: &str,
     state: &AppState,
@@ -465,6 +470,7 @@ enum WsOutMsg {
     Ping,
 }
 
+#[instrument(skip_all)]
 async fn writer_task(mut sender: SplitSink<WebSocket, Message>, mut rx: mpsc::Receiver<WsOutMsg>) {
     while let Some(msg) = rx.recv().await {
         let ws_msg = match msg {

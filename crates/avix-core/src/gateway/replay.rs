@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use tracing::instrument;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -12,12 +13,14 @@ pub struct ReplayGuard {
 }
 
 impl ReplayGuard {
+
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Register a command ID. Returns `Err(EPARSE)` if already seen (replay attack).
-    pub async fn check_and_register(&self, id: &str) -> Result<(), AtpError> {
+    #[instrument(skip(self))]
+pub async fn check_and_register(&self, id: &str) -> Result<(), AtpError> {
         let mut guard = self.seen.lock().await;
         if guard.contains(id) {
             return Err(AtpError::new(

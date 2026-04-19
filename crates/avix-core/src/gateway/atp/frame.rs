@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use super::error::{AtpError, AtpFrameError};
 use super::types::{AtpDomain, AtpEventKind};
+use tracing::instrument;
 
 /// A command sent from client → gateway (§5.1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +33,7 @@ pub struct AtpReply {
 }
 
 impl AtpReply {
+    #[instrument(skip(id))]
     pub fn ok(id: impl Into<String>, body: Value) -> Self {
         Self {
             msg_type: "reply".into(),
@@ -42,6 +44,7 @@ impl AtpReply {
         }
     }
 
+    #[instrument(skip(id))]
     pub fn err(id: impl Into<String>, error: AtpError) -> Self {
         Self {
             msg_type: "reply".into(),
@@ -66,6 +69,7 @@ pub struct AtpEvent {
 }
 
 impl AtpEvent {
+
     pub fn new(event: AtpEventKind, session_id: impl Into<String>, body: Value) -> Self {
         Self {
             msg_type: "event".into(),
@@ -99,7 +103,9 @@ pub enum AtpFrame {
 }
 
 impl AtpFrame {
+
     /// Parse a raw JSON text frame into an `AtpFrame`.
+    #[instrument(skip_all)]
     pub fn parse(raw: &str) -> Result<Self, AtpFrameError> {
         let v: Value =
             serde_json::from_str(raw).map_err(|e| AtpFrameError::Parse(e.to_string()))?;

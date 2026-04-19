@@ -1,4 +1,5 @@
 use tokio::sync::broadcast;
+use tracing::instrument;
 
 use crate::gateway::atp::frame::AtpEvent;
 use crate::gateway::atp::types::AtpEventKind;
@@ -18,6 +19,7 @@ pub struct BusEvent {
 }
 
 /// Return the minimum role and owner-scoping rule for each event kind.
+#[instrument(skip_all)]
 pub fn event_scope(kind: &AtpEventKind) -> (Role, bool) {
     match kind {
         AtpEventKind::SessionReady => (Role::Guest, true),
@@ -68,11 +70,13 @@ impl EventFilter {
     }
 
     /// Update the subscription list from a `subscribe` frame.
+    #[instrument(skip(self))]
     pub fn set_subscriptions(&mut self, events: Vec<String>) {
         self.subscribed = events;
     }
 
     /// Returns true if this connection should receive the given bus event.
+    #[instrument(skip_all)]
     pub fn should_receive(&self, ev: &BusEvent) -> bool {
         // Role gate
         if self.role < ev.min_role {
@@ -112,21 +116,25 @@ impl AtpEventBus {
     }
 
     /// Publish an event with scoping metadata.
+    #[instrument(skip_all)]
     pub fn publish(&self, event: AtpEvent, owner_session: Option<String>, min_role: Role) {
         let _ = self.tx.send(BusEvent {
             event,
             owner_session,
+
             min_role,
         });
     }
 
     /// Subscribe — returns a receiver for this connection.
+    #[instrument(skip_all)]
     pub fn subscribe(&self) -> broadcast::Receiver<BusEvent> {
         self.tx.subscribe()
     }
 
     // ── Convenience publish helpers ─────────────────────────────────────────
 
+    #[instrument(skip(self))]
     pub fn agent_output(&self, atp_session_id: &str, pid: u64, text: &str) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentOutput);
         let ev = AtpEvent::new(
@@ -139,6 +147,7 @@ impl AtpEventBus {
 
     /// Publish `agent.spawned` so the UI registers the new agent immediately.
     /// `agent_session_id` is the logical conversation UUID (shown in SessionPage).
+    #[instrument(skip(self))]
     pub fn agent_spawned(
         &self,
         atp_session_id: &str,
@@ -170,6 +179,7 @@ impl AtpEventBus {
 
     /// Publish an incremental token delta from a streaming LLM turn.
     /// `atp_session_id` routes the event to the originating client connection.
+    #[instrument(skip(self))]
     pub fn agent_output_chunk(
         &self,
         atp_session_id: &str,
@@ -195,6 +205,7 @@ impl AtpEventBus {
     }
 
     /// `atp_session_id` routes the event to the originating client connection.
+    #[instrument(skip(self))]
     pub fn agent_exit(&self, atp_session_id: &str, pid: u64, exit_code: i32) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentExit);
         let ev = AtpEvent::new(
@@ -206,6 +217,7 @@ impl AtpEventBus {
     }
 
     /// `atp_session_id` routes the event to the originating client connection.
+    #[instrument(skip(self))]
     pub fn agent_status(&self, atp_session_id: &str, pid: u64, status: &str) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentStatus);
         let ev = AtpEvent::new(
@@ -216,6 +228,7 @@ impl AtpEventBus {
         self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 
+    #[instrument(skip(self))]
     pub fn tool_changed(&self, tool_name: &str, change: &str) {
         let (min_role, _owner_scoped) = event_scope(&AtpEventKind::ToolChanged);
         let ev = AtpEvent::new(
@@ -226,6 +239,7 @@ impl AtpEventBus {
         self.publish(ev, None, min_role);
     }
 
+    #[instrument(skip(self))]
     pub fn sys_service(&self, service: &str, status: &str) {
         let (min_role, _owner_scoped) = event_scope(&AtpEventKind::SysService);
         let ev = AtpEvent::new(
@@ -236,6 +250,7 @@ impl AtpEventBus {
         self.publish(ev, None, min_role);
     }
 
+    #[instrument(skip(self))]
     pub fn sys_alert(&self, message: &str) {
         let (min_role, _owner_scoped) = event_scope(&AtpEventKind::SysAlert);
         let ev = AtpEvent::new(
@@ -246,6 +261,7 @@ impl AtpEventBus {
         self.publish(ev, None, min_role);
     }
 
+    #[instrument(skip(self))]
     pub fn fs_changed(&self, atp_session_id: &str, path: &str) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::FsChanged);
         let ev = AtpEvent::new(
@@ -256,6 +272,7 @@ impl AtpEventBus {
         self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 
+    #[instrument(skip(self))]
     pub fn hil_request(&self, atp_session_id: &str, hil_id: &str, kind: &str) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::HilRequest);
         let ev = AtpEvent::new(
@@ -264,8 +281,10 @@ impl AtpEventBus {
             serde_json::json!({ "hilId": hil_id, "kind": kind }),
         );
         self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
+
     }
 
+    #[instrument(skip(self))]
     pub fn hil_resolved(&self, atp_session_id: &str, hil_id: &str, outcome: &str) {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::HilResolved);
         let ev = AtpEvent::new(
@@ -276,6 +295,7 @@ impl AtpEventBus {
         self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 
+    #[instrument(skip(self))]
     pub fn agent_tool_call(
         &self,
         atp_session_id: &str,
@@ -293,6 +313,7 @@ impl AtpEventBus {
         self.publish(ev, owner_scoped.then(|| atp_session_id.to_string()), min_role);
     }
 
+    #[instrument(skip(self))]
     pub fn agent_tool_result(
         &self,
         atp_session_id: &str,
