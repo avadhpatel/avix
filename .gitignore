@@ -8,3 +8,6 @@ coverage/
 .agents/reports
 **.swp
 temp/
+*.tar.*
+*.sha256
+
