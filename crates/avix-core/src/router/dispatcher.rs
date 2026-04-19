@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tracing::instrument;
+
 // Spec §10 error codes
 const ENOTFOUND_METHOD: i32 = -32601;
 const EPERM: i32 = -32002;
@@ -23,6 +25,7 @@ const EBUSY: i32 = -32008;
 const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_CONCURRENT: usize = 20;
 
+#[derive(Debug)]
 pub struct RouterDispatcher {
     service_registry: Arc<ServiceRegistry>,
     tool_registry: Arc<ToolRegistry>,
@@ -32,6 +35,7 @@ pub struct RouterDispatcher {
 }
 
 impl RouterDispatcher {
+    #[instrument]
     pub fn new(
         service_registry: Arc<ServiceRegistry>,
         tool_registry: Arc<ToolRegistry>,
@@ -46,6 +50,7 @@ impl RouterDispatcher {
         }
     }
 
+    #[instrument]
     pub fn with_max_concurrent(self, n: usize) -> Self {
         Self {
             concurrency: ConcurrencyLimiter::new(n),
@@ -53,6 +58,7 @@ impl RouterDispatcher {
         }
     }
 
+    #[instrument]
     pub fn with_call_timeout(self, d: Duration) -> Self {
         Self {
             call_timeout: d,
@@ -63,6 +69,7 @@ impl RouterDispatcher {
     /// Dispatch a tool call from `caller_pid` to the service that owns `request.method`.
     ///
     /// Returns a `JsonRpcResponse` — either the service's response or an error response.
+    #[instrument]
     pub async fn dispatch(
         &self,
         mut request: JsonRpcRequest,

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tracing::{info, warn};
+use tracing::{info, warn, instrument};
 
 use crate::error::AvixError;
 use crate::ipc::message::{IpcMessage, JsonRpcResponse};
@@ -15,12 +15,14 @@ use crate::types::Pid;
 /// via `RouterDispatcher`.  Caller identity is carried in three reserved params:
 /// `_caller_pid`, `_caller_user`, `_caller_token`.  These fields are stripped before
 /// the request is forwarded to the service.
+#[derive(Debug)]
 pub struct RouterIpcServer {
     sock_path: PathBuf,
     dispatcher: Arc<RouterDispatcher>,
 }
 
 impl RouterIpcServer {
+    #[instrument]
     pub fn new(sock_path: PathBuf, dispatcher: Arc<RouterDispatcher>) -> Self {
         Self {
             sock_path,
@@ -29,6 +31,7 @@ impl RouterIpcServer {
     }
 
     /// Bind the socket and start serving in a background task.
+    #[instrument]
     pub async fn start(self) -> Result<IpcServerHandle, AvixError> {
         let (server, handle) = IpcServer::bind(self.sock_path.clone()).await?;
         info!(sock = %self.sock_path.display(), "router IPC server bound");
@@ -50,6 +53,7 @@ impl RouterIpcServer {
     }
 }
 
+#[instrument]
 async fn handle_message(
     msg: IpcMessage,
     dispatcher: Arc<RouterDispatcher>,

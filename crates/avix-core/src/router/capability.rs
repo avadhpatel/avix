@@ -7,6 +7,8 @@ use crate::process::ProcessTable;
 use crate::types::Pid;
 use std::sync::Arc;
 
+use tracing::instrument;
+
 /// Tools that are always available to every agent, regardless of capability grants.
 /// Defined in ADR-04 and §13 of CLAUDE.md.
 pub const ALWAYS_PRESENT: &[&str] = &["cap/request-tool", "cap/escalate", "cap/list", "job/watch"];
@@ -18,6 +20,7 @@ pub const ALWAYS_PRESENT: &[&str] = &["cap/request-tool", "cap/escalate", "cap/l
 ///
 /// Returns `Err(AvixError::CapabilityDenied)` if the process is not found
 /// or if the tool is not in the granted list.
+#[instrument]
 pub async fn check_capability(
     tool: &str,
     caller_pid: Pid,

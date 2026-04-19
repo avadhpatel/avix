@@ -1,3 +1,5 @@
+use tracing::instrument;
+
 /// Wire-format tool name mangling (ADR-03).
 ///
 /// Avix tool names use `/` as namespace separator (`fs/read`).
@@ -8,6 +10,7 @@ use crate::error::AvixError;
 /// Mangle an Avix tool name for the wire: replace `/` with `__`.
 ///
 /// `"fs/read"` → `"fs__read"`
+#[instrument]
 pub fn mangle(name: &str) -> String {
     name.replace('/', "__")
 }
@@ -15,6 +18,7 @@ pub fn mangle(name: &str) -> String {
 /// Unmangle a wire tool name back to the Avix form: replace `__` with `/`.
 ///
 /// `"fs__read"` → `"fs/read"`
+#[instrument]
 pub fn unmangle(name: &str) -> String {
     name.replace("__", "/")
 }
@@ -22,6 +26,7 @@ pub fn unmangle(name: &str) -> String {
 /// Validate that a tool name is an Avix-internal name (no `__`).
 ///
 /// Returns `Err` if the name contains `__`, which is reserved for the wire format.
+#[instrument]
 pub fn validate_tool_name(name: &str) -> Result<(), AvixError> {
     if name.contains("__") {
         return Err(AvixError::InvalidToolName {

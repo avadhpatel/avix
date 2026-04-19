@@ -8,6 +8,9 @@ use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 use crate::error::AvixError;
 use crate::types::Pid;
 
+use tracing::instrument;
+
+#[derive(Debug)]
 pub struct ConcurrencyGuard {
     _permit: OwnedSemaphorePermit,
     counter: Arc<AtomicUsize>,
@@ -25,12 +28,14 @@ impl Drop for ConcurrencyGuard {
     }
 }
 
+#[derive(Debug)]
 pub struct ConcurrencyLimiter {
     semaphore: Arc<Semaphore>,
     active: Arc<AtomicUsize>,
 }
 
 impl ConcurrencyLimiter {
+    #[instrument]
     pub fn new(max: usize) -> Self {
         Self {
             semaphore: Arc::new(Semaphore::new(max)),
@@ -38,6 +43,7 @@ impl ConcurrencyLimiter {
         }
     }
 
+    #[instrument]
     pub async fn acquire(&self) -> Result<ConcurrencyGuard, AvixError> {
         let permit = Arc::clone(&self.semaphore)
             .acquire_owned()
@@ -51,6 +57,7 @@ impl ConcurrencyLimiter {
     }
 
     /// Non-blocking acquire. Returns `None` if the limit is already reached.
+    #[instrument]
     pub fn try_acquire(&self) -> Option<ConcurrencyGuard> {
         Arc::clone(&self.semaphore)
             .try_acquire_owned()
@@ -64,22 +71,26 @@ impl ConcurrencyLimiter {
             })
     }
 
+    #[instrument]
     pub async fn active_count(&self) -> usize {
         self.active.load(Ordering::Relaxed)
     }
 }
 
+#[derive(Debug)]
 struct PerPidEntry {
     semaphore: Arc<Semaphore>,
     active: Arc<AtomicUsize>,
 }
 
+#[derive(Debug)]
 pub struct CallerScopedLimiter {
     max_per_pid: usize,
     limits: Arc<RwLock<HashMap<u64, PerPidEntry>>>,
 }
 
 impl CallerScopedLimiter {
+    #[instrument]
     pub fn new(max_per_pid: usize) -> Self {
         Self {
             max_per_pid,
@@ -87,6 +98,7 @@ impl CallerScopedLimiter {
         }
     }
 
+    #[instrument]
     pub async fn acquire(&self, pid: Pid) -> Result<ConcurrencyGuard, AvixError> {
         let entry = {
             let mut map = self.limits.write().await;

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use tracing::instrument;
+
 /// Injected into tool call params when `caller_scoped: true` in service.yaml.
 /// Available to the service as `params._caller`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -13,6 +15,7 @@ pub struct CallerInfo {
 impl CallerInfo {
     /// Insert `_caller` into a JSON params object.
     /// No-op if `params` is not an object.
+    #[instrument]
     pub fn inject_into(&self, params: &mut serde_json::Value) {
         if let serde_json::Value::Object(map) = params {
             map.insert(
