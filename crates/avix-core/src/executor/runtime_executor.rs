@@ -14,11 +14,13 @@ use tokio::sync::{mpsc, Mutex};
 use crate::error::AvixError;
 use crate::gateway::event_bus::AtpEventBus;
 use crate::kernel::resource_request::KernelResourceHandler;
+use crate::kernel::HilManager;
 use crate::llm_client::LlmCompleteResponse;
 use crate::memfs::context::VfsCallerContext;
 use crate::memfs::VfsRouter;
 use crate::memory_svc::vfs_layout::init_user_memory_tree;
 use crate::signal::kind::Signal;
+use crate::signal::SignalBus;
 use crate::tool_registry::ToolRegistry;
 use crate::trace::Tracer;
 use crate::types::{token::CapabilityToken, tool::ToolVisibility, Pid};
@@ -164,6 +166,8 @@ pub struct RuntimeExecutor {
     // Optional kernel handles
     pub(self) kernel: Option<Arc<MockKernelHandle>>,
     pub(self) resource_handler: Option<Arc<KernelResourceHandler>>,
+    pub(self) hil_manager: Option<Arc<HilManager>>,
+    pub(self) signal_bus: Option<Arc<SignalBus>>,
     pub(self) vfs: Option<Arc<VfsRouter>>,
     registry_ref: RegistryRef,
     /// Set to `true` by the signal listener when SIGPAUSE is received.
@@ -244,6 +248,8 @@ impl RuntimeExecutor {
             max_tool_chain_length: 50,
             kernel: None,
             resource_handler: None,
+            hil_manager: None,
+            signal_bus: None,
             vfs: None,
             registry_ref,
             paused: Arc::new(AtomicBool::new(false)),
@@ -318,6 +324,21 @@ impl RuntimeExecutor {
     #[instrument(skip_all)]
     pub fn with_resource_handler(mut self, handler: Arc<KernelResourceHandler>) -> Self {
         self.resource_handler = Some(handler);
+        self
+    }
+
+    /// Attach a `HilManager` so `cap/request-tool` can drive the full HIL flow
+    /// (VFS write → ATP event → SIGPAUSE → wait for SIGRESUME).
+    #[instrument(skip_all)]
+    pub fn with_hil_manager(mut self, hil_manager: Arc<HilManager>) -> Self {
+        self.hil_manager = Some(hil_manager);
+        self
+    }
+
+    /// Attach a `SignalBus` so `cap/request-tool` can send SIGPAUSE and receive SIGRESUME.
+    #[instrument(skip_all)]
+    pub fn with_signal_bus(mut self, signal_bus: Arc<SignalBus>) -> Self {
+        self.signal_bus = Some(signal_bus);
         self
     }
 
@@ -533,6 +554,7 @@ impl RuntimeExecutor {
                 .collect::<HashMap<String, u32>>(),
             &self.pending_messages,
             &tool_list,
+            &self.denied_tools,
         );
         if let Some(ref ctx) = self.memory.memory_context {
             format!("{ctx}\n\n{base}")

@@ -231,24 +231,17 @@ impl KernelResourceHandler {
                 }
             }
 
-            ResourceItem::Tool {
-                name,
-                urgency,
-                reason,
-            } => {
-                // Tool grants require HIL approval — return denied with a suggestion.
-                // The RuntimeExecutor sends SIGPAUSE and waits; on SIGRESUME with
-                // decision=="approved", it re-issues a token with the new tool.
-                let _ = (urgency, reason); // consumed by human channel, not here
+            ResourceItem::Tool { name, urgency, reason } => {
+                // Tool grants require HIL approval. This handler signals that HIL is
+                // needed; the caller (dispatch_manager) is responsible for orchestrating
+                // the full SIGPAUSE → HilManager::open → ATP event → SIGRESUME flow.
+                let _ = (urgency, reason);
                 ResourceGrant::Tool {
                     granted: false,
                     name: name.clone(),
                     new_token: None,
-                    reason: Some("Requires human-in-the-loop approval".into()),
-                    suggestion: Some(
-                        "Send SIGPAUSE and present request to user via cap/request-tool HIL flow"
-                            .into(),
-                    ),
+                    reason: Some("HIL approval required".into()),
+                    suggestion: None,
                 }
             }
 
@@ -364,7 +357,7 @@ mod tests {
     // ── tool ───────────────────────────────────────────────────────────
 
     #[test]
-    fn tool_request_returns_denied_with_suggestion() {
+    fn tool_request_returns_denied_hil_required() {
         let token = signed_token(&["fs/read"]);
         let req = make_req(
             &token,
@@ -379,12 +372,14 @@ mod tests {
             ResourceGrant::Tool {
                 granted,
                 name,
+                reason,
                 suggestion,
                 ..
             } => {
                 assert!(!granted, "tool grants require HIL");
                 assert_eq!(name, "send_email");
-                assert!(suggestion.is_some());
+                assert_eq!(reason.as_deref(), Some("HIL approval required"));
+                assert!(suggestion.is_none(), "HIL orchestration is caller's responsibility");
             }
             _ => panic!("expected Tool grant"),
         }

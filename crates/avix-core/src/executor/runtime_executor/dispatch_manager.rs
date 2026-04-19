@@ -382,48 +382,106 @@ impl RuntimeExecutor {
                 let tool_name = call.args["tool"].as_str().unwrap_or("").to_string();
                 let reason = call.args["reason"].as_str().unwrap_or("").to_string();
 
-                if let Some(handler) = &self.resource_handler {
-                    let req = ResourceRequest::new(
-                        self.pid.as_u64(),
-                        self.token.signature.clone(),
-                        vec![ResourceItem::Tool {
-                            name: tool_name.clone(),
-                            urgency: Urgency::Normal,
-                            reason,
-                        }],
-                    );
-                    match handler.handle(&req, &self.token) {
-                        Ok(resp) => {
-                            if let Some(ResourceGrant::Tool {
-                                granted, new_token, ..
-                            }) = resp.grants.into_iter().next()
-                            {
-                                if granted {
-                                    if let Some(tok) = new_token {
-                                        self.token = tok;
-                                        self.refresh_tool_list().await;
-                                    }
-                                    return Ok(
-                                        serde_json::json!({"approved": true, "tool": tool_name}),
-                                    );
-                                }
-                            }
-                            return Ok(serde_json::json!({"approved": false, "tool": tool_name}));
-                        }
-                        Err(e) => {
-                            return Ok(
-                                serde_json::json!({"approved": false, "error": e.to_string()}),
-                            );
-                        }
+                // Auto-approve path for tests / kernels that opt in.
+                if let Some(kernel) = &self.kernel {
+                    if kernel.is_auto_approve().await {
+                        tracing::info!(pid = ?self.pid, tool = %tool_name, "cap/request-tool auto-approved");
+                        return Ok(serde_json::json!({"approved": true, "tool": tool_name}));
                     }
                 }
 
-                if let Some(kernel) = &self.kernel {
-                    if kernel.is_auto_approve().await {
-                        return Ok(serde_json::json!({"approved": true}));
+                let Some(handler) = &self.resource_handler else {
+                    // No resource handler — cannot escalate.
+                    tracing::warn!(pid = ?self.pid, tool = %tool_name, "cap/request-tool: no resource handler configured");
+                    self.denied_tools.push(tool_name.clone());
+                    return Ok(serde_json::json!({
+                        "approved": false,
+                        "tool": tool_name,
+                        "error": "capability escalation unavailable: no resource handler configured"
+                    }));
+                };
+
+                // Validate token and signal that HIL is required.
+                let resource_req = ResourceRequest::new(
+                    self.pid.as_u64(),
+                    self.token.signature.clone(),
+                    vec![ResourceItem::Tool {
+                        name: tool_name.clone(),
+                        urgency: Urgency::Normal,
+                        reason: reason.clone(),
+                    }],
+                );
+                if let Err(e) = handler.handle(&resource_req, &self.token) {
+                    tracing::warn!(pid = ?self.pid, tool = %tool_name, error = %e, "cap/request-tool: token validation failed");
+                    self.denied_tools.push(tool_name.clone());
+                    return Ok(serde_json::json!({"approved": false, "tool": tool_name, "error": e.to_string()}));
+                }
+
+                // Drive the full HIL flow if hil_manager + signal_bus are wired.
+                let (Some(hil_mgr), Some(sig_bus)) = (&self.hil_manager, &self.signal_bus) else {
+                    tracing::warn!(pid = ?self.pid, tool = %tool_name, "cap/request-tool: no HIL manager or signal bus — cannot escalate");
+                    self.denied_tools.push(tool_name.clone());
+                    return Ok(serde_json::json!({
+                        "approved": false,
+                        "tool": tool_name,
+                        "error": "capability escalation unavailable: HIL infrastructure not configured"
+                    }));
+                };
+
+                let hil_id = uuid::Uuid::new_v4().to_string();
+                let approval_token = uuid::Uuid::new_v4().to_string();
+                let now = chrono::Utc::now();
+                let hil_req = crate::kernel::hil::HilRequest {
+                    api_version: "avix/v1".into(),
+                    kind: "HilRequest".into(),
+                    hil_id: hil_id.clone(),
+                    pid: self.pid,
+                    agent_name: self.agent_name.clone(),
+                    hil_type: crate::kernel::hil::HilType::CapabilityUpgrade,
+                    tool: Some(tool_name.clone()),
+                    args: None,
+                    reason: Some(reason.clone()),
+                    context: None,
+                    options: None,
+                    urgency: crate::kernel::hil::HilUrgency::Normal,
+                    approval_token,
+                    created_at: now,
+                    expires_at: now + chrono::Duration::minutes(10),
+                    state: crate::kernel::hil::HilState::Pending,
+                };
+
+                if let Err(e) = hil_mgr.open(hil_req).await {
+                    tracing::error!(pid = ?self.pid, tool = %tool_name, error = %e, "cap/request-tool: HilManager::open failed");
+                    self.denied_tools.push(tool_name.clone());
+                    return Ok(serde_json::json!({"approved": false, "tool": tool_name, "error": e.to_string()}));
+                }
+
+                // Send SIGPAUSE then wait for SIGRESUME via CapabilityUpgrader.
+                let pause_sig = crate::signal::kind::Signal {
+                    target: self.pid,
+                    kind: crate::signal::kind::SignalKind::Pause,
+                    payload: serde_json::Value::Null,
+                };
+                sig_bus.send(pause_sig).await.ok();
+
+                let mut upgrader = crate::executor::hil::cap_upgrade::CapabilityUpgrader::new(
+                    self.pid,
+                    self.token.clone(),
+                    Arc::clone(sig_bus),
+                );
+                match upgrader.request_tool(&tool_name, &reason, &hil_id, std::time::Duration::from_secs(600)).await {
+                    Ok(()) => {
+                        self.token = upgrader.current_token().clone();
+                        self.refresh_tool_list().await;
+                        tracing::info!(pid = ?self.pid, tool = %tool_name, "cap/request-tool: HIL approved, token upgraded");
+                        Ok(serde_json::json!({"approved": true, "tool": tool_name, "scope": "session"}))
+                    }
+                    Err(e) => {
+                        tracing::info!(pid = ?self.pid, tool = %tool_name, reason = %e, "cap/request-tool: HIL denied or timed out");
+                        self.denied_tools.push(tool_name.clone());
+                        Ok(serde_json::json!({"approved": false, "tool": tool_name, "reason": e.to_string()}))
                     }
                 }
-                Ok(serde_json::json!({"approved": false}))
             }
             "cap/list" => {
                 let budgets: serde_json::Value = self
@@ -946,7 +1004,6 @@ impl RuntimeExecutor {
 
         use crate::invocation::conversation::{ConversationEntry, Role, ToolCallEntry};
 
-        let system = self.build_system_prompt_str();
         let mut messages: Vec<serde_json::Value> =
             vec![serde_json::json!({"role": "user", "content": goal})];
         // Record the initial user goal in persistent conversation history.
@@ -957,6 +1014,9 @@ impl RuntimeExecutor {
 
         loop {
             turn_num += 1;
+            // Rebuild system prompt each iteration so denied_tools and pending_messages
+            // are reflected without waiting for the next user message.
+            let system = self.build_system_prompt_str();
             tracing::debug!(
                 pid = self.pid.as_u64(),
                 turn = turn_num,

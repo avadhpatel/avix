@@ -1,7 +1,7 @@
 #[allow(clippy::too_many_arguments)]
 use tracing::instrument;
 
-#[instrument(skip(tool_budgets, pending_messages, tools))]
+#[instrument(skip(tool_budgets, pending_messages, tools, denied_tools))]
 pub fn build_system_prompt(
     pid: u64,
     agent_name: &str,
@@ -12,6 +12,7 @@ pub fn build_system_prompt(
     tool_budgets: &std::collections::HashMap<String, u32>,
     pending_messages: &[String],
     tools: &[serde_json::Value],
+    denied_tools: &[String],
 ) -> String {
     // Block 1 — Agent Identity (static, set at spawn)
     let mut prompt = format!(
@@ -57,11 +58,20 @@ pub fn build_system_prompt(
     // Block 4 — Pending Instructions (dynamic, injected by RuntimeExecutor)
     // Used for: HIL escalation guidance, HIL denial feedback,
     // tool availability changes, memory summaries.
-    if !pending_messages.is_empty() {
+    let has_pending = !pending_messages.is_empty();
+    let has_denied = !denied_tools.is_empty();
+    if has_pending || has_denied {
         prompt.push_str("\n# Pending Instructions\n");
         for msg in pending_messages {
             prompt.push_str(msg);
             prompt.push('\n');
+        }
+        if has_denied {
+            let list = denied_tools.join(", ");
+            prompt.push_str(&format!(
+                "**Tool access denied this turn:** {list}\n\
+                 Do not call cap/request-tool for these tools again until the next user message.\n"
+            ));
         }
     }
 
@@ -99,6 +109,7 @@ mod tests {
             &budgets,
             &["Some pending instruction.".to_string()],
             &tools,
+            &[],
         );
         assert!(prompt.contains("# Agent Identity"), "missing block 1");
         assert!(prompt.contains("# Available Tools"), "missing block 2");
@@ -119,6 +130,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &tools,
+            &[],
         );
         assert!(prompt.contains("**fs/read**"));
         assert!(prompt.contains("**cap/list**"));
@@ -136,6 +148,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &[],
+            &[],
         );
         assert!(prompt.contains("No tools currently available."));
     }
@@ -144,7 +157,7 @@ mod tests {
     fn test_prompt_block3_with_budgets() {
         let budgets = make_budgets(&[("fs/write", 3), ("send_email", 1)]);
         let prompt =
-            build_system_prompt(1, "agent", "goal", "user", "sess-1", 5, &budgets, &[], &[]);
+            build_system_prompt(1, "agent", "goal", "user", "sess-1", 5, &budgets, &[], &[], &[]);
         assert!(prompt.contains("fs/write: 3 use(s) remaining"));
         assert!(prompt.contains("send_email: 1 use(s) remaining"));
     }
@@ -161,7 +174,45 @@ mod tests {
             &HashMap::new(),
             &[],
             &[],
+            &[],
         );
         assert!(!prompt.contains("# Pending Instructions"));
+    }
+
+    #[test]
+    fn test_prompt_denied_tools_block4() {
+        let denied = vec!["fs/write".to_string(), "send_email".to_string()];
+        let prompt = build_system_prompt(
+            1,
+            "agent",
+            "goal",
+            "user",
+            "sess-1",
+            10,
+            &HashMap::new(),
+            &[],
+            &[],
+            &denied,
+        );
+        assert!(prompt.contains("# Pending Instructions"));
+        assert!(prompt.contains("**Tool access denied this turn:** fs/write, send_email"));
+        assert!(prompt.contains("Do not call cap/request-tool for these tools again"));
+    }
+
+    #[test]
+    fn test_prompt_denied_tools_empty_no_warning() {
+        let prompt = build_system_prompt(
+            1,
+            "agent",
+            "goal",
+            "user",
+            "sess-1",
+            10,
+            &HashMap::new(),
+            &[],
+            &[],
+            &[],
+        );
+        assert!(!prompt.contains("Tool access denied"));
     }
 }
