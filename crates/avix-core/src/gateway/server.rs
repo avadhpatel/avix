@@ -66,6 +66,7 @@ impl GatewayServer {
     }
 
     /// Attach a tracer to record ATP traffic.
+    #[instrument(skip_all)]
     pub fn with_tracer(self: Arc<Self>, tracer: Arc<Tracer>) -> Arc<Self> {
         // Arc<Self> doesn't allow mutation; reconstruct via inner fields.
         Arc::new(Self {
@@ -78,6 +79,7 @@ impl GatewayServer {
     }
 
     /// Bind both ports and run until either exits. Returns the bound addresses.
+    #[instrument(skip(self))]
     pub async fn run(self: Arc<Self>, test_mode: bool) -> anyhow::Result<(SocketAddr, SocketAddr)> {
         let user_addr = self.config.user_addr;
         let admin_addr = self.config.admin_addr;

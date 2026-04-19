@@ -6,6 +6,7 @@ use crate::gateway::validator::ValidatedCmd;
 use crate::signal::pipe_payload::SigPipePayload;
 
 use super::{ipc_forward, unknown_op, HandlerCtx};
+use tracing::instrument;
 
 /// Map an AvixError to an AtpError, recognising the EUSED sentinel string.
 fn avix_err_to_atp(e: crate::error::AvixError) -> AtpError {
@@ -28,6 +29,7 @@ const VALID_SIGNALS: &[&str] = &[
     "SIGESCALATE",
 ];
 
+#[instrument(skip_all)]
 pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
     let id = cmd.cmd.id.clone();
     let op = cmd.cmd.op.as_str();
@@ -47,6 +49,7 @@ pub async fn handle(cmd: ValidatedCmd, ctx: &HandlerCtx) -> AtpReply {
     }
 }
 
+#[instrument(skip(id, body, ctx))]
 async fn handle_send(id: String, body: serde_json::Value, ctx: &HandlerCtx) -> AtpReply {
     let signal = match body["signal"].as_str() {
         Some(s) => s,
