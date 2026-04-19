@@ -1,8 +1,10 @@
 use serde_json::{json, Value};
+use tracing::instrument;
 
 use crate::memfs::VfsPath;
 use crate::syscall::{SyscallContext, SyscallError, SyscallResult};
 
+#[instrument(skip(params))]
 pub fn read(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let path = params
         .get("path")
@@ -18,6 +20,7 @@ pub fn read(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "path": path, "content": "" }))
 }
 
+#[instrument(skip(params))]
 pub fn write(ctx: &SyscallContext, params: Value) -> SyscallResult {
     let path_str = params
         .get("path")
@@ -39,6 +42,7 @@ pub fn write(ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "path": path_str, "bytes_written": content.len() }))
 }
 
+#[instrument(skip(params))]
 pub fn list(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let path = params
         .get("path")
@@ -47,6 +51,7 @@ pub fn list(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "path": path, "entries": [] }))
 }
 
+#[instrument(skip(params))]
 pub fn exists(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let path = params
         .get("path")
@@ -55,6 +60,7 @@ pub fn exists(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "path": path, "exists": false }))
 }
 
+#[instrument(skip(params))]
 pub fn delete(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let path = params
         .get("path")
@@ -63,6 +69,7 @@ pub fn delete(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "path": path, "deleted": true }))
 }
 
+#[instrument(skip(params))]
 pub fn watch(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let path = params
         .get("path")

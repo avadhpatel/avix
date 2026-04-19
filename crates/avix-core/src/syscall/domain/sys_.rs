@@ -1,11 +1,13 @@
 use std::path::Path;
 
 use serde_json::{json, Value};
+use tracing::instrument;
 
 use crate::secrets::SecretStore;
 use crate::service::installer::{InstallRequest, ServiceInstaller};
 use crate::syscall::{SyscallContext, SyscallError, SyscallResult};
 
+#[instrument(skip(_params))]
 pub fn info(_ctx: &SyscallContext, _params: Value) -> SyscallResult {
     Ok(json!({
         "version": "0.1.0",
@@ -15,11 +17,13 @@ pub fn info(_ctx: &SyscallContext, _params: Value) -> SyscallResult {
     }))
 }
 
+#[instrument(skip(params))]
 pub fn boot_log(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(100);
     Ok(json!({ "lines": [], "limit": limit }))
 }
 
+#[instrument(skip(params))]
 pub fn reboot(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let confirm = params
         .get("confirm")
@@ -38,6 +42,7 @@ pub fn reboot(_ctx: &SyscallContext, params: Value) -> SyscallResult {
 /// - Service-owned secrets (`"service:<name>"`) can only be read by callers
 ///   whose token's `issued_to.agent_name` equals `<name>` or by admins (`auth:admin`).
 /// - User-owned secrets (`"user:<name>"`) can be read by any authorised caller.
+#[instrument(skip(params, secret_store))]
 pub fn secret_get(
     ctx: &SyscallContext,
     params: Value,
@@ -73,6 +78,7 @@ pub fn secret_get(
     Ok(json!({ "value": value }))
 }
 
+#[instrument(skip(params))]
 pub async fn install(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
     if !ctx.token.has_tool("auth:admin") {
         return Err(SyscallError::Eperm(ctx.caller_pid, "sys/install".into()));

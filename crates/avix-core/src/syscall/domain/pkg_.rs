@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use tracing::instrument;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -18,6 +19,7 @@ pub struct InstallQuota {
 }
 
 impl InstallQuota {
+    #[instrument]
     pub fn new(limit: u32, window: Duration) -> Self {
         Self {
             window,
@@ -26,6 +28,7 @@ impl InstallQuota {
         }
     }
 
+    #[instrument(skip(self))]
     pub fn check(&self, username: &str) -> Result<(), SyscallError> {
         let mut map = self.counters.lock().unwrap();
         let now = Instant::now();
@@ -81,6 +84,7 @@ fn parse_scope(params: &Value, username: &str) -> Result<InstallScope, SyscallEr
     }
 }
 
+#[instrument(skip(params))]
 pub async fn install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
     check_capability(ctx, "proc/package/install-agent")?;
 
@@ -143,6 +147,7 @@ pub async fn install_agent(ctx: &SyscallContext, params: Value, avix_root: &Path
     }
 }
 
+#[instrument(skip(params))]
 pub async fn install_service(
     ctx: &SyscallContext,
     params: Value,
@@ -212,11 +217,13 @@ pub async fn install_service(
     }
 }
 
+#[instrument(skip(params))]
 pub fn install_agent_sync(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
     let rt = tokio::runtime::Handle::current();
     rt.block_on(install_agent(ctx, params, avix_root))
 }
 
+#[instrument(skip(params))]
 pub fn install_service_sync(
     ctx: &SyscallContext,
     params: Value,
@@ -226,6 +233,7 @@ pub fn install_service_sync(
     rt.block_on(install_service(ctx, params, avix_root))
 }
 
+#[instrument(skip(params))]
 pub fn uninstall_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
     check_capability(ctx, "proc/package/install-agent")?;
 
@@ -261,6 +269,7 @@ pub fn uninstall_agent(ctx: &SyscallContext, params: Value, avix_root: &Path) ->
     Ok(json!({ "uninstalled": name }))
 }
 
+#[instrument(skip(params))]
 pub fn uninstall_service(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
     check_capability(ctx, "proc/package/install-service")?;
 
@@ -301,6 +310,7 @@ pub fn uninstall_service(ctx: &SyscallContext, params: Value, avix_root: &Path) 
     Ok(json!({ "uninstalled": uninstalled }))
 }
 
+#[instrument(skip(params))]
 pub fn trust_add(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
     check_capability(ctx, "auth:admin")?;
 
@@ -331,6 +341,7 @@ pub fn trust_add(ctx: &SyscallContext, params: Value, avix_root: &Path) -> Sysca
     }))
 }
 
+#[instrument(skip(_params))]
 pub fn trust_list(_ctx: &SyscallContext, _params: Value, avix_root: &Path) -> SyscallResult {
     let trust_store = TrustStore::new(avix_root);
     let keys = trust_store
@@ -350,6 +361,7 @@ pub fn trust_list(_ctx: &SyscallContext, _params: Value, avix_root: &Path) -> Sy
     Ok(json!({ "keys": entries }))
 }
 
+#[instrument(skip(params))]
 pub fn trust_remove(ctx: &SyscallContext, params: Value, avix_root: &Path) -> SyscallResult {
     check_capability(ctx, "auth:admin")?;
     let fingerprint = params["fingerprint"]
@@ -362,6 +374,7 @@ pub fn trust_remove(ctx: &SyscallContext, params: Value, avix_root: &Path) -> Sy
     Ok(json!({ "removed": fingerprint }))
 }
 
+#[instrument(skip(source))]
 async fn fetch_source_bytes(source: &PackageSource) -> Result<Vec<u8>, AvixError> {
     match source {
         PackageSource::HttpUrl(url) => {

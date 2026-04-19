@@ -1,4 +1,5 @@
 use serde_json::Value;
+use tracing::instrument;
 
 use crate::syscall::{
     domain::{cap_, fs_, pkg_, proc_, sched_, snap_, sys_},
@@ -8,6 +9,7 @@ use crate::syscall::{
 pub struct SyscallHandler;
 
 impl SyscallHandler {
+    #[instrument(skip(self, params))]
     pub fn dispatch(&self, ctx: &SyscallContext, method: &str, params: Value) -> SyscallResult {
         // Check capability
         if !ctx.token.has_tool(method) {

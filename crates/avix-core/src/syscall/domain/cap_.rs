@@ -1,7 +1,9 @@
 use serde_json::{json, Value};
+use tracing::instrument;
 
 use crate::syscall::{SyscallContext, SyscallError, SyscallResult};
 
+#[instrument(skip(params))]
 pub fn issue(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let target_pid = params
         .get("target_pid")
@@ -19,6 +21,7 @@ pub fn issue(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     }))
 }
 
+#[instrument(skip(params))]
 pub fn validate(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let token_id = params
         .get("token_id")
@@ -27,6 +30,7 @@ pub fn validate(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "token_id": token_id, "valid": true }))
 }
 
+#[instrument(skip(params))]
 pub fn revoke(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let token_id = params
         .get("token_id")
@@ -35,6 +39,7 @@ pub fn revoke(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "token_id": token_id, "revoked": true }))
 }
 
+#[instrument(skip(params))]
 pub fn policy(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let action = params
         .get("action")

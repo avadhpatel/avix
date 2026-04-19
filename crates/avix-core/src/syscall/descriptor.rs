@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyscallDescriptor {
@@ -14,6 +15,7 @@ pub struct SyscallDescriptor {
 }
 
 impl SyscallDescriptor {
+    #[instrument]
     pub fn new(
         name: &str,
         domain: &str,

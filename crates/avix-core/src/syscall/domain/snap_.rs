@@ -1,7 +1,9 @@
 use serde_json::{json, Value};
+use tracing::instrument;
 
 use crate::syscall::{SyscallContext, SyscallError, SyscallResult};
 
+#[instrument(skip(params))]
 pub fn save(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let pid = params
         .get("pid")
@@ -10,6 +12,7 @@ pub fn save(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "snapshot_id": "snap-1", "pid": pid }))
 }
 
+#[instrument(skip(params))]
 pub fn restore(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let snapshot_id = params
         .get("snapshot_id")
@@ -18,6 +21,7 @@ pub fn restore(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "snapshot_id": snapshot_id, "restored": true }))
 }
 
+#[instrument(skip(params))]
 pub fn list(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let pid = params
         .get("pid")
@@ -26,6 +30,7 @@ pub fn list(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "pid": pid, "snapshots": [] }))
 }
 
+#[instrument(skip(params))]
 pub fn delete(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let snapshot_id = params
         .get("snapshot_id")

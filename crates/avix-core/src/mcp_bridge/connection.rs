@@ -211,6 +211,7 @@ mod tests {
     use std::collections::VecDeque;
     use tokio::sync::Mutex;
 
+    #[derive(Debug)]
     struct MockTransport {
         responses: Mutex<VecDeque<serde_json::Value>>,
         sent: Mutex<Vec<serde_json::Value>>,

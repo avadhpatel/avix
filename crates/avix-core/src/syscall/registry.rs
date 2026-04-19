@@ -1,5 +1,6 @@
 use super::descriptor::SyscallDescriptor;
 use std::collections::HashMap;
+use tracing::instrument;
 
 pub struct SyscallRegistry {
     syscalls: Vec<SyscallDescriptor>,
@@ -7,6 +8,7 @@ pub struct SyscallRegistry {
 }
 
 impl SyscallRegistry {
+    #[instrument]
     pub fn new() -> Self {
         let syscalls = vec![
             SyscallDescriptor::new(
@@ -283,14 +285,17 @@ impl SyscallRegistry {
         Self { syscalls, by_name }
     }
 
+    #[instrument(skip(self))]
     pub fn list(&self) -> &[SyscallDescriptor] {
         &self.syscalls
     }
 
+    #[instrument(skip(self))]
     pub fn get(&self, name: &str) -> Option<&SyscallDescriptor> {
         self.by_name.get(name).map(|&i| &self.syscalls[i])
     }
 
+    #[instrument(skip(self))]
     pub fn list_by_domain(&self, domain: &str) -> Vec<&SyscallDescriptor> {
         self.syscalls
             .iter()
@@ -298,6 +303,7 @@ impl SyscallRegistry {
             .collect()
     }
 
+    #[instrument(skip(self))]
     pub fn domains(&self) -> Vec<&str> {
         let mut domains: Vec<&str> = self.syscalls.iter().map(|s| s.domain.as_str()).collect();
         domains.sort();

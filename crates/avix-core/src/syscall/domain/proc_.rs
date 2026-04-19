@@ -1,7 +1,9 @@
 use serde_json::{json, Value};
+use tracing::instrument;
 
 use crate::syscall::{SyscallContext, SyscallError, SyscallResult};
 
+#[instrument(skip(params))]
 pub fn spawn(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let name = params
         .get("name")
@@ -10,6 +12,7 @@ pub fn spawn(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "pid": 100, "name": name, "status": "running" }))
 }
 
+#[instrument(skip(params))]
 pub fn kill(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let pid = params
         .get("pid")
@@ -18,10 +21,12 @@ pub fn kill(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "killed": pid }))
 }
 
+#[instrument(skip(_params))]
 pub fn list(_ctx: &SyscallContext, _params: Value) -> SyscallResult {
     Ok(json!({ "processes": [] }))
 }
 
+#[instrument(skip(params))]
 pub fn info(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let pid = params
         .get("pid")
@@ -30,6 +35,7 @@ pub fn info(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "pid": pid, "status": "running" }))
 }
 
+#[instrument(skip(params))]
 pub fn wait(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let pid = params
         .get("pid")
@@ -38,6 +44,7 @@ pub fn wait(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     Ok(json!({ "pid": pid, "exit_code": 0 }))
 }
 
+#[instrument(skip(params))]
 pub fn signal(_ctx: &SyscallContext, params: Value) -> SyscallResult {
     let pid = params
         .get("pid")
