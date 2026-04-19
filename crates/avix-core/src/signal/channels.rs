@@ -11,23 +11,28 @@ use tokio::sync::{mpsc, Mutex};
 use crate::signal::kind::Signal;
 use crate::types::Pid;
 
+use tracing::instrument;
+
 /// Shared registry mapping agent PIDs to their inbound signal senders.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct SignalChannelRegistry {
     inner: Arc<Mutex<HashMap<u64, mpsc::Sender<Signal>>>>,
 }
 
 impl SignalChannelRegistry {
+    #[instrument]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Register the sender for `pid`.  Overwrites any previous registration.
+    #[instrument]
     pub async fn register(&self, pid: Pid, tx: mpsc::Sender<Signal>) {
         self.inner.lock().await.insert(pid.as_u64(), tx);
     }
 
     /// Deregister a previously registered PID (called at executor exit).
+    #[instrument]
     pub async fn unregister(&self, pid: Pid) {
         self.inner.lock().await.remove(&pid.as_u64());
     }
@@ -36,6 +41,7 @@ impl SignalChannelRegistry {
     ///
     /// Returns `true` if a channel existed and the send succeeded, `false` otherwise
     /// (agent not yet registered or has already exited).
+    #[instrument]
     pub async fn send(&self, pid: Pid, signal: Signal) -> bool {
         let guard = self.inner.lock().await;
         if let Some(tx) = guard.get(&pid.as_u64()) {
