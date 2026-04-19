@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt};
 use serde_json::json;
 use std::sync::Arc;
-use tracing::{debug, warn};
+use tracing::{debug, warn, instrument};
 
 /// A `LlmClient` that talks directly to any OpenAI-compatible HTTP endpoint.
 ///

@@ -2,6 +2,7 @@ use crate::llm_svc::routing::{ProviderStatus, RoutingEngine};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
+use tracing::instrument;
 
 pub struct HealthMonitor {
     routing: Arc<RoutingEngine>,

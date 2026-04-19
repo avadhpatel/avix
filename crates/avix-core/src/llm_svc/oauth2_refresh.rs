@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
+use tracing::instrument;
 
 #[derive(Debug, Clone)]
 pub struct OAuth2TokenState {
@@ -35,6 +36,7 @@ impl RefreshScheduler {
 
     /// Schedule a continuous refresh loop for a provider.
     /// `on_degraded` is called when refresh fails (to update routing engine status).
+    #[instrument(skip_all)]
     pub async fn schedule<F>(
         &self,
         config: RefreshConfig,

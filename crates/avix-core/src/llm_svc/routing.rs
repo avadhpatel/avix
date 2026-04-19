@@ -4,6 +4,7 @@ use crate::types::Modality;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::instrument;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProviderStatus {
@@ -61,6 +62,7 @@ impl RoutingEngine {
         self
     }
 
+    #[instrument(skip(self))]
     pub async fn update_status(&self, provider: &str, status: ProviderStatus) {
         self.status
             .write()
@@ -73,6 +75,7 @@ impl RoutingEngine {
     /// 2. Verify provider exists
     /// 3. Verify provider supports the modality
     /// 4. Check provider health status — if Unavailable, try text fallback
+    #[instrument(skip(self))]
     pub async fn resolve(
         &self,
         modality: Modality,

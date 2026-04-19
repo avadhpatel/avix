@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use tokio::net::unix::OwnedWriteHalf;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, instrument};
 
 use crate::config::LlmConfig;
 use crate::error::AvixError;
@@ -44,6 +44,7 @@ impl LlmIpcServer {
     /// Regular `llm/*` requests use request-response (ADR-05).
     /// `llm/stream_complete` requests keep the connection open, writing
     /// `llm.stream.chunk` notifications followed by a final response.
+    #[instrument(skip(self))]
     pub async fn start(self) -> Result<IpcServerHandle, AvixError> {
         let (server, handle) = IpcServer::bind(self.sock_path.clone()).await?;
         info!(sock = %self.sock_path.display(), "llm IPC server bound");
