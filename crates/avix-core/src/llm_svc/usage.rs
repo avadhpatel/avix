@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::instrument;
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct TextUsage {
@@ -52,10 +53,12 @@ pub struct UsageTracker {
 }
 
 impl UsageTracker {
+    #[instrument]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[instrument]
     pub async fn record_text(&self, provider: &str, input: u64, output: u64) {
         let mut map = self.inner.write().await;
         let e = map.entry(provider.to_string()).or_default();
@@ -64,21 +67,25 @@ impl UsageTracker {
         e.text.requests += 1;
     }
 
+    #[instrument]
     pub async fn record_text_error(&self, provider: &str) {
         let mut map = self.inner.write().await;
         map.entry(provider.to_string()).or_default().text.errors += 1;
     }
 
+    #[instrument]
     pub async fn record_image(&self, provider: &str) {
         let mut map = self.inner.write().await;
         map.entry(provider.to_string()).or_default().image.requests += 1;
     }
 
+    #[instrument]
     pub async fn record_image_error(&self, provider: &str) {
         let mut map = self.inner.write().await;
         map.entry(provider.to_string()).or_default().image.errors += 1;
     }
 
+    #[instrument]
     pub async fn record_speech(&self, provider: &str, chars: u64) {
         let mut map = self.inner.write().await;
         let e = map.entry(provider.to_string()).or_default();
@@ -86,11 +93,13 @@ impl UsageTracker {
         e.speech.requests += 1;
     }
 
+    #[instrument]
     pub async fn record_speech_error(&self, provider: &str) {
         let mut map = self.inner.write().await;
         map.entry(provider.to_string()).or_default().speech.errors += 1;
     }
 
+    #[instrument]
     pub async fn record_transcription(&self, provider: &str, audio_sec: f64) {
         let mut map = self.inner.write().await;
         let e = map.entry(provider.to_string()).or_default();
@@ -98,6 +107,7 @@ impl UsageTracker {
         e.transcription.requests += 1;
     }
 
+    #[instrument]
     pub async fn record_transcription_error(&self, provider: &str) {
         let mut map = self.inner.write().await;
         map.entry(provider.to_string())
@@ -106,6 +116,7 @@ impl UsageTracker {
             .errors += 1;
     }
 
+    #[instrument]
     pub async fn record_embedding(&self, provider: &str, input_tokens: u64) {
         let mut map = self.inner.write().await;
         let e = map.entry(provider.to_string()).or_default();
@@ -113,6 +124,7 @@ impl UsageTracker {
         e.embedding.requests += 1;
     }
 
+    #[instrument]
     pub async fn record_embedding_error(&self, provider: &str) {
         let mut map = self.inner.write().await;
         map.entry(provider.to_string())
@@ -121,6 +133,7 @@ impl UsageTracker {
             .errors += 1;
     }
 
+    #[instrument]
     pub async fn snapshot(&self) -> HashMap<String, ProviderUsage> {
         self.inner.read().await.clone()
     }
@@ -130,6 +143,7 @@ impl UsageTracker {
 mod tests {
     use super::*;
 
+    #[instrument]
     #[tokio::test]
     async fn test_record_text_accumulates() {
         let tracker = UsageTracker::new();
