@@ -1,11 +1,13 @@
 use std::time::Instant;
 
 use serde_json::Value;
+use tracing::instrument;
 
 use crate::mcp_bridge::client::{McpClient, McpClientError, McpToolInfo, StdioTransport};
 use crate::mcp_bridge::config::McpServerConfig;
 
 /// State of the connection to an MCP server.
+#[derive(Debug)]
 pub enum ConnectionState {
     Connected {
         client: Box<McpClient<StdioTransport>>,
@@ -25,6 +27,7 @@ pub enum ConnectionState {
 /// Holds the tool list discovered at the last successful `tools/list`, the
 /// Avix namespace prefix (e.g. `"mcp/github/"` or `"github/"`), and the
 /// underlying `McpClient`.
+#[derive(Debug)]
 pub struct McpServerConnection {
     server_name: String,
     /// Avix tool namespace prefix including trailing slash, e.g. `"mcp/github/"`.
@@ -37,6 +40,7 @@ pub struct McpServerConnection {
 
 impl McpServerConnection {
     /// Connect to the MCP server described by `config` and run `initialize`.
+    #[instrument]
     pub async fn connect(
         server_name: &str,
         config: McpServerConfig,
@@ -61,6 +65,7 @@ impl McpServerConnection {
     ///
     /// Returns the newly cached tools on success.  On failure the state is set
     /// to `Degraded`.
+    #[instrument]
     pub async fn discover_tools(&mut self) -> Result<&[McpToolInfo], McpClientError> {
         match &mut self.state {
             ConnectionState::Connected { client } => match client.list_tools().await {
@@ -84,6 +89,7 @@ impl McpServerConnection {
     /// `avix_tool_name` is the full Avix name such as `"mcp/github/list-prs"`.
     /// The namespace prefix is stripped before the call is forwarded to the MCP
     /// server, so the MCP server receives `"list-prs"`.
+    #[instrument]
     pub async fn forward_call(
         &mut self,
         avix_tool_name: &str,
@@ -115,6 +121,7 @@ impl McpServerConnection {
     }
 
     /// Attempt to reconnect to the MCP server after a degraded state.
+    #[instrument]
     pub async fn reconnect(&mut self) -> Result<(), McpClientError> {
         let transport =
             StdioTransport::spawn(&self.config.command, &self.config.args, &self.config.env)
@@ -127,15 +134,18 @@ impl McpServerConnection {
         Ok(())
     }
 
+    #[instrument]
     pub fn namespace(&self) -> &str {
         &self.namespace
     }
 
+    #[instrument]
     pub fn server_name(&self) -> &str {
         &self.server_name
     }
 
     /// Return the cached tool names (full Avix names with namespace prefix).
+    #[instrument]
     pub fn tool_names(&self) -> impl Iterator<Item = String> + '_ {
         self.tools
             .iter()
@@ -143,10 +153,12 @@ impl McpServerConnection {
     }
 
     /// Return the cached tool info slice.
+    #[instrument]
     pub fn tools(&self) -> &[McpToolInfo] {
         &self.tools
     }
 
+    #[instrument]
     pub fn is_healthy(&self) -> bool {
         match &self.state {
             ConnectionState::Connected { .. } => true,
@@ -156,10 +168,12 @@ impl McpServerConnection {
         }
     }
 
+    #[instrument]
     pub fn is_degraded(&self) -> bool {
         matches!(self.state, ConnectionState::Degraded { .. })
     }
 
+    #[instrument]
     pub fn health_check_interval_secs(&self) -> u64 {
         self.config.health_check_interval_secs
     }
@@ -167,6 +181,7 @@ impl McpServerConnection {
     /// Construct a connection directly without spawning a process.
     /// Only available in tests.
     #[cfg(test)]
+    #[instrument]
     pub fn new_for_test(
         server_name: &str,
         namespace: &str,

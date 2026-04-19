@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::error::AvixError;
@@ -22,6 +22,7 @@ type Connections = Arc<RwLock<HashMap<String, McpServerConnection>>>;
 // ── Tool registration helpers ─────────────────────────────────────────────────
 
 /// Build and send a single `ipc.tool-add` request for the given tool list.
+#[instrument]
 async fn register_tools_with_avix(
     kernel_sock: &Path,
     token: &str,
@@ -75,6 +76,7 @@ async fn register_tools_with_avix(
 }
 
 /// Send `ipc.tool-remove` for the given tool names.
+#[instrument]
 async fn deregister_tools_from_avix(
     kernel_sock: &Path,
     token: &str,
@@ -110,6 +112,7 @@ async fn deregister_tools_from_avix(
 
 // ── Health monitor ────────────────────────────────────────────────────────────
 
+#[instrument]
 async fn health_monitor(
     connections: Connections,
     kernel_sock: PathBuf,
@@ -198,6 +201,7 @@ async fn health_monitor(
 // ── McpBridgeRunner ───────────────────────────────────────────────────────────
 
 /// Orchestrates the full MCP bridge lifecycle.
+#[derive(Debug)]
 pub struct McpBridgeRunner {
     config: McpConfig,
     kernel_sock: PathBuf,
@@ -206,6 +210,7 @@ pub struct McpBridgeRunner {
 }
 
 impl McpBridgeRunner {
+    #[instrument]
     pub fn new(
         config: McpConfig,
         kernel_sock: PathBuf,
@@ -226,6 +231,7 @@ impl McpBridgeRunner {
     /// 3. Register tools via `ipc.tool-add`
     /// 4. Bind `IpcServer` on `svc_sock`
     /// 5. Start health monitor
+    #[instrument]
     pub async fn start(self) -> Result<RunningBridge, AvixError> {
         let mut connections: HashMap<String, McpServerConnection> = HashMap::new();
         let mut registered_tool_names: Vec<String> = Vec::new();
@@ -360,6 +366,7 @@ impl McpBridgeRunner {
 
 // ── Tool call handler ─────────────────────────────────────────────────────────
 
+#[instrument]
 async fn handle_tool_call(msg: IpcMessage, connections: Connections) -> Option<JsonRpcResponse> {
     let req = match msg {
         IpcMessage::Request(r) => r,
@@ -423,6 +430,7 @@ async fn handle_tool_call(msg: IpcMessage, connections: Connections) -> Option<J
 // ── RunningBridge ─────────────────────────────────────────────────────────────
 
 /// A running MCP bridge instance. Call `shutdown()` to stop gracefully.
+#[derive(Debug)]
 pub struct RunningBridge {
     server_handle: IpcServerHandle,
     server_join: tokio::task::JoinHandle<()>,
@@ -433,6 +441,7 @@ pub struct RunningBridge {
 }
 
 impl RunningBridge {
+    #[instrument]
     pub fn registered_tool_names(&self) -> &[String] {
         &self.registered_tool_names
     }
@@ -441,6 +450,7 @@ impl RunningBridge {
     /// 1. Cancel the IpcServer
     /// 2. Send `ipc.tool-remove` for all registered tools
     /// 3. Abort the health monitor
+    #[instrument]
     pub async fn shutdown(self) -> Result<(), AvixError> {
         // 1. Stop accepting new connections.
         self.server_handle.cancel();

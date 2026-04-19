@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::error::AvixError;
 
@@ -19,6 +20,7 @@ pub struct McpConfig {
 
 impl McpConfig {
     /// Load and parse `/etc/avix/mcp.json` from `path`.
+    #[instrument]
     pub fn load(path: &Path) -> Result<Self, AvixError> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| AvixError::NotFound(format!("cannot read {}: {e}", path.display())))?;
@@ -27,6 +29,7 @@ impl McpConfig {
     }
 
     /// Return an empty config (no servers).
+    #[instrument]
     pub fn empty() -> Self {
         Self::default()
     }
@@ -59,6 +62,7 @@ impl McpServerConfig {
     /// - `mount = "/tools/github"` → `"github/"`
     /// - `mount = "/tools/mcp/foo"` → `"mcp/foo/"`
     /// - `mount = "/tools/google-workspace"` → `"google-workspace/"`
+    #[instrument]
     pub fn tool_namespace(&self, server_name: &str) -> String {
         match &self.mount {
             None => format!("{}/", server_name),

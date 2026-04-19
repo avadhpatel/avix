@@ -1,5 +1,6 @@
 use crate::error::AvixError;
 use crate::types::tool::ToolName;
+use tracing::instrument;
 
 #[derive(Debug, Clone)]
 pub struct McpToolDescriptor {
@@ -8,13 +9,15 @@ pub struct McpToolDescriptor {
     pub server: String,
 }
 
+#[derive(Debug)]
 pub struct McpBridge {
     server_name: String,
     tools: Vec<McpToolDescriptor>,
 }
 
 impl McpBridge {
-    pub fn new(server_name: impl Into<String>) -> Self {
+    #[instrument]
+    pub fn new(server_name: impl Into<String> + std::fmt::Debug) -> Self {
         Self {
             server_name: server_name.into(),
             tools: Vec::new(),
@@ -22,6 +25,7 @@ impl McpBridge {
     }
 
     /// Register a raw MCP tool name (e.g. "create-issue") with prefix
+    #[instrument]
     pub fn register_tool(
         &mut self,
         raw_name: &str,
@@ -39,15 +43,18 @@ impl McpBridge {
         Ok(desc)
     }
 
+    #[instrument]
     pub fn tools(&self) -> &[McpToolDescriptor] {
         &self.tools
     }
 
+    #[instrument]
     pub fn tool_count(&self) -> usize {
         self.tools.len()
     }
 
     /// Strip the mcp/<server>/ prefix to get the raw outbound tool name
+    #[instrument]
     pub fn outbound_name(tool_name: &str, server: &str) -> Option<String> {
         let prefix = format!("mcp/{}/", server);
         tool_name.strip_prefix(&prefix).map(|s| s.to_string())

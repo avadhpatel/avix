@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tracing::instrument;
 
 /// Information about a single tool exposed by an MCP server.
 #[derive(Debug, Clone)]
@@ -43,7 +44,7 @@ impl From<McpClientError> for crate::error::AvixError {
 
 /// Abstraction over the underlying MCP transport so tests can inject a mock.
 #[async_trait]
-pub trait McpTransportIO: Send + Sync {
+pub trait McpTransportIO: Send + Sync + std::fmt::Debug {
     async fn send(&mut self, msg: Value) -> Result<(), McpClientError>;
     async fn recv(&mut self) -> Result<Value, McpClientError>;
 }
@@ -52,6 +53,7 @@ pub trait McpTransportIO: Send + Sync {
 
 /// Stdio transport: spawns a subprocess and communicates via its stdin/stdout
 /// using newline-delimited JSON.
+#[derive(Debug)]
 pub struct StdioTransport {
     child: tokio::process::Child,
     stdin: tokio::process::ChildStdin,
@@ -60,6 +62,7 @@ pub struct StdioTransport {
 
 impl StdioTransport {
     /// Spawn the MCP server subprocess.
+    #[instrument]
     pub async fn spawn(
         command: &str,
         args: &[String],
@@ -135,6 +138,7 @@ impl Drop for StdioTransport {
 // ── HTTP transport ────────────────────────────────────────────────────────────
 
 /// HTTP transport: sends MCP JSON-RPC messages as POST requests.
+#[derive(Debug)]
 pub struct HttpTransport {
     url: String,
     client: reqwest::Client,
@@ -142,6 +146,7 @@ pub struct HttpTransport {
 }
 
 impl HttpTransport {
+    #[instrument]
     pub fn new(url: String) -> Self {
         Self {
             url,
@@ -206,6 +211,7 @@ thread_local! {
 // ── McpClient ────────────────────────────────────────────────────────────────
 
 /// High-level MCP client. Generic over the transport.
+#[derive(Debug)]
 pub struct McpClient<T: McpTransportIO> {
     transport: T,
     next_id: u64,
@@ -213,7 +219,8 @@ pub struct McpClient<T: McpTransportIO> {
     notification_buffer: Vec<Value>,
 }
 
-impl<T: McpTransportIO> McpClient<T> {
+impl<T: McpTransportIO + std::fmt::Debug> McpClient<T> {
+    #[instrument]
     pub fn new(transport: T) -> Self {
         Self {
             transport,
@@ -222,6 +229,7 @@ impl<T: McpTransportIO> McpClient<T> {
         }
     }
 
+    #[instrument]
     fn next_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
@@ -229,6 +237,7 @@ impl<T: McpTransportIO> McpClient<T> {
     }
 
     /// Send MCP `initialize` and wait for the server's `initialized` notification.
+    #[instrument]
     pub async fn initialize(&mut self) -> Result<(), McpClientError> {
         let id = self.next_id();
         let req = serde_json::json!({
@@ -256,6 +265,7 @@ impl<T: McpTransportIO> McpClient<T> {
     }
 
     /// Call `tools/list` and handle pagination via `nextCursor`.
+    #[instrument]
     pub async fn list_tools(&mut self) -> Result<Vec<McpToolInfo>, McpClientError> {
         let mut all_tools = Vec::new();
         let mut cursor: Option<String> = None;
@@ -318,6 +328,7 @@ impl<T: McpTransportIO> McpClient<T> {
     }
 
     /// Call `tools/call` and return the content array as a JSON value.
+    #[instrument]
     pub async fn call_tool(
         &mut self,
         name: &str,
@@ -339,6 +350,7 @@ impl<T: McpTransportIO> McpClient<T> {
 
     /// Send a request and wait for the response matching `expected_id`.
     /// Responses not matching the expected id are buffered.
+    #[instrument]
     async fn rpc_raw(&mut self, expected_id: u64, req: Value) -> Result<Value, McpClientError> {
         self.transport.send(req).await?;
         loop {
@@ -383,6 +395,7 @@ mod tests {
     use tokio::sync::Mutex;
 
     /// A mock transport that replays canned JSON responses.
+    #[derive(Debug)]
     struct MockTransport {
         responses: Mutex<VecDeque<Value>>,
         sent: Mutex<Vec<Value>>,
@@ -403,12 +416,14 @@ mod tests {
 
     #[async_trait]
     impl McpTransportIO for MockTransport {
-        async fn send(&mut self, msg: Value) -> Result<(), McpClientError> {
+    #[instrument]
+    async fn send(&mut self, msg: Value) -> Result<(), McpClientError> {
             self.sent.lock().await.push(msg);
             Ok(())
         }
 
-        async fn recv(&mut self) -> Result<Value, McpClientError> {
+    #[instrument]
+    async fn recv(&mut self) -> Result<Value, McpClientError> {
             self.responses
                 .lock()
                 .await

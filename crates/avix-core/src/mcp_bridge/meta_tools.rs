@@ -11,6 +11,7 @@
 //! All tools return YAML in the `apiVersion: avix/v1` manifest format.
 
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::ipc::message::{JsonRpcRequest, JsonRpcResponse};
 use crate::mcp_bridge::connection::McpServerConnection;
@@ -168,6 +169,7 @@ pub struct McpToolEntry {
 
 /// Dispatch a meta-tool call. Returns `Some(response)` if the method is a
 /// known meta-tool name, `None` if it should be handled elsewhere.
+#[instrument]
 pub async fn handle_meta_tool(
     req: &JsonRpcRequest,
     connections: &tokio::sync::RwLock<std::collections::HashMap<String, McpServerConnection>>,
@@ -182,6 +184,7 @@ pub async fn handle_meta_tool(
 
 // ── mcp/servers ───────────────────────────────────────────────────────────────
 
+#[instrument]
 async fn handle_servers(
     req: &JsonRpcRequest,
     connections: &tokio::sync::RwLock<std::collections::HashMap<String, McpServerConnection>>,
@@ -215,6 +218,7 @@ async fn handle_servers(
 
 // ── mcp/server-status ─────────────────────────────────────────────────────────
 
+#[instrument]
 async fn handle_server_status(
     req: &JsonRpcRequest,
     connections: &tokio::sync::RwLock<std::collections::HashMap<String, McpServerConnection>>,
@@ -274,6 +278,7 @@ async fn handle_server_status(
 
 // ── mcp/tools ─────────────────────────────────────────────────────────────────
 
+#[instrument]
 async fn handle_tools(
     req: &JsonRpcRequest,
     connections: &tokio::sync::RwLock<std::collections::HashMap<String, McpServerConnection>>,
@@ -322,6 +327,7 @@ async fn handle_tools(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+#[instrument]
 fn connection_status(conn: &McpServerConnection) -> String {
     if conn.is_healthy() {
         "connected".into()
@@ -332,7 +338,8 @@ fn connection_status(conn: &McpServerConnection) -> String {
     }
 }
 
-fn yaml_response<T: Serialize>(id: &str, value: &T) -> JsonRpcResponse {
+#[instrument]
+fn yaml_response<T: Serialize + std::fmt::Debug>(id: &str, value: &T) -> JsonRpcResponse {
     match serde_yaml::to_string(value) {
         Ok(yaml) => JsonRpcResponse::ok(id, serde_json::json!({ "content": yaml })),
         Err(e) => JsonRpcResponse::err(id, -32603, &format!("YAML serialization error: {e}"), None),
