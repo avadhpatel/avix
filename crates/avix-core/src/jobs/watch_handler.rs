@@ -8,6 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tracing::instrument;
 
 use crate::error::AvixError;
 use crate::jobs::job::JobState;
@@ -15,6 +16,7 @@ use crate::jobs::registry::JobRegistry;
 
 const DEFAULT_WATCH_TIMEOUT_MS: u64 = 5_000;
 
+#[instrument]
 pub async fn handle_job_watch(
     job_id: String,
     timeout_ms: Option<u64>,

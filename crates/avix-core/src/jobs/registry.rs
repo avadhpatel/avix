@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use tokio::sync::broadcast;
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::error::AvixError;
@@ -12,15 +13,18 @@ use super::job::{Job, JobError, JobState};
 
 const EVENT_CAPACITY: usize = 256;
 
+#[derive(Debug)]
 pub struct JobRegistry {
     jobs: HashMap<String, Job>,
     events: broadcast::Sender<JobEvent>,
 }
 
 /// A receiver for all job events.
+#[derive(Debug)]
 pub struct JobEventReceiver(pub broadcast::Receiver<JobEvent>);
 
 impl JobRegistry {
+    #[instrument]
     pub fn new() -> (Self, JobEventReceiver) {
         let (tx, rx) = broadcast::channel(EVENT_CAPACITY);
         (
@@ -33,6 +37,7 @@ impl JobRegistry {
     }
 
     /// Create a new job in `Pending` state. Returns the new job ID.
+    #[instrument]
     pub fn create(&mut self, tool: &str, owner_pid: Pid) -> String {
         let id = format!("job-{}", Uuid::new_v4());
         let now = Utc::now();
@@ -51,6 +56,7 @@ impl JobRegistry {
     }
 
     /// Transition `Pending` → `Running`.
+    #[instrument]
     pub fn start(&mut self, job_id: &str) -> Result<(), AvixError> {
         let job = self.get_mut(job_id)?;
         if job.state != JobState::Pending {
@@ -71,6 +77,7 @@ impl JobRegistry {
     }
 
     /// Emit a progress event without changing state. Job must be `Running`.
+    #[instrument]
     pub fn progress(
         &mut self,
         job_id: &str,
@@ -95,6 +102,7 @@ impl JobRegistry {
     }
 
     /// Emit a log line event. Job must be `Running`.
+    #[instrument]
     pub fn log(&mut self, job_id: &str, stream: LogStream, line: String) -> Result<(), AvixError> {
         let job = self.get_mut(job_id)?;
         if job.state != JobState::Running {
@@ -112,6 +120,7 @@ impl JobRegistry {
     }
 
     /// Transition `Running` → `Done` and emit a `Complete` event.
+    #[instrument]
     pub fn complete(&mut self, job_id: &str, result: serde_json::Value) -> Result<(), AvixError> {
         let job = self.get_mut(job_id)?;
         if job.state.is_terminal() {
@@ -137,6 +146,7 @@ impl JobRegistry {
     }
 
     /// Transition `Running` → `Failed` and emit a `Fail` event.
+    #[instrument]
     pub fn fail(&mut self, job_id: &str, error: JobError) -> Result<(), AvixError> {
         let job = self.get_mut(job_id)?;
         if job.state.is_terminal() {
@@ -162,6 +172,7 @@ impl JobRegistry {
     }
 
     /// Cancel a `Running` or `Paused` job.
+    #[instrument]
     pub fn cancel(&mut self, job_id: &str) -> Result<(), AvixError> {
         let job = self.get_mut(job_id)?;
         if job.state.is_terminal() {
@@ -182,6 +193,7 @@ impl JobRegistry {
     }
 
     /// Get the current state of a job.
+    #[instrument]
     pub fn get(&self, job_id: &str) -> Result<&Job, AvixError> {
         self.jobs
             .get(job_id)
@@ -189,10 +201,12 @@ impl JobRegistry {
     }
 
     /// Subscribe to all future job events.
+    #[instrument]
     pub fn subscribe(&self) -> broadcast::Receiver<JobEvent> {
         self.events.subscribe()
     }
 
+    #[instrument]
     pub fn job_count(&self) -> usize {
         self.jobs.len()
     }

@@ -8,10 +8,12 @@
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::instrument;
 
 use crate::jobs::registry::JobRegistry;
 use crate::types::Pid;
 
+#[instrument(skip(work))]
 pub async fn start_job<F, Fut>(
     tool: &str,
     owner_pid: Pid,

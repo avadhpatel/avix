@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::types::Pid;
 
@@ -15,6 +16,7 @@ pub enum JobState {
 }
 
 impl JobState {
+    #[instrument]
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Done | Self::Failed | Self::Cancelled)
     }

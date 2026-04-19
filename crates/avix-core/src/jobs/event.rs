@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use super::job::{JobError, JobState};
 
@@ -44,6 +45,7 @@ pub enum JobEvent {
 }
 
 impl JobEvent {
+    #[instrument]
     pub fn job_id(&self) -> &str {
         match self {
             Self::StatusChange { job_id, .. } => job_id,
