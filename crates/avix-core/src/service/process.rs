@@ -7,6 +7,9 @@ use crate::service::token::ServiceToken;
 use crate::service::yaml::ServiceUnit;
 use crate::types::Pid;
 
+use tracing::instrument;
+
+#[derive(Debug)]
 pub struct ServiceProcess {
     pub name: String,
     pub pid: Pid,
@@ -15,6 +18,8 @@ pub struct ServiceProcess {
 }
 
 impl ServiceProcess {
+    #[instrument]
+
     /// Resolve the IPC socket path for this service.
     pub fn socket_path_for(run_dir: &Path, name: &str, pid: Pid) -> PathBuf {
         #[cfg(unix)]
@@ -26,6 +31,8 @@ impl ServiceProcess {
             PathBuf::from(format!(r"\\.\pipe\avix-svc-{name}-{}", pid.as_u64()))
         }
     }
+
+    #[instrument]
 
     /// Spawn the service binary described by `unit` with the token env vars injected.
     pub async fn spawn(
@@ -61,11 +68,15 @@ impl ServiceProcess {
         })
     }
 
+    #[instrument]
+
     /// True if the child process is still running.
     pub fn is_running(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
     }
 }
+
+#[instrument]
 
 pub(crate) fn build_env(
     _unit: &ServiceUnit,

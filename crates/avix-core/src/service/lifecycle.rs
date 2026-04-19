@@ -18,6 +18,8 @@ use crate::types::{
     Pid,
 };
 
+use tracing::instrument;
+
 const SERVICE_EVENT_CAPACITY: usize = 64;
 
 #[derive(Debug, Clone)]
@@ -26,6 +28,7 @@ pub struct ServiceEvent {
     pub status: String,
 }
 
+#[derive(Debug)]
 pub struct ServiceSpawnRequest {
     pub name: String,
     pub binary: String,
@@ -37,7 +40,8 @@ pub struct ServiceSpawnRequest {
 
 impl ServiceSpawnRequest {
     /// Convenience constructor with sensible defaults.
-    pub fn simple(name: impl Into<String>, binary: impl Into<String>) -> Self {
+    #[instrument]
+    pub fn simple(name: impl Into<String> + std::fmt::Debug, binary: impl Into<String> + std::fmt::Debug) -> Self {
         Self {
             name: name.into(),
             binary: binary.into(),
@@ -48,6 +52,8 @@ impl ServiceSpawnRequest {
 }
 
 impl ServiceSpawnRequest {
+    #[instrument]
+
     /// Convenience constructor: fill from a parsed `ServiceUnit`.
     pub fn from_unit(unit: &super::yaml::ServiceUnit) -> Self {
         Self {
@@ -59,6 +65,7 @@ impl ServiceSpawnRequest {
     }
 }
 
+#[derive(Debug)]
 pub struct IpcRegisterRequest {
     pub token: String,
     pub name: String,
@@ -101,6 +108,7 @@ pub struct IpcToolRemoveParams {
     pub drain: bool,
 }
 
+#[derive(Debug)]
 struct ServiceRecord {
     token: ServiceToken,
     endpoint: Option<String>,
@@ -108,6 +116,7 @@ struct ServiceRecord {
     caller_scoped: bool,
 }
 
+#[derive(Debug)]
 pub struct ServiceManager {
     services: Arc<RwLock<HashMap<String, ServiceRecord>>>,
     token_to_svc: Arc<RwLock<HashMap<String, String>>>,
@@ -118,6 +127,8 @@ pub struct ServiceManager {
 }
 
 impl ServiceManager {
+    #[instrument]
+
     pub fn new_for_test(runtime_dir: PathBuf) -> Self {
         let (tx, _) = broadcast::channel(SERVICE_EVENT_CAPACITY);
         Self {
@@ -129,6 +140,8 @@ impl ServiceManager {
             events: tx,
         }
     }
+
+    #[instrument]
 
     pub fn new_with_registry(runtime_dir: PathBuf) -> (Self, Arc<ToolRegistry>) {
         let (tx, _) = broadcast::channel(SERVICE_EVENT_CAPACITY);
@@ -143,6 +156,8 @@ impl ServiceManager {
         };
         (mgr, reg)
     }
+
+    #[instrument]
 
     pub async fn spawn_and_get_token(
         &self,
@@ -176,6 +191,8 @@ impl ServiceManager {
         Ok(token)
     }
 
+    #[instrument]
+
     /// Returns true if the named service was registered with `caller_scoped: true`.
     pub async fn is_caller_scoped(&self, service_name: &str) -> bool {
         self.services
@@ -185,6 +202,8 @@ impl ServiceManager {
             .map(|r| r.caller_scoped)
             .unwrap_or(false)
     }
+
+    #[instrument]
 
     pub async fn handle_ipc_register(
         &self,
@@ -223,6 +242,8 @@ impl ServiceManager {
         })
     }
 
+    #[instrument]
+
     async fn validate_token(&self, token_str: &str) -> Result<String, AvixError> {
         self.token_to_svc
             .read()
@@ -231,6 +252,8 @@ impl ServiceManager {
             .cloned()
             .ok_or_else(|| AvixError::CapabilityDenied("invalid service token".into()))
     }
+
+    #[instrument]
 
     pub async fn service_env(&self, name: &str) -> Result<HashMap<String, String>, AvixError> {
         let guard = self.services.read().await;
@@ -270,6 +293,8 @@ impl ServiceManager {
         Ok(env)
     }
 
+    #[instrument]
+
     /// Scan `root/services/` for installed `manifest.yaml` files.
     pub fn discover_installed(root: &Path) -> Result<Vec<ServiceUnit>, AvixError> {
         let services_dir = root.join("services");
@@ -288,6 +313,8 @@ impl ServiceManager {
         }
         Ok(units)
     }
+
+    #[instrument]
 
     /// Re-issue a fresh `ServiceToken` (with a new PID) for a restarted service.
     pub async fn respawn_token(&self, name: &str) -> Result<ServiceToken, AvixError> {
@@ -311,6 +338,7 @@ impl ServiceManager {
         .await
     }
 
+    #[instrument]
     pub async fn start_atp_bridge(self: Arc<Self>, bus: Arc<AtpEventBus>) {
         let mut rx = self.events.subscribe();
         tokio::spawn(async move {
@@ -320,6 +348,8 @@ impl ServiceManager {
             tracing::debug!("service manager ATP bridge terminated");
         });
     }
+
+    #[instrument]
 
     pub async fn handle_tool_add(&self, params: IpcToolAddParams) -> Result<(), AvixError> {
         let svc_name = self.validate_token(&params.token).await?;
@@ -355,6 +385,8 @@ impl ServiceManager {
         Ok(())
     }
 
+    #[instrument]
+
     pub async fn handle_tool_remove(&self, params: IpcToolRemoveParams) -> Result<(), AvixError> {
         let svc_name = self.validate_token(&params.token).await?;
         if let Some(reg) = &self.tool_registry {
@@ -377,6 +409,8 @@ pub struct ServiceSummary {
 }
 
 impl ServiceManager {
+    #[instrument]
+
     /// Return a snapshot of all spawned services with their current status.
     pub async fn list_running(&self) -> Vec<ServiceSummary> {
         self.services
@@ -396,6 +430,8 @@ impl ServiceManager {
             .collect()
     }
 }
+
+#[instrument]
 
 fn visibility_from_spec(spec: ToolVisibilitySpec) -> ToolVisibility {
     match spec {

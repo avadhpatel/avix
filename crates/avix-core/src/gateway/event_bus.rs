@@ -104,7 +104,7 @@ impl EventFilter {
 }
 
 /// A broadcast bus. Each WebSocket connection subscribes and filters independently.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AtpEventBus {
     tx: broadcast::Sender<BusEvent>,
 }

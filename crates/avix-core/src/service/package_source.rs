@@ -1,5 +1,7 @@
 use crate::error::AvixError;
 
+use tracing::instrument;
+
 #[derive(Debug, Clone)]
 pub enum PackageSource {
     HttpUrl(String),
@@ -12,6 +14,8 @@ pub enum PackageSource {
 }
 
 impl PackageSource {
+    #[instrument]
+
     pub async fn resolve(source: &str, version: Option<&str>) -> Result<Self, AvixError> {
         if let Some(spec) = source.strip_prefix("github:") {
             return Self::resolve_github(spec, version).await;
@@ -35,6 +39,8 @@ impl PackageSource {
             "unrecognized source: {source}"
         )))
     }
+
+    #[instrument]
 
     async fn resolve_github(spec: &str, version: Option<&str>) -> Result<Self, AvixError> {
         let parts: Vec<&str> = spec.splitn(3, '/').collect();

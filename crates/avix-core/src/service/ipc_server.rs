@@ -18,6 +18,9 @@ use crate::service::lifecycle::{
     IpcRegisterRequest, IpcToolAddParams, IpcToolRemoveParams, ServiceManager,
 };
 
+use tracing::instrument;
+
+#[derive(Debug)]
 pub struct ServiceIpcServer {
     sock_path: PathBuf,
     service_manager: Arc<ServiceManager>,
@@ -26,6 +29,8 @@ pub struct ServiceIpcServer {
 }
 
 impl ServiceIpcServer {
+    #[instrument]
+
     pub fn new(
         sock_path: PathBuf,
         service_manager: Arc<ServiceManager>,
@@ -37,6 +42,8 @@ impl ServiceIpcServer {
             avix_root,
         }
     }
+
+    #[instrument]
 
     pub async fn start(self) -> Result<IpcServerHandle, AvixError> {
         let (server, handle) = IpcServer::bind(self.sock_path.clone()).await?;
@@ -62,6 +69,8 @@ impl ServiceIpcServer {
     }
 }
 
+#[instrument]
+
 async fn handle_message(
     msg: IpcMessage,
     mgr: Arc<ServiceManager>,
@@ -79,6 +88,8 @@ async fn handle_message(
         }
     }
 }
+
+#[instrument]
 
 async fn dispatch_request(
     id: &str,

@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::Pid;
 
+use tracing::instrument;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ServiceState {
@@ -29,6 +31,8 @@ pub struct ServiceStatus {
 }
 
 impl ServiceStatus {
+    #[instrument]
+
     /// VFS path for this service's status file.
     pub fn vfs_path(name: &str) -> String {
         format!("/proc/services/{name}/status.yaml")

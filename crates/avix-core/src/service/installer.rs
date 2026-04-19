@@ -7,6 +7,9 @@ use crate::error::AvixError;
 use crate::service::install_receipt::InstallReceipt;
 use crate::service::yaml::ServiceUnit;
 
+use tracing::instrument;
+
+#[derive(Debug)]
 pub struct InstallRequest {
     /// `file:///absolute/path` or `https://…`
     pub source: String,
@@ -16,6 +19,7 @@ pub struct InstallRequest {
     pub autostart: bool,
 }
 
+#[derive(Debug)]
 pub struct InstallResult {
     pub name: String,
     pub version: String,
@@ -24,10 +28,12 @@ pub struct InstallResult {
     pub tools: Vec<String>,
 }
 
+#[derive(Debug)]
 pub struct ServiceInstaller {
     root: PathBuf,
 }
 
+#[derive(Debug)]
 struct ServiceInstallGuard {
     path: PathBuf,
     committed: bool,
@@ -55,9 +61,13 @@ impl Drop for ServiceInstallGuard {
 }
 
 impl ServiceInstaller {
+    #[instrument]
+
     pub fn new(root: PathBuf) -> Self {
         Self { root }
     }
+
+    #[instrument]
 
     pub async fn install(&self, req: InstallRequest) -> Result<InstallResult, AvixError> {
         let bytes = self.fetch(&req.source).await?;
@@ -117,6 +127,8 @@ impl ServiceInstaller {
         })
     }
 
+    #[instrument]
+
     async fn fetch(&self, source: &str) -> Result<Vec<u8>, AvixError> {
         if let Some(path) = source.strip_prefix("file://") {
             std::fs::read(path)
@@ -136,9 +148,13 @@ impl ServiceInstaller {
         }
     }
 
+    #[instrument]
+
     pub fn verify_checksum(&self, bytes: &[u8], expected: &str) -> Result<(), AvixError> {
         Self::static_verify_checksum(bytes, expected)
     }
+
+    #[instrument]
 
     pub fn static_verify_checksum(bytes: &[u8], expected: &str) -> Result<(), AvixError> {
         let (algo, expected_hex) = expected.split_once(':').ok_or_else(|| {
@@ -159,6 +175,8 @@ impl ServiceInstaller {
             ))),
         }
     }
+
+    #[instrument]
 
     pub fn extract_tarball(&self, bytes: &[u8], dest: &Path) -> Result<(), AvixError> {
         let reader: Box<dyn std::io::Read> = if Self::is_xz(bytes) {
@@ -222,9 +240,13 @@ impl ServiceInstaller {
         Ok(())
     }
 
+    #[instrument]
+
     fn is_xz(bytes: &[u8]) -> bool {
         bytes.len() >= 6 && &bytes[..6] == b"\xfd7zXZ\x00"
     }
+
+    #[instrument]
 
     pub fn check_conflicts(&self, unit: &ServiceUnit) -> Result<(), AvixError> {
         // Check for this specific version

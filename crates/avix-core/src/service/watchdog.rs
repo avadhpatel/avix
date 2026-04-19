@@ -10,18 +10,24 @@ use crate::service::lifecycle::ServiceManager;
 use crate::service::process::ServiceProcess;
 use crate::service::yaml::{parse_duration, RestartPolicy, ServiceUnit};
 
+use tracing::instrument;
+
+#[derive(Debug)]
 pub struct WatchdogEntry {
     pub unit: ServiceUnit,
     pub process: ServiceProcess,
     pub restart_count: u32,
 }
 
+#[derive(Debug)]
 pub struct ServiceWatchdog {
     pub(crate) entries: Arc<RwLock<HashMap<String, WatchdogEntry>>>,
     _handle: JoinHandle<()>,
 }
 
 impl ServiceWatchdog {
+    #[instrument]
+
     /// Start the watchdog loop.  Checks every 5 seconds and restarts dead services
     /// according to their `RestartPolicy`.
     pub fn start(
@@ -51,6 +57,8 @@ impl ServiceWatchdog {
         }
     }
 
+    #[instrument]
+
     /// Register a service process with the watchdog.
     pub async fn register(&self, unit: ServiceUnit, process: ServiceProcess) {
         self.entries.write().await.insert(
@@ -63,6 +71,8 @@ impl ServiceWatchdog {
         );
     }
 
+    #[instrument]
+
     /// Return the number of times `name` has been restarted by the watchdog.
     pub async fn restart_count(&self, name: &str) -> u32 {
         self.entries
@@ -73,6 +83,8 @@ impl ServiceWatchdog {
             .unwrap_or(0)
     }
 }
+
+#[instrument]
 
 async fn check_and_restart(
     entries: &Arc<RwLock<HashMap<String, WatchdogEntry>>>,

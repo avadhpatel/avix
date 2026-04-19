@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::agent_manifest::schema::{ManifestMetadata, PackagingMetadata};
 use crate::error::AvixError;
 
+use tracing::instrument;
+
 // ── ServiceManifest (on-disk format) ─────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -19,6 +21,8 @@ pub struct ServiceManifest {
 }
 
 impl ServiceManifest {
+    #[instrument]
+
     pub fn load(path: &Path) -> Result<Self, AvixError> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| AvixError::ConfigParse(format!("cannot read {}: {e}", path.display())))?;
@@ -81,11 +85,15 @@ fn default_source() -> ServiceSource {
 }
 
 impl ServiceUnit {
+    #[instrument]
+
     /// Load a service manifest from the given path (must be a `manifest.yaml`).
     pub fn load(path: &Path) -> Result<Self, AvixError> {
         let m = ServiceManifest::load(path)?;
         Ok(Self::from_manifest(&m))
     }
+
+    #[instrument]
 
     /// Convert from the on-disk `ServiceManifest` to the internal runtime struct.
     pub fn from_manifest(m: &ServiceManifest) -> Self {
@@ -115,6 +123,8 @@ impl ServiceUnit {
             jobs: m.spec.jobs.clone(),
         }
     }
+
+    #[instrument]
 
     pub fn load_for_service(root: &Path, name: &str) -> Result<Self, AvixError> {
         let services_dir = root.join("data").join("services");
@@ -290,6 +300,8 @@ fn default_max_active() -> u32 {
 fn default_job_timeout() -> String {
     "3600s".into()
 }
+
+#[instrument]
 
 pub fn parse_duration(s: &str) -> Result<std::time::Duration, AvixError> {
     if let Some(n) = s.strip_suffix('s') {

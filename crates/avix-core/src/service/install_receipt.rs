@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use tracing::instrument;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallReceipt {
     pub name: String,
