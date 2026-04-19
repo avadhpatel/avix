@@ -507,8 +507,39 @@ async fn dispatch_request(
                             let _ = proc_handler.resume_agent(pid).await;
                         }
                         JsonRpcResponse::ok(id, json!({ "ok": true }))
+                    } else if matches!(session.status, crate::session::SessionStatus::Idle)
+                        && !session.pids.is_empty()
+                    {
+                        // Idle with active PIDs — the owner executor is in wait_for_next_goal().
+                        // Send SIGSTART with the new goal rather than spawning a new invocation,
+                        // which would accumulate stale executors and flood invocation-conversation reads.
+                        let goal_str = input.unwrap_or(&session.goal).to_string();
+                        let owner = session.owner_pid;
+                        let payload = serde_json::json!({ "goal": goal_str });
+                        match proc_handler.send_signal(owner, "SIGSTART", payload).await {
+                            Ok(()) => {
+                                info!(session_id, owner_pid = owner, "sent SIGSTART to idle executor");
+                                JsonRpcResponse::ok(id, json!({ "pid": owner }))
+                            }
+                            Err(e) => {
+                                // Owner executor gone — fall back to spawning a new one.
+                                warn!(
+                                    error = %e,
+                                    session_id,
+                                    owner_pid = owner,
+                                    "SIGSTART failed; falling back to new invocation"
+                                );
+                                match proc_handler.resume_session(&uuid, input).await {
+                                    Ok(pid) => JsonRpcResponse::ok(id, json!({ "pid": pid })),
+                                    Err(e2) => {
+                                        warn!(error = %e2, "kernel/proc/session/resume fallback failed");
+                                        JsonRpcResponse::err(id, -32000, &e2.to_string(), None)
+                                    }
+                                }
+                            }
+                        }
                     } else {
-                        // Idle/Running session — spawn a new invocation.
+                        // Running or no active PIDs — spawn a new invocation.
                         match proc_handler.resume_session(&uuid, input).await {
                             Ok(pid) => JsonRpcResponse::ok(id, json!({ "pid": pid })),
                             Err(e) => {
