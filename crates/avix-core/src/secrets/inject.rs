@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
 use super::store::{SecretsError, SecretsStore};
+use tracing::instrument;
 
 /// Inject secrets for an agent into an environment map
+#[instrument]
 pub fn inject_secrets(
     store: &SecretsStore,
     namespace: &str,

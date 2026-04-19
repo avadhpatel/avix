@@ -7,6 +7,7 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
 };
 use thiserror::Error;
+use tracing::instrument;
 
 #[derive(Debug, Error)]
 pub enum SecretsError {
@@ -20,6 +21,8 @@ pub enum SecretsError {
     Io(#[from] std::io::Error),
 }
 
+#[derive(Debug)]
+
 pub struct SecretsStore {
     // In-memory storage: namespace -> key -> encrypted bytes
     pub(super) store: RwLock<HashMap<String, HashMap<String, Vec<u8>>>>,
@@ -27,14 +30,16 @@ pub struct SecretsStore {
 }
 
 impl SecretsStore {
-    pub fn new(master_key: [u8; 32]) -> Self {
+    #[instrument]
+pub fn new(master_key: [u8; 32]) -> Self {
         Self {
             store: RwLock::new(HashMap::new()),
             master_key,
         }
     }
 
-    pub fn put(&self, namespace: &str, key: &str, plaintext: &[u8]) -> Result<(), SecretsError> {
+    #[instrument]
+pub fn put(&self, namespace: &str, key: &str, plaintext: &[u8]) -> Result<(), SecretsError> {
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.master_key));
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
         let ciphertext = cipher
@@ -51,7 +56,8 @@ impl SecretsStore {
         Ok(())
     }
 
-    pub fn get(&self, namespace: &str, key: &str) -> Result<Vec<u8>, SecretsError> {
+    #[instrument]
+pub fn get(&self, namespace: &str, key: &str) -> Result<Vec<u8>, SecretsError> {
         let map = self.store.read().unwrap();
         let ns = map
             .get(namespace)
@@ -72,7 +78,8 @@ impl SecretsStore {
             .map_err(|_| SecretsError::DecryptionFailed)
     }
 
-    pub fn delete(&self, namespace: &str, key: &str) -> Result<(), SecretsError> {
+    #[instrument]
+pub fn delete(&self, namespace: &str, key: &str) -> Result<(), SecretsError> {
         let mut map = self.store.write().unwrap();
         if let Some(ns) = map.get_mut(namespace) {
             ns.remove(key)
@@ -81,7 +88,8 @@ impl SecretsStore {
         Ok(())
     }
 
-    pub fn list(&self, namespace: &str) -> Vec<String> {
+    #[instrument]
+pub fn list(&self, namespace: &str) -> Vec<String> {
         let map = self.store.read().unwrap();
         map.get(namespace)
             .map(|ns| ns.keys().cloned().collect())
@@ -89,7 +97,8 @@ impl SecretsStore {
     }
 
     /// VFS reads ALWAYS return EPERM
-    pub fn vfs_read(&self, _path: &str) -> Result<Vec<u8>, SecretsError> {
+    #[instrument]
+pub fn vfs_read(&self, _path: &str) -> Result<Vec<u8>, SecretsError> {
         Err(SecretsError::Eperm)
     }
 }
@@ -201,6 +210,8 @@ mod tests {
 
 // ── Disk-backed SecretStore ────────────────────────────────────────────────────
 
+#[derive(Debug)]
+
 /// Disk-backed secret store.
 ///
 /// Secrets are stored as AES-256-GCM ciphertext, hex-encoded, at:
@@ -215,7 +226,8 @@ pub struct SecretStore {
 impl SecretStore {
     /// Create a new `SecretStore` rooted at `root`, using `key` as the master key.
     /// `key` is zero-padded (or truncated) to 32 bytes.
-    pub fn new(root: &Path, key: &[u8]) -> Self {
+    #[instrument]
+pub fn new(root: &Path, key: &[u8]) -> Self {
         let mut master_key = [0u8; 32];
         let len = key.len().min(32);
         master_key[..len].copy_from_slice(&key[..len]);
@@ -225,7 +237,8 @@ impl SecretStore {
         }
     }
 
-    fn secret_path(&self, owner: &str, name: &str) -> PathBuf {
+    #[instrument]
+fn secret_path(&self, owner: &str, name: &str) -> PathBuf {
         let (owner_type, owner_name) = owner.split_once(':').unwrap_or(("other", owner));
         self.root
             .join(owner_type)
@@ -234,7 +247,8 @@ impl SecretStore {
     }
 
     /// Encrypt `value` and write to disk.
-    pub fn set(&self, owner: &str, name: &str, value: &str) -> Result<(), SecretsError> {
+    #[instrument]
+pub fn set(&self, owner: &str, name: &str, value: &str) -> Result<(), SecretsError> {
         let path = self.secret_path(owner, name);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -251,7 +265,8 @@ impl SecretStore {
     }
 
     /// Read from disk and decrypt.  Returns plaintext only in memory.
-    pub fn get(&self, owner: &str, name: &str) -> Result<String, SecretsError> {
+    #[instrument]
+pub fn get(&self, owner: &str, name: &str) -> Result<String, SecretsError> {
         let path = self.secret_path(owner, name);
         let hex_data = std::fs::read_to_string(&path)
             .map_err(|_| SecretsError::NotFound(format!("{owner}/{name}")))?;
@@ -269,13 +284,15 @@ impl SecretStore {
     }
 
     /// Delete a secret from disk.
-    pub fn delete(&self, owner: &str, name: &str) -> Result<(), SecretsError> {
+    #[instrument]
+pub fn delete(&self, owner: &str, name: &str) -> Result<(), SecretsError> {
         let path = self.secret_path(owner, name);
         std::fs::remove_file(&path).map_err(|_| SecretsError::NotFound(format!("{owner}/{name}")))
     }
 
     /// List all secret names for `owner`.
-    pub fn list(&self, owner: &str) -> Vec<String> {
+    #[instrument]
+pub fn list(&self, owner: &str) -> Vec<String> {
         let (owner_type, owner_name) = owner.split_once(':').unwrap_or(("other", owner));
         let dir = self.root.join(owner_type).join(owner_name);
         if !dir.exists() {
