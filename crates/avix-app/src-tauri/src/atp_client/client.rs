@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tracing::instrument;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -36,12 +37,14 @@ pub enum AtpEvent {
 }
 
 impl AtpEvent {
+    #[instrument]
     pub fn from_json(value: &Value) -> Option<Self> {
         serde_json::from_value(value.clone()).ok()
     }
 }
 
 impl AgentCommand {
+    #[instrument]
     pub fn to_json(&self) -> Value {
         serde_json::to_value(self).unwrap_or(json!({}))
     }

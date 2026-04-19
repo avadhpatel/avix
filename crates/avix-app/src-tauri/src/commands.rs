@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
+use tracing::instrument;
 
 use avix_client_core::atp::types::HilOutcome;
 use avix_client_core::commands::spawn_agent::spawn_agent as core_spawn_agent;
@@ -15,13 +16,13 @@ use avix_client_core::commands::{
 };
 use avix_client_core::state::SharedState;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct SpawnAgentRequest {
     pub name: String,
     pub description: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct InstallRequest {
     pub source: String,
     pub scope: String,
@@ -31,6 +32,7 @@ pub struct InstallRequest {
     pub session_id: Option<String>,
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn spawn_agent(
     state: State<'_, SharedState>,
@@ -51,6 +53,7 @@ pub async fn spawn_agent(
     }
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn resolve_hil(
     state: State<'_, SharedState>,
@@ -89,6 +92,7 @@ pub async fn resolve_hil(
     }
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn pipe_text(
     state: State<'_, SharedState>,
@@ -109,6 +113,7 @@ pub async fn pipe_text(
     }
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn list_agents(state: State<'_, SharedState>) -> Result<String, String> {
     let s = state.read().await;
@@ -126,6 +131,7 @@ pub async fn list_agents(state: State<'_, SharedState>) -> Result<String, String
     }
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn list_installed(
     state: State<'_, SharedState>,
@@ -146,6 +152,7 @@ pub async fn list_installed(
     }
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn list_invocations(
     state: State<'_, SharedState>,
@@ -167,6 +174,7 @@ pub async fn list_invocations(
     }
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn get_invocation(
     state: State<'_, SharedState>,
@@ -190,6 +198,7 @@ pub async fn get_invocation(
     }
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn get_services(state: State<'_, SharedState>) -> Result<String, String> {
     let s = state.read().await;
@@ -207,6 +216,7 @@ pub async fn get_services(state: State<'_, SharedState>) -> Result<String, Strin
     }
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn get_tools(state: State<'_, SharedState>) -> Result<String, String> {
     let s = state.read().await;
@@ -224,6 +234,7 @@ pub async fn get_tools(state: State<'_, SharedState>) -> Result<String, String> 
     }
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn get_notifications(state: State<'_, SharedState>) -> Result<String, String> {
     let s = state.read().await;
@@ -231,6 +242,7 @@ pub async fn get_notifications(state: State<'_, SharedState>) -> Result<String, 
     serde_json::to_string(&notifications).map_err(|e| e.to_string())
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn auth_status(state: State<'_, SharedState>) -> Result<String, String> {
     let s = state.read().await;
@@ -241,6 +253,7 @@ pub async fn auth_status(state: State<'_, SharedState>) -> Result<String, String
     .map_err(|e| e.to_string())
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn login(
     state: State<'_, SharedState>,
@@ -260,6 +273,7 @@ pub async fn login(
     Ok(())
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn save_layout(state: State<'_, SharedState>, layout_json: String) -> Result<(), String> {
     let _s = state.read().await;
@@ -273,6 +287,7 @@ pub async fn save_layout(state: State<'_, SharedState>, layout_json: String) -> 
     .map_err(|e| format!("Failed to save layout: {:?}", e))
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn install_agent(
     state: State<'_, SharedState>,
@@ -305,6 +320,7 @@ pub async fn install_agent(
     }
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn install_service(
     state: State<'_, SharedState>,
@@ -337,6 +353,7 @@ pub async fn install_service(
     }
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn list_installed_agents(state: State<'_, SharedState>) -> Result<String, String> {
     let s = state.read().await;
@@ -354,6 +371,7 @@ pub async fn list_installed_agents(state: State<'_, SharedState>) -> Result<Stri
     }
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn get_session(
     state: State<'_, SharedState>,
@@ -377,6 +395,7 @@ pub async fn get_session(
     }
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn get_session_messages(
     state: State<'_, SharedState>,
@@ -427,6 +446,7 @@ pub async fn get_session_messages(
     }
 }
 
+#[instrument]
 #[tauri::command]
 pub async fn resume_session(
     state: State<'_, SharedState>,

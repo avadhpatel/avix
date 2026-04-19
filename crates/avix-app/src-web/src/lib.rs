@@ -12,6 +12,7 @@ use tower_http::{
     services::{ServeDir, ServeFile},
 };
 use tracing::info;
+use tracing::instrument;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -53,6 +54,7 @@ struct Args {
     trace: Option<String>,
 }
 
+#[instrument]
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 

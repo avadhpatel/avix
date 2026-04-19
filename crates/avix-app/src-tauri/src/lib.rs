@@ -2,9 +2,11 @@ use avix_client_core::config::ClientConfig;
 use avix_client_core::state::new_shared;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
+use tracing::instrument;
 
 mod commands;
 
+#[instrument]
 pub async fn create_app_state(
 ) -> Result<avix_client_core::state::SharedState, Box<dyn std::error::Error>> {
     let config = ClientConfig::load().unwrap_or_else(|_| ClientConfig::default());
@@ -37,6 +39,7 @@ pub async fn create_app_state(
     Ok(state)
 }
 
+#[instrument]
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
     tracing::info!("avix-app starting");

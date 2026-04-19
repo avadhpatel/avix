@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tracing::warn;
+use tracing::instrument;
 
 use avix_client_core::{
     atp::types::HilOutcome,
@@ -29,13 +30,13 @@ use avix_client_core::{
     state::SharedState,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WebState {
     pub app: SharedState,
     pub events_tx: broadcast::Sender<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct InvokeRequest {
     pub command: String,
     #[serde(default)]
@@ -52,6 +53,7 @@ fn internal(msg: impl ToString) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string())
 }
 
+#[instrument]
 pub async fn invoke_handler(
     State(state): State<WebState>,
     Json(req): Json<InvokeRequest>,
@@ -495,6 +497,7 @@ pub async fn invoke_handler(
     }
 }
 
+#[instrument]
 pub async fn events_handler(
     ws: WebSocketUpgrade,
     State(state): State<WebState>,
@@ -503,6 +506,7 @@ pub async fn events_handler(
     ws.on_upgrade(move |socket| handle_ws(socket, rx))
 }
 
+#[instrument]
 async fn handle_ws(mut socket: WebSocket, mut rx: broadcast::Receiver<String>) {
     loop {
         match rx.recv().await {
