@@ -1,5 +1,7 @@
 use crate::types::Pid;
 
+use tracing::instrument;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PipeDirection {
     /// Source → Target only (default).
@@ -11,6 +13,7 @@ pub enum PipeDirection {
 }
 
 impl PipeDirection {
+    #[instrument]
     pub fn parse(s: &str) -> Self {
         match s {
             "in" => Self::In,
@@ -19,6 +22,7 @@ impl PipeDirection {
         }
     }
 
+    #[instrument]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Out => "out",
@@ -39,6 +43,7 @@ pub enum BackpressurePolicy {
 }
 
 impl BackpressurePolicy {
+    #[instrument]
     pub fn parse(s: &str) -> Self {
         match s {
             "drop" => Self::Drop,
@@ -47,6 +52,7 @@ impl BackpressurePolicy {
         }
     }
 
+    #[instrument]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Block => "block",
@@ -64,6 +70,7 @@ pub enum PipeEncoding {
 }
 
 impl PipeEncoding {
+    #[instrument]
     pub fn parse(s: &str) -> Self {
         match s {
             "json" => Self::Json,
@@ -72,6 +79,7 @@ impl PipeEncoding {
         }
     }
 
+    #[instrument]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Text => "text",
@@ -93,6 +101,7 @@ pub struct PipeConfig {
 }
 
 impl PipeConfig {
+    #[instrument]
     pub fn new(source_pid: Pid, target_pid: Pid) -> Self {
         Self {
             source_pid,
@@ -104,6 +113,7 @@ impl PipeConfig {
         }
     }
 
+    #[instrument]
     /// Return true if `pid` may write to this pipe.
     pub fn can_write(&self, pid: Pid) -> bool {
         match self.direction {
@@ -113,6 +123,7 @@ impl PipeConfig {
         }
     }
 
+    #[instrument]
     /// Return true if `pid` may read from this pipe.
     pub fn can_read(&self, pid: Pid) -> bool {
         match self.direction {
@@ -122,6 +133,7 @@ impl PipeConfig {
         }
     }
 
+    #[instrument]
     /// Return the partner PID for SIGPIPE delivery when `closer_pid` closes the pipe.
     pub fn partner(&self, closer_pid: Pid) -> Option<Pid> {
         if closer_pid == self.source_pid {

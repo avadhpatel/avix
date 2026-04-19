@@ -3,6 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
+use tracing::instrument;
+
 #[derive(Debug, thiserror::Error)]
 pub enum PipeError {
     #[error("SIGPIPE: pipe {0} is closed")]
@@ -19,7 +21,18 @@ pub struct Pipe {
     closed: AtomicBool,
 }
 
+impl std::fmt::Debug for Pipe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Pipe")
+            .field("id", &self.id)
+            .field("owner_pid", &self.owner_pid)
+            .field("closed", &self.closed)
+            .finish()
+    }
+}
+
 impl Pipe {
+    #[instrument]
     pub fn new(owner_pid: u64, capacity: usize) -> Self {
         let (tx, rx) = mpsc::channel(capacity);
         Self {
@@ -31,6 +44,7 @@ impl Pipe {
         }
     }
 
+    #[instrument]
     pub async fn write(&self, msg: String) -> Result<(), PipeError> {
         if self.closed.load(Ordering::SeqCst) {
             return Err(PipeError::Closed(self.id.clone()));
@@ -41,6 +55,7 @@ impl Pipe {
         })
     }
 
+    #[instrument]
     /// Send a message, awaiting buffer space (Block backpressure policy).
     pub async fn send_blocking(&self, msg: String) -> Result<(), PipeError> {
         if self.closed.load(Ordering::SeqCst) {
@@ -52,15 +67,18 @@ impl Pipe {
             .map_err(|_| PipeError::Closed(self.id.clone()))
     }
 
+    #[instrument]
     pub async fn read(&self) -> Option<String> {
         let mut rx = self.rx.lock().await;
         rx.recv().await
     }
 
+    #[instrument]
     pub fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
     }
 
+    #[instrument]
     pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
     }

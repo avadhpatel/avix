@@ -3,19 +3,24 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
+use tracing::instrument;
+
 use super::channel::{Pipe, PipeError};
 
+#[derive(Debug)]
 pub struct PipeRegistry {
     pipes: RwLock<HashMap<String, Arc<Pipe>>>,
 }
 
 impl PipeRegistry {
+    #[instrument]
     pub fn new() -> Self {
         Self {
             pipes: RwLock::new(HashMap::new()),
         }
     }
 
+    #[instrument]
     pub async fn open(&self, owner_pid: u64, capacity: usize) -> String {
         let pipe = Arc::new(Pipe::new(owner_pid, capacity));
         let id = pipe.id.clone();
@@ -23,6 +28,7 @@ impl PipeRegistry {
         id
     }
 
+    #[instrument]
     pub async fn write(&self, id: &str, msg: String) -> Result<(), PipeError> {
         let pipes = self.pipes.read().await;
         let pipe = pipes
@@ -31,12 +37,14 @@ impl PipeRegistry {
         pipe.write(msg).await
     }
 
+    #[instrument]
     pub async fn read(&self, id: &str) -> Option<String> {
         let pipes = self.pipes.read().await;
         let pipe = pipes.get(id)?;
         pipe.read().await
     }
 
+    #[instrument]
     pub async fn close(&self, id: &str) {
         let mut pipes = self.pipes.write().await;
         if let Some(pipe) = pipes.get(id) {
@@ -45,12 +53,14 @@ impl PipeRegistry {
         pipes.remove(id);
     }
 
+    #[instrument]
     pub async fn pipe_count(&self) -> usize {
         self.pipes.read().await.len()
     }
 }
 
 impl Default for PipeRegistry {
+    #[instrument]
     fn default() -> Self {
         Self::new()
     }

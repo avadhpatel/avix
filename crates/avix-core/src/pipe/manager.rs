@@ -20,24 +20,30 @@ use crate::signal::kind::{Signal, SignalKind};
 use crate::signal::SignalChannelRegistry;
 use crate::types::Pid;
 
+use tracing::instrument;
+
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Debug)]
 pub struct PipeRecord {
     pub pipe: Arc<Pipe>,
     pub config: PipeConfig,
 }
 
+#[derive(Debug)]
 pub struct PipeManager {
     pipes: Arc<RwLock<HashMap<String, PipeRecord>>>,
 }
 
 impl PipeManager {
+    #[instrument]
     pub fn new() -> Self {
         Self {
             pipes: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
+    #[instrument]
     /// Open a new pipe. The caller becomes the `source_pid`.
     /// Returns the new pipe ID.
     pub async fn open(
@@ -61,6 +67,7 @@ impl PipeManager {
         Ok(pipe_id)
     }
 
+    #[instrument]
     /// Write a message to a pipe. Checks that `caller_pid` is authorised.
     pub async fn write(
         &self,
@@ -110,6 +117,7 @@ impl PipeManager {
         Ok(())
     }
 
+    #[instrument]
     /// Read the next message from a pipe. Checks that `caller_pid` is authorised.
     pub async fn read(
         &self,
@@ -144,6 +152,7 @@ impl PipeManager {
         }
     }
 
+    #[instrument(skip(signal_channels))]
     /// Close a pipe. Either agent may close. Delivers SIGPIPE to the partner.
     pub async fn close(
         &self,
@@ -189,6 +198,7 @@ impl PipeManager {
         Ok(())
     }
 
+    #[instrument(skip(signal_channels))]
     /// Close all pipes owned by `pid` (either as source or target).
     /// Called when an agent exits.
     pub async fn close_pipes_for_pid(
@@ -214,10 +224,12 @@ impl PipeManager {
         Ok(())
     }
 
+    #[instrument]
     pub async fn pipe_count(&self) -> usize {
         self.pipes.read().await.len()
     }
 
+    #[instrument]
     /// Expose config for a pipe (used in tests).
     pub async fn config(&self, pipe_id: &str) -> Option<PipeConfig> {
         self.pipes
@@ -229,6 +241,7 @@ impl PipeManager {
 }
 
 impl Default for PipeManager {
+    #[instrument]
     fn default() -> Self {
         Self::new()
     }
@@ -245,6 +258,7 @@ pub enum ReadResult {
 
 // ── VFS manifest helpers ──────────────────────────────────────────────────────
 
+#[instrument]
 async fn write_pipe_manifest(
     vfs: &VfsRouter,
     config: &PipeConfig,
@@ -289,6 +303,7 @@ async fn write_pipe_manifest(
     vfs.write(&path, yaml.into_bytes()).await
 }
 
+#[instrument]
 async fn update_pipe_manifest_closed(
     vfs: &VfsRouter,
     pipe_id: &str,
@@ -306,6 +321,7 @@ async fn update_pipe_manifest_closed(
 
 // ── Encoding validation ───────────────────────────────────────────────────────
 
+#[instrument]
 fn validate_encoding(message: &str, encoding: &PipeEncoding) -> Result<(), AvixError> {
     match encoding {
         PipeEncoding::Json => {
