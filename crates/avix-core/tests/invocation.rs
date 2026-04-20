@@ -327,28 +327,31 @@ async fn multiple_invocations_same_session_no_collision() {
     assert!(all.iter().all(|r| r.session_id == "shared-sess"));
 }
 
-// ── Disk artefacts ────────────────────────────────────────────────────────────
+// ── Persistence (redb only — no YAML artefacts) ──────────────────────────────
 
 #[tokio::test]
-async fn create_writes_yaml_artefact() {
+async fn create_persists_to_redb_no_yaml() {
     let dir = tempdir().unwrap();
     let store = open_store_with_local(dir.path()).await;
     let rec = make_record("inv-yaml", "alice", "researcher", "s1");
     store.create(&rec).await.unwrap();
 
-    let path = dir
+    // Verify record is in redb
+    let loaded = store.get("inv-yaml").await.unwrap().unwrap();
+    assert_eq!(loaded.id, "inv-yaml");
+    assert_eq!(loaded.username, "alice");
+    assert_eq!(loaded.agent_name, "researcher");
+    assert_eq!(loaded.status, InvocationStatus::Running);
+
+    // YAML artefact is no longer written
+    let old_yaml_path = dir
         .path()
         .join("alice/agents/researcher/invocations/inv-yaml.yaml");
-    assert!(path.exists(), "YAML artefact must be written on create");
-    let content = std::fs::read_to_string(&path).unwrap();
-    assert!(content.contains("inv-yaml"));
-    assert!(content.contains("alice"));
-    assert!(content.contains("researcher"));
-    assert!(content.contains("running"));
+    assert!(!old_yaml_path.exists(), "YAML artefact must NOT be written");
 }
 
 #[tokio::test]
-async fn finalize_updates_yaml_artefact() {
+async fn finalize_updates_redb_no_yaml() {
     let dir = tempdir().unwrap();
     let store = open_store_with_local(dir.path()).await;
     let rec = make_record("inv-fyaml", "alice", "coder", "s1");
@@ -366,35 +369,41 @@ async fn finalize_updates_yaml_artefact() {
         .await
         .unwrap();
 
-    let path = dir
+    let loaded = store.get("inv-fyaml").await.unwrap().unwrap();
+    assert_eq!(loaded.status, InvocationStatus::Completed);
+    assert_eq!(loaded.tokens_consumed, 8_000);
+
+    // YAML artefact is no longer written
+    let old_yaml_path = dir
         .path()
         .join("alice/agents/coder/invocations/inv-fyaml.yaml");
-    let content = std::fs::read_to_string(&path).unwrap();
-    assert!(content.contains("completed"), "YAML must show completed status");
+    assert!(!old_yaml_path.exists(), "YAML artefact must NOT be written");
 }
 
 #[tokio::test]
-async fn write_conversation_creates_jsonl_at_correct_path() {
+async fn write_conversation_creates_jsonl_at_session_path() {
+    use avix_core::invocation::conversation::{ConversationEntry, Role};
+
     let dir = tempdir().unwrap();
     let store = open_store_with_local(dir.path()).await;
+    // pid=42, session_id="s1" from make_record
     let rec = make_record("inv-conv", "alice", "researcher", "s1");
     store.create(&rec).await.unwrap();
 
-    let messages = vec![
-        ("user".into(), "What is the capital of France?".into()),
-        ("assistant".into(), "Paris.".into()),
-        ("user".into(), "Tell me more.".into()),
-        ("assistant".into(), "Paris is the capital city...".into()),
+    let entries = vec![
+        ConversationEntry::from_role_content(Role::User, "What is the capital of France?"),
+        ConversationEntry::from_role_content(Role::Assistant, "Paris."),
+        ConversationEntry::from_role_content(Role::User, "Tell me more."),
+        ConversationEntry::from_role_content(Role::Assistant, "Paris is the capital city..."),
     ];
     store
-        .write_conversation("inv-conv", "alice", "researcher", &messages)
+        .write_conversation_structured(42, "s1", "alice", &entries)
         .await
         .unwrap();
 
-    let path = dir
-        .path()
-        .join("alice/agents/researcher/invocations/inv-conv/conversation.jsonl");
-    assert!(path.exists(), "conversation.jsonl must exist");
+    // New path: <username>/.sessions/<session_id>/<pid>.jsonl
+    let path = dir.path().join("alice/.sessions/s1/42.jsonl");
+    assert!(path.exists(), "conversation.jsonl must exist at new path");
 
     let content = std::fs::read_to_string(&path).unwrap();
     let lines: Vec<&str> = content.lines().collect();

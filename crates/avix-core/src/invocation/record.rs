@@ -21,18 +21,20 @@ pub enum InvocationStatus {
 
 /// Persistent record of a single agent execution (one spawn → exit cycle).
 ///
-/// Survives daemon restart; stored in redb and mirrored as a YAML artefact at
-/// `/users/<username>/agents/<agent_name>/invocations/<id>.yaml`.
+/// Stored in per-user redb at `data/users/<username>/.sessions/invocations.redb`.
+/// Conversation JSONL lives at `data/users/<username>/.sessions/<session_id>/<pid>.jsonl`.
 ///
-/// Links: docs/architecture/06-agents.md
+/// Links: docs/architecture/14-agent-persistence.md
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InvocationRecord {
     /// UUID v4 — permanent identifier, independent of the recycled `pid`.
     pub id: String,
     pub agent_name: String,
+    #[serde(default)]
+    pub agent_version: String,
     pub username: String,
-    /// Runtime PID at the time of spawn (informational only; not stable).
+    /// Runtime PID at the time of spawn — also the JSONL filename key.
     pub pid: u64,
     pub goal: String,
     pub session_id: String,
@@ -61,6 +63,7 @@ impl InvocationRecord {
         Self {
             id,
             agent_name,
+            agent_version: String::new(),
             username,
             pid,
             goal,

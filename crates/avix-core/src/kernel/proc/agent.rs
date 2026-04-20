@@ -14,7 +14,7 @@ use crate::kernel::capability_resolver::CapabilityResolver;
 use crate::process::entry::{ProcessEntry, ProcessKind, ProcessStatus};
 use crate::process::ProcessTable;
 use crate::router::ALWAYS_PRESENT;
-use crate::session::PersistentSessionStore;
+use crate::session::{PersistentSessionStore, record::PidInvocationMeta};
 use crate::syscall::SyscallRegistry;
 use crate::tool_registry::ToolRegistry;
 use crate::types::token::{CapabilityToken, IssuedTo};
@@ -139,6 +139,27 @@ impl AgentManager {
                 warn!(pid, invocation_id = %invocation_id, error = %e, "failed to create invocation");
             }
         }
+
+        // Record per-PID metadata on the session so the session entry is self-describing.
+        if let Some(sstore) = &self.session_store {
+            if let Ok(uuid) = Uuid::parse_str(&effective_session_id) {
+                if let Ok(Some(mut session)) = sstore.get(&uuid).await {
+                    session.add_invocation_pid(PidInvocationMeta {
+                        pid,
+                        invocation_id: invocation_id.clone(),
+                        agent_name: name.to_string(),
+                        agent_version: String::new(),
+                        spawned_at: chrono::Utc::now(),
+                    });
+                    if let Err(e) = sstore.update(&session).await {
+                        warn!(pid, error = %e, "failed to record invocation pid meta on session");
+                    } else {
+                        debug!(pid, session_id = %effective_session_id, "recorded invocation pid meta on session");
+                    }
+                }
+            }
+        }
+
         self.active_invocations.lock().await.insert(pid, invocation_id.clone());
         debug!(pid, invocation_id = %invocation_id, "created invocation record");
 

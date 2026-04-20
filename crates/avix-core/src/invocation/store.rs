@@ -4,7 +4,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use redb::{Database, ReadableTable, TableDefinition};
 use tokio::sync::Mutex;
-use tracing::{instrument, warn};
+use tracing::{debug, instrument, warn};
 
 use super::conversation::ConversationEntry;
 use super::record::{InvocationRecord, InvocationStatus};
@@ -16,8 +16,8 @@ const TABLE: TableDefinition<&str, &str> = TableDefinition::new("invocations");
 /// Persistent store for agent invocation records.
 ///
 /// Primary store: `redb` — fast keyed lookups for list/get operations.
-/// Artefacts: `LocalProvider` — human-readable YAML summary + JSONL conversation
-/// written to `<root>/users/<username>/agents/<agent>/invocations/`.
+/// JSONL conversation: `LocalProvider` — written to
+/// `<username>/.sessions/<session_id>/<pid>.jsonl` (keyed by PID, reused across turns).
 ///
 /// The `local` provider is optional. When absent, only redb is used (useful in tests).
 #[derive(Debug)]
@@ -31,7 +31,6 @@ impl InvocationStore {
     pub async fn open(path: impl Into<PathBuf> + std::fmt::Debug) -> Result<Self, AvixError> {
         let path = path.into();
         let db = Database::create(&path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        // Ensure the table exists.
         let write_txn = db
             .begin_write()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -49,7 +48,7 @@ impl InvocationStore {
         })
     }
 
-    /// Attach a `LocalProvider` rooted at `<avix_root>/users/` for disk artefacts.
+    /// Attach a `LocalProvider` rooted at `<avix_root>/data/users/` for JSONL artefacts.
     #[instrument]
     pub fn with_local(mut self, provider: LocalProvider) -> Self {
         self.local = Some(Arc::new(provider));
@@ -78,7 +77,7 @@ impl InvocationStore {
         write_txn
             .commit()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        self.write_yaml_artefact(record).await;
+        debug!(id = %record.id, pid = record.pid, "invocation record created");
         Ok(())
     }
 
@@ -122,7 +121,7 @@ impl InvocationStore {
         write_txn
             .commit()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        self.write_yaml_artefact(&record).await;
+        debug!(id, status = ?record.status, "invocation finalized");
         Ok(())
     }
 
@@ -152,15 +151,12 @@ impl InvocationStore {
         write_txn
             .commit()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        self.write_yaml_artefact(&record).await;
         Ok(())
     }
 
-    /// Write interim snapshot of a running invocation.
+    /// Write interim snapshot of a running invocation (redb + JSONL).
     ///
-    /// Unlike `finalize()`, this does NOT set ended_at or change status.
-    /// It updates tokens/tool_calls and writes conversation to disk.
-    ///
+    /// Does NOT set ended_at or change status. Updates tokens/tool_calls.
     /// Idempotent: silently succeeds if `id` is not found.
     #[instrument]
     pub async fn persist_interim(
@@ -194,13 +190,12 @@ impl InvocationStore {
         write_txn
             .commit()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        self.write_yaml_artefact(&record).await;
 
         if !conversation.is_empty() {
             self.write_conversation_structured(
-                id,
+                record.pid,
+                &record.session_id,
                 &record.username,
-                &record.agent_name,
                 conversation,
             )
             .await?;
@@ -211,9 +206,7 @@ impl InvocationStore {
 
     /// Write interim snapshot with structured conversation entries.
     ///
-    /// Unlike `finalize()`, this does NOT set ended_at or change status.
-    /// It updates tokens/tool_calls and writes structured conversation to disk.
-    ///
+    /// Does NOT set ended_at or change status. Updates tokens/tool_calls.
     /// Idempotent: silently succeeds if `id` is not found.
     #[instrument]
     pub async fn persist_interim_structured(
@@ -247,60 +240,30 @@ impl InvocationStore {
         write_txn
             .commit()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        self.write_yaml_artefact(&record).await;
 
         if !entries.is_empty() {
-            self.write_conversation_structured(id, &record.username, &record.agent_name, entries)
-                .await?;
+            self.write_conversation_structured(
+                record.pid,
+                &record.session_id,
+                &record.username,
+                entries,
+            )
+            .await?;
         }
 
         Ok(())
     }
 
-    /// Append the full conversation history as a JSONL file.
-    ///
-    /// Each entry is `{"role": "<role>", "content": "<content>"}`.
-    /// Written to `<username>/agents/<agent_name>/invocations/<id>/conversation.jsonl`.
-    #[instrument]
-    pub async fn write_conversation(
-        &self,
-        id: &str,
-        username: &str,
-        agent_name: &str,
-        messages: &[(String, String)],
-    ) -> Result<(), AvixError> {
-        let provider = match &self.local {
-            Some(p) => p,
-            None => return Ok(()),
-        };
-        let mut lines = String::new();
-        for (role, content) in messages {
-            let line = serde_json::json!({"role": role, "content": content});
-            lines.push_str(
-                &serde_json::to_string(&line).map_err(|e| AvixError::ConfigParse(e.to_string()))?,
-            );
-            lines.push('\n');
-        }
-        let rel = format!(
-            "{}/agents/{}/invocations/{}/conversation.jsonl",
-            username, agent_name, id
-        );
-        provider
-            .write(&rel, lines.into_bytes())
-            .await
-            .map_err(|e| AvixError::Io(e.to_string()))
-    }
-
     /// Write structured conversation entries as a JSONL file.
     ///
-    /// Each entry is a `ConversationEntry` with optional tool_calls, files_changed, thought.
-    /// Written to `<username>/agents/<agent_name>/invocations/<id>/conversation.jsonl`.
+    /// Written to `<username>/.sessions/<session_id>/<pid>.jsonl`.
+    /// Overwrites the full file — call with the complete history each time.
     #[instrument]
     pub async fn write_conversation_structured(
         &self,
-        id: &str,
+        pid: u64,
+        session_id: &str,
         username: &str,
-        agent_name: &str,
         entries: &[ConversationEntry],
     ) -> Result<(), AvixError> {
         let provider = match &self.local {
@@ -314,10 +277,8 @@ impl InvocationStore {
             lines.push_str(&line);
             lines.push('\n');
         }
-        let rel = format!(
-            "{}/agents/{}/invocations/{}/conversation.jsonl",
-            username, agent_name, id
-        );
+        let rel = format!("{}/.sessions/{}/{}.jsonl", username, session_id, pid);
+        debug!(pid, session_id, username, path = %rel, "writing conversation JSONL");
         provider
             .write(&rel, lines.into_bytes())
             .await
@@ -385,23 +346,23 @@ impl InvocationStore {
             .collect())
     }
 
-    /// Read the conversation.jsonl for an invocation and parse it as structured entries.
-    /// Returns an empty vec if the file does not exist.
+    /// Read the JSONL conversation for an invocation.
+    ///
+    /// File lives at `<username>/.sessions/<session_id>/<pid>.jsonl`.
+    /// Returns an empty vec if the file does not exist (pre-first-turn invocations).
     #[instrument]
     pub async fn read_conversation(
         &self,
-        id: &str,
+        session_id: &str,
+        pid: u64,
         username: &str,
-        agent_name: &str,
     ) -> Result<Vec<ConversationEntry>, AvixError> {
         let provider = match &self.local {
             Some(p) => p,
             None => return Ok(vec![]),
         };
-        let rel = format!(
-            "{}/agents/{}/invocations/{}/conversation.jsonl",
-            username, agent_name, id
-        );
+        let rel = format!("{}/.sessions/{}/{}.jsonl", username, session_id, pid);
+        debug!(session_id, pid, username, path = %rel, "reading conversation JSONL");
         let bytes = match provider.read(&rel).await {
             Ok(b) => b,
             Err(_) => return Ok(vec![]),
@@ -415,7 +376,7 @@ impl InvocationStore {
             match serde_json::from_str::<ConversationEntry>(line) {
                 Ok(entry) => entries.push(entry),
                 Err(e) => {
-                    warn!(error = %e, "skipping malformed conversation line");
+                    warn!(error = %e, session_id, pid, "skipping malformed conversation line");
                 }
             }
         }
@@ -444,30 +405,6 @@ impl InvocationStore {
         }
         Ok(records)
     }
-
-    // ── Disk artefact helpers ─────────────────────────────────────────────────
-
-    #[instrument]
-    async fn write_yaml_artefact(&self, record: &InvocationRecord) {
-        let provider = match &self.local {
-            Some(p) => p,
-            None => return,
-        };
-        let yaml = match serde_yaml::to_string(record) {
-            Ok(y) => y,
-            Err(e) => {
-                warn!(id = %record.id, "failed to serialize invocation YAML: {e}");
-                return;
-            }
-        };
-        let rel = format!(
-            "{}/agents/{}/invocations/{}.yaml",
-            record.username, record.agent_name, record.id
-        );
-        if let Err(e) = provider.write(&rel, yaml.into_bytes()).await {
-            warn!(id = %record.id, "failed to write invocation YAML artefact: {e}");
-        }
-    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -477,7 +414,6 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    #[instrument]
     async fn open_store() -> InvocationStore {
         let dir = tempdir().unwrap();
         InvocationStore::open(dir.path().join("inv.redb"))
@@ -485,7 +421,6 @@ mod tests {
             .unwrap()
     }
 
-    #[instrument]
     fn make_record(id: &str, username: &str, agent: &str) -> InvocationRecord {
         InvocationRecord::new(
             id.into(),
@@ -582,9 +517,10 @@ mod tests {
         assert_eq!(all.len(), 2);
     }
 
-    // T-INV-06
+    // T-INV-06: write_conversation_structured creates JSONL at new path
     #[tokio::test]
-    async fn write_conversation_creates_jsonl() {
+    async fn write_conversation_structured_creates_jsonl_at_session_path() {
+        use super::super::conversation::{ConversationEntry, Role};
         let dir = tempdir().unwrap();
         let provider = LocalProvider::new(dir.path()).unwrap();
         let store = InvocationStore::open(dir.path().join("inv.redb"))
@@ -595,22 +531,20 @@ mod tests {
         let rec = make_record("inv-c", "alice", "researcher");
         store.create(&rec).await.unwrap();
 
-        let messages = vec![
-            ("user".into(), "Hello agent".into()),
-            ("assistant".into(), "Hello user".into()),
-            ("user".into(), "Do something".into()),
+        let entries = vec![
+            ConversationEntry::from_role_content(Role::User, "Hello agent"),
+            ConversationEntry::from_role_content(Role::Assistant, "Hello user"),
         ];
+        // pid=10, session_id="sess-1" from make_record
         store
-            .write_conversation("inv-c", "alice", "researcher", &messages)
+            .write_conversation_structured(10, "sess-1", "alice", &entries)
             .await
             .unwrap();
 
-        let path = dir
-            .path()
-            .join("alice/agents/researcher/invocations/inv-c/conversation.jsonl");
+        let path = dir.path().join("alice/.sessions/sess-1/10.jsonl");
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         let lines: Vec<&str> = content.lines().collect();
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 2);
         let parsed: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
         assert_eq!(parsed["role"], "user");
         assert_eq!(parsed["content"], "Hello agent");
@@ -674,7 +608,7 @@ mod tests {
 
     // T-INV-10
     #[tokio::test]
-    async fn persist_interim_writes_conversation_partial() {
+    async fn persist_interim_writes_conversation_at_session_path() {
         let dir = tempdir().unwrap();
         let provider = LocalProvider::new(dir.path()).unwrap();
         let store = InvocationStore::open(dir.path().join("inv.redb"))
@@ -695,9 +629,8 @@ mod tests {
             .await
             .unwrap();
 
-        let path = dir
-            .path()
-            .join("alice/agents/researcher/invocations/inv-10/conversation.jsonl");
+        // pid=10, session_id="sess-1" from make_record
+        let path = dir.path().join("alice/.sessions/sess-1/10.jsonl");
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 2);
@@ -713,7 +646,7 @@ mod tests {
 
     // T-INV-12
     #[tokio::test]
-    async fn write_conversation_structured_creates_jsonl() {
+    async fn write_conversation_structured_with_tool_calls() {
         use super::super::conversation::{ConversationEntry, Role, ToolCallEntry};
         let dir = tempdir().unwrap();
         let provider = LocalProvider::new(dir.path()).unwrap();
@@ -741,13 +674,11 @@ mod tests {
             },
         ];
         store
-            .write_conversation_structured("inv-12", "alice", "researcher", &entries)
+            .write_conversation_structured(10, "sess-1", "alice", &entries)
             .await
             .unwrap();
 
-        let path = dir
-            .path()
-            .join("alice/agents/researcher/invocations/inv-12/conversation.jsonl");
+        let path = dir.path().join("alice/.sessions/sess-1/10.jsonl");
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 2);
@@ -789,9 +720,7 @@ mod tests {
             .await
             .unwrap();
 
-        let path = dir
-            .path()
-            .join("alice/agents/coder/invocations/inv-13/conversation.jsonl");
+        let path = dir.path().join("alice/.sessions/sess-1/10.jsonl");
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 2);
@@ -814,7 +743,6 @@ mod tests {
             .create(&make_record("a", "alice", "bot"))
             .await
             .unwrap();
-        // make_record always uses session_id "sess-1"; create one with a different session
         let mut rec2 = make_record("b", "alice", "bot");
         rec2.session_id = "sess-2".into();
         store.create(&rec2).await.unwrap();
@@ -853,13 +781,14 @@ mod tests {
             ConversationEntry::from_role_content(Role::User, "hello"),
             ConversationEntry::from_role_content(Role::Assistant, "world"),
         ];
+        // pid=10, session_id="sess-1"
         store
-            .write_conversation_structured("inv-15", "alice", "researcher", &entries)
+            .write_conversation_structured(10, "sess-1", "alice", &entries)
             .await
             .unwrap();
 
         let loaded = store
-            .read_conversation("inv-15", "alice", "researcher")
+            .read_conversation("sess-1", 10, "alice")
             .await
             .unwrap();
         assert_eq!(loaded.len(), 2);
@@ -878,9 +807,20 @@ mod tests {
             .with_local(provider);
 
         let result = store
-            .read_conversation("no-such-inv", "alice", "agent")
+            .read_conversation("no-such-session", 99, "alice")
             .await
             .unwrap();
         assert!(result.is_empty());
+    }
+
+    // T-INV-17: agent_version roundtrips through redb
+    #[tokio::test]
+    async fn agent_version_roundtrips() {
+        let store = open_store().await;
+        let mut rec = make_record("inv-17", "alice", "researcher");
+        rec.agent_version = "2.1.0".into();
+        store.create(&rec).await.unwrap();
+        let loaded = store.get("inv-17").await.unwrap().unwrap();
+        assert_eq!(loaded.agent_version, "2.1.0");
     }
 }

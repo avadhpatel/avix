@@ -3,22 +3,23 @@ use std::sync::Arc;
 
 use redb::{Database, ReadableTable, TableDefinition};
 use tokio::sync::Mutex;
+use tracing::{debug, instrument};
 
 use super::record::SessionRecord;
 #[cfg(test)]
 use super::record::SessionStatus;
 use crate::error::AvixError;
-use crate::memfs::local_provider::LocalProvider;
 
 const TABLE: TableDefinition<&str, &str> = TableDefinition::new("sessions");
 
+#[derive(Debug)]
 pub struct SessionStore {
     db: Arc<Mutex<Database>>,
-    local: Option<Arc<LocalProvider>>,
 }
 
 impl SessionStore {
-    pub async fn open(path: impl Into<PathBuf>) -> Result<Self, AvixError> {
+    #[instrument]
+    pub async fn open(path: impl Into<PathBuf> + std::fmt::Debug) -> Result<Self, AvixError> {
         let path = path.into();
         let db = Database::create(&path).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         let write_txn = db
@@ -34,15 +35,10 @@ impl SessionStore {
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
-            local: None,
         })
     }
 
-    pub fn with_local(mut self, provider: LocalProvider) -> Self {
-        self.local = Some(Arc::new(provider));
-        self
-    }
-
+    #[instrument]
     pub async fn create(&self, record: &SessionRecord) -> Result<(), AvixError> {
         let json =
             serde_json::to_string(record).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -61,10 +57,11 @@ impl SessionStore {
         write_txn
             .commit()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        self.write_yaml_artefact(record).await;
+        debug!(session_id = %record.id, username = %record.username, "session created");
         Ok(())
     }
 
+    #[instrument]
     pub async fn get(&self, id: &uuid::Uuid) -> Result<Option<SessionRecord>, AvixError> {
         let db = self.db.lock().await;
         let read_txn = db
@@ -86,6 +83,7 @@ impl SessionStore {
         }
     }
 
+    #[instrument]
     pub async fn update(&self, record: &SessionRecord) -> Result<(), AvixError> {
         let json =
             serde_json::to_string(record).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -104,12 +102,12 @@ impl SessionStore {
         write_txn
             .commit()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        self.write_yaml_artefact(record).await;
+        debug!(session_id = %record.id, status = ?record.status, "session updated");
         Ok(())
     }
 
+    #[instrument]
     pub async fn delete(&self, id: &uuid::Uuid) -> Result<(), AvixError> {
-        let username = self.get(id).await?.map(|e| e.username).unwrap_or_default();
         let db = self.db.lock().await;
         let write_txn = db
             .begin_write()
@@ -125,10 +123,11 @@ impl SessionStore {
         write_txn
             .commit()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        self.remove_yaml_artefact(id, &username).await;
+        debug!(session_id = %id, "session deleted");
         Ok(())
     }
 
+    #[instrument]
     pub async fn list_for_user(&self, username: &str) -> Result<Vec<SessionRecord>, AvixError> {
         let db = self.db.lock().await;
         let read_txn = db
@@ -152,6 +151,7 @@ impl SessionStore {
         Ok(entries)
     }
 
+    #[instrument]
     pub async fn list_all(&self) -> Result<Vec<SessionRecord>, AvixError> {
         let db = self.db.lock().await;
         let read_txn = db
@@ -171,34 +171,6 @@ impl SessionStore {
             entries.push(record);
         }
         Ok(entries)
-    }
-
-    async fn write_yaml_artefact(&self, record: &SessionRecord) {
-        let provider = match &self.local {
-            Some(p) => p,
-            None => return,
-        };
-        if record.username.is_empty() {
-            return;
-        }
-        let yaml = match serde_yaml::to_string(record) {
-            Ok(y) => y,
-            Err(_) => return,
-        };
-        let rel = format!("{}/sessions/{}/session.yaml", record.username, record.id);
-        let _ = provider.write(&rel, yaml.into_bytes()).await;
-    }
-
-    async fn remove_yaml_artefact(&self, id: &uuid::Uuid, username: &str) {
-        let provider = match &self.local {
-            Some(p) => p,
-            None => return,
-        };
-        if username.is_empty() {
-            return;
-        }
-        let rel = format!("{}/sessions/{}/session.yaml", username, id);
-        let _ = provider.delete(&rel).await;
     }
 }
 
@@ -302,22 +274,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_removes_record() {
+    async fn invocation_pids_roundtrip() {
+        use crate::session::record::PidInvocationMeta;
         let store = open_store().await;
-        let id = Uuid::new_v4();
-        let record = SessionRecord::new(
-            id,
+        let mut record = SessionRecord::new(
+            Uuid::new_v4(),
             "alice".to_string(),
-            "a1".to_string(),
-            "s1".to_string(),
-            "g1".to_string(),
-            5,
+            "researcher".to_string(),
+            "Test".to_string(),
+            "goal".to_string(),
+            42,
         );
+        record.add_invocation_pid(PidInvocationMeta {
+            pid: 42,
+            invocation_id: "inv-1".to_string(),
+            agent_name: "researcher".to_string(),
+            agent_version: "1.0.0".to_string(),
+            spawned_at: chrono::Utc::now(),
+        });
         store.create(&record).await.unwrap();
-
-        store.delete(&id).await.unwrap();
-
-        let loaded = store.get(&id).await.unwrap();
-        assert!(loaded.is_none());
+        let loaded = store.get(&record.id).await.unwrap().unwrap();
+        assert_eq!(loaded.invocation_pids.len(), 1);
+        assert_eq!(loaded.invocation_pids[0].agent_version, "1.0.0");
     }
 }

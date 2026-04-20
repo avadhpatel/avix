@@ -515,7 +515,7 @@ impl ProcHandler {
             None => return Ok(vec![]),
         };
         store
-            .read_conversation(invocation_id, &record.username, &record.agent_name)
+            .read_conversation(&record.session_id, record.pid, &record.username)
             .await
     }
 

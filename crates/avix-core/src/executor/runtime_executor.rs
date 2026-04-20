@@ -802,11 +802,12 @@ pub async fn shutdown(&mut self) {
                         ),
                     );
                 }
+                tracing::debug!(pid = self.pid.as_u64(), session_id = %self.session_id, "flushing conversation JSONL");
                 let _ = store
                     .write_conversation_structured(
-                        &self.invocation_id,
+                        self.pid.as_u64(),
+                        &self.session_id,
                         &self.spawned_by,
-                        &self.agent_name,
                         &self.memory.conversation_history,
                     )
                     .await;
@@ -1114,7 +1115,7 @@ mod tests {
 
         let path = dir
             .path()
-            .join("kernel/agents/test-agent/invocations/inv-rex-24/conversation.jsonl");
+            .join("kernel/.sessions/sess-test/204.jsonl");
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         assert_eq!(content.lines().count(), 3);
     }

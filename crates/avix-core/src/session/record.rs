@@ -4,6 +4,21 @@ use uuid::Uuid;
 
 use tracing::instrument;
 
+// ── PidInvocationMeta ─────────────────────────────────────────────────────────
+
+/// Per-PID metadata stored on the session for every invocation that ran within it.
+/// Recorded at spawn time so the session record is self-describing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PidInvocationMeta {
+    pub pid: u64,
+    pub invocation_id: String,
+    pub agent_name: String,
+    #[serde(default)]
+    pub agent_version: String,
+    pub spawned_at: DateTime<Utc>,
+}
+
 // ── SessionStatus ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -43,6 +58,9 @@ pub struct SessionRecord {
     /// All currently active PIDs contributing to this session.
     #[serde(default)]
     pub pids: Vec<u64>,
+    /// Metadata for every invocation (PID) that has ever run in this session.
+    #[serde(default)]
+    pub invocation_pids: Vec<PidInvocationMeta>,
 }
 
 impl SessionRecord {
@@ -73,6 +91,7 @@ impl SessionRecord {
             participants: vec![],
             owner_pid,
             pids: vec![owner_pid],
+            invocation_pids: vec![],
         }
     }
 
@@ -103,6 +122,16 @@ impl SessionRecord {
     #[instrument]
     pub fn mark_paused(&mut self) {
         self.status = SessionStatus::Paused;
+        self.last_updated = Utc::now();
+    }
+
+    /// Record per-PID invocation metadata on the session (dedup by pid).
+    #[instrument]
+    pub fn add_invocation_pid(&mut self, meta: PidInvocationMeta) {
+        if !self.invocation_pids.iter().any(|m| m.pid == meta.pid) {
+            tracing::debug!(pid = meta.pid, invocation_id = %meta.invocation_id, "adding invocation pid meta to session");
+            self.invocation_pids.push(meta);
+        }
         self.last_updated = Utc::now();
     }
 
