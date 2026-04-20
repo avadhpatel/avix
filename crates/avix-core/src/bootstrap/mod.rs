@@ -261,6 +261,7 @@ impl Runtime {
                 Arc::clone(&self.event_bus),
                 Arc::clone(&invocation_store),
                 Arc::clone(&session_store),
+                master_key_bytes.clone(),
             )
             .with_vfs(Arc::clone(&self.vfs))
             .with_tracer(Arc::clone(&self.tracer))

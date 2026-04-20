@@ -74,12 +74,9 @@ AVIX_ROOT/                 (e.g. ~/avix-data or /var/avix-data)
 │   │       ├── bin/           → VFS /users/<username>/bin/ (user-installed agents)
 │   │       │   └── <agent-name>@<version>/
 │   │       │       └── manifest.yaml
-│   │       └── agents/        → invocation records (written by kernel via LocalProvider)
-│   │           └── <agent-name>/
-│   │               └── invocations/
-│   │                   ├── <uuid>.yaml          (summary: status, tokens, timing)
-│   │                   └── <uuid>/
-│   │                       └── conversation.jsonl
+│   │       └── .sessions/     → per-PID JSONL (written by InvocationStore via LocalProvider)
+│   │           └── <session-id>/
+│   │               └── <pid>.jsonl              (conversation; one entry per line; reused across turns)
 │   ├── crews/              → VFS /crews/
 │   └── secrets/            → VFS /secrets/ (AES-256-GCM blobs, chmod 700)
 └── logs/                   → /var/log/avix/
@@ -113,7 +110,7 @@ Written at runtime, lost on reboot. Kernel-owned.
 │   └── hil-queue/<request-id>.yaml
 ├── users/<username>/
 │   ├── status.yaml
-│   ├── sessions/<session-id>.yaml   SessionManifest — written by SessionStore
+│   ├── sessions/                    (reserved; SessionStore uses redb only, no VFS writes)
 │   ├── logs/
 │   └── resolved/<kind>.yaml
 ├── services/<svcname>/
@@ -243,7 +240,7 @@ All timestamps: ISO 8601 with timezone. All durations in seconds unless noted.
 | 6 | AuthConfig | `/etc/avix/auth.conf` | Config (static) |
 | 7 | CapabilityToken | Issued by kernel at spawn | Runtime (issued) |
 | 8 | ATPToken | Issued by auth.svc on login | Runtime (issued) |
-| 9 | SessionManifest | `/proc/users/<username>/sessions/<sid>.yaml` | Status (ephemeral) |
+| 9 | SessionRecord | `data/sessions.redb` (JSON, keyed by UUID) | Persistent (redb only) |
 | 10 | Resolved | `/proc/<pid>/resolved.yaml` | Runtime (kernel-derived) |
 | 11 | AgentDefaults | `/kernel/defaults/agent.yaml` | Config (compiled-in) |
 | 12 | PipeDefaults | `/kernel/defaults/pipe.yaml` | Config (compiled-in) |

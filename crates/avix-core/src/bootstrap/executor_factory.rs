@@ -9,12 +9,15 @@ use crate::tool_registry::ToolRegistry;
 use crate::executor::spawn::SpawnParams;
 use crate::gateway::event_bus::AtpEventBus;
 use crate::invocation::{InvocationStatus, InvocationStore};
+use crate::kernel::approval_token::ApprovalTokenStore;
+use crate::kernel::{HilManager, KernelResourceHandler};
 use crate::llm_client::IpcLlmClient;
+use crate::memfs::vfs::MemFs;
 use crate::memfs::VfsRouter;
 use crate::process::entry::ProcessStatus;
 use crate::process::table::ProcessTable;
 use crate::session::PersistentSessionStore;
-use crate::signal::SignalChannelRegistry;
+use crate::signal::{bus::SignalBus, SignalChannelRegistry};
 use crate::trace::Tracer;
 use crate::types::Pid;
 
@@ -46,6 +49,12 @@ pub struct IpcExecutorFactory {
     tool_registry: Arc<Mutex<Option<Arc<ToolRegistry>>>>,
     /// Shared VFS — attached to each executor so `/tools/**` reads reflect per-agent state.
     vfs: Option<Arc<VfsRouter>>,
+    /// HMAC-based capability token validator for `cap/request-tool`.
+    resource_handler: Arc<KernelResourceHandler>,
+    /// HIL manager — drives the human-in-the-loop approval flow.
+    hil_manager: Arc<HilManager>,
+    /// Signal bus — used to send SIGPAUSE/SIGRESUME during HIL.
+    signal_bus: Arc<SignalBus>,
 }
 
 impl IpcExecutorFactory {
@@ -54,7 +63,18 @@ impl IpcExecutorFactory {
         event_bus: Arc<AtpEventBus>,
         invocation_store: Arc<InvocationStore>,
         session_store: Arc<PersistentSessionStore>,
+        hmac_key: Vec<u8>,
     ) -> Self {
+        let signal_bus = Arc::new(SignalBus::new());
+        let approval_store = Arc::new(ApprovalTokenStore::new());
+        let hil_vfs = Arc::new(MemFs::new());
+        let hil_manager = HilManager::new(
+            Arc::clone(&approval_store),
+            Arc::clone(&event_bus),
+            hil_vfs,
+            Arc::clone(&signal_bus),
+            600,
+        );
         Self {
             process_table,
             event_bus,
@@ -64,6 +84,9 @@ impl IpcExecutorFactory {
             signal_channels: SignalChannelRegistry::new(),
             tool_registry: Arc::new(Mutex::new(None)),
             vfs: None,
+            resource_handler: Arc::new(KernelResourceHandler::new(hmac_key)),
+            hil_manager,
+            signal_bus,
         }
     }
 
@@ -112,6 +135,9 @@ impl AgentExecutorFactory for IpcExecutorFactory {
         let signal_channels = self.signal_channels.clone();
         let tool_registry_handle = Arc::clone(&self.tool_registry);
         let vfs_handle = self.vfs.clone();
+        let resource_handler = Arc::clone(&self.resource_handler);
+        let hil_manager = Arc::clone(&self.hil_manager);
+        let signal_bus = Arc::clone(&self.signal_bus);
 
         let handle = tokio::spawn(async move {
             tracer.agent_spawn(pid.as_u64(), &agent_name, &goal, &agent_session_id);
@@ -155,11 +181,14 @@ impl AgentExecutorFactory for IpcExecutorFactory {
             // Register the in-process signal channel so SignalHandler can reach this executor.
             signal_channels.register(pid, executor.signal_sender()).await;
 
-            // Wire the event bus, tracer, persistence stores, and VFS.
+            // Wire the event bus, tracer, persistence stores, VFS, and HIL infrastructure.
             executor = executor.with_event_bus(Arc::clone(&event_bus));
             executor = executor.with_tracer(Arc::clone(&tracer));
             executor = executor.with_invocation_store(invocation_store, invocation_id);
             executor = executor.with_session_store(session_store);
+            executor = executor.with_resource_handler(resource_handler);
+            executor = executor.with_hil_manager(hil_manager);
+            executor = executor.with_signal_bus(signal_bus);
             if let Some(vfs) = vfs_handle {
                 executor = executor.with_vfs(Arc::clone(&vfs));
                 executor.init_vfs_caller().await;

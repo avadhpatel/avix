@@ -11,8 +11,8 @@ Avix distinguishes three related but separate concepts:
 | Concept | Lifetime | Location |
 |---------|----------|----------|
 | **Installed agent** | Persistent — survives reboot | `/bin/<name>@<version>/` (system) or `/users/<username>/bin/<name>@<version>/` (user) |
-| **Session** | Persistent — survives reboot | `<AVIX_ROOT>/data/users/<username>/sessions/` |
-| **Invocation** | Persistent — survives reboot | `<AVIX_ROOT>/data/users/<username>/agents/<agent>/invocations/` |
+| **Session** | Persistent — survives reboot | `<AVIX_ROOT>/data/sessions.redb` (index) + per-PID JSONL under `<AVIX_ROOT>/data/users/<username>/.sessions/` |
+| **Invocation** | Persistent — survives reboot | `<AVIX_ROOT>/data/invocations.redb` |
 
 An _installed agent_ is a manifest describing an agent that can be spawned. A _session_ is a persistent container for one or more agent invocations working toward a shared goal. An _invocation_ is a single spawn→exit lifecycle — the running record of one execution, including conversation history.
 
@@ -88,6 +88,15 @@ pub struct SessionRecord {
     pub participants: Vec<String>,    // all agent_names involved
     pub owner_pid: u64,               // PID that created the session — required, always non-zero; time-seeded u64 (Pid::generate())
     pub pids: Vec<u64>,               // all currently active PIDs in this session
+    pub invocation_pids: Vec<PidInvocationMeta>, // per-PID spawn metadata; populated at spawn time
+}
+
+pub struct PidInvocationMeta {
+    pub pid: u64,
+    pub invocation_id: String,        // UUID of the InvocationRecord for this PID
+    pub agent_name: String,
+    pub agent_version: String,        // empty string if manifest has no version field
+    pub spawned_at: DateTime<Utc>,
 }
 
 pub enum SessionStatus {
@@ -113,16 +122,18 @@ When an agent spawns a sub-agent into an existing session:
 
 ### Session persistence
 
-Sessions persist via:
-- **redb** — fast keyed lookups for `list_sessions` and `get_session`
-- **LocalProvider** — YAML manifest at `users/<username>/sessions/<id>/session.yaml`
+Sessions persist via a single **redb** store at `AVIX_ROOT/data/sessions.redb`. The `SessionRecord` (including `invocation_pids`) is serialised as JSON and stored keyed by session UUID. No YAML artefacts are written.
 
 ### Disk layout
 
 ```
-AVIX_ROOT/users/<username>/sessions/<session_id>/
-└── session.yaml              ← SessionRecord summary
+AVIX_ROOT/data/sessions.redb            ← SessionRecord JSON, keyed by UUID
+
+AVIX_ROOT/data/users/<username>/.sessions/<session_id>/
+└── <pid>.jsonl                          ← conversation JSONL for that PID; reused across turns
 ```
+
+The `.sessions/` tree is written by `InvocationStore` (not `SessionStore`). Each PID in a session gets its own JSONL file, created on first write and appended on subsequent turns until the process exits.
 
 ---
 
@@ -130,19 +141,23 @@ AVIX_ROOT/users/<username>/sessions/<session_id>/
 
 `crates/avix-core/src/invocation/`
 
-Every agent spawn creates an `InvocationRecord`. Records persist across reboots via two complementary stores:
+Every agent spawn creates an `InvocationRecord`. Records persist across reboots via:
 
-- **redb** (primary) — fast queryable key-value store keyed by invocation UUID. Used for `list_invocations` and `get_invocation`.
-- **LocalProvider** (secondary) — human-readable YAML summary + JSONL conversation written to `AVIX_ROOT/users/`.
+- **redb** — fast queryable key-value store at `AVIX_ROOT/data/invocations.redb`, keyed by invocation UUID. Used for `list_invocations` and `get_invocation`.
+- **LocalProvider** — JSONL conversation file written under `AVIX_ROOT/data/users/`, at path `<username>/.sessions/<session_id>/<pid>.jsonl`.
+
+No YAML summary files are written. All structured metadata lives in redb.
 
 ### Disk layout
 
 ```
-AVIX_ROOT/users/<username>/agents/<agent_name>/invocations/
-├── <uuid>.yaml              ← summary (status, tokens, goal, timing)
-└── <uuid>/
-    └── conversation.jsonl   ← one ConversationEntry per line (structured format)
+AVIX_ROOT/data/invocations.redb                          ← InvocationRecord JSON, keyed by UUID
+
+AVIX_ROOT/data/users/<username>/.sessions/<session_id>/
+└── <pid>.jsonl                                          ← one ConversationEntry per line
 ```
+
+The JSONL file is keyed by PID (not invocation UUID) and reused across turns for the lifetime of that process. Multiple PIDs sharing a session each write their own file.
 
 Each line in `conversation.jsonl` is a `ConversationEntry` object. Entries are written
 incrementally during `run_with_client` (not only at shutdown):
@@ -174,6 +189,7 @@ unreadable.
 pub struct InvocationRecord {
     pub id: String,                   // UUID v4
     pub agent_name: String,
+    pub agent_version: String,        // from manifest; empty string if not present
     pub username: String,
     pub pid: u64,                     // time-seeded u64 PID — informational only; not stable across reboots within a session
     pub goal: String,
@@ -239,7 +255,9 @@ ProcHandler::spawn(name, goal, session_id?, parent_pid?)
   5. store.create(&InvocationRecord { status: Running, session_id, ... })
   6. active_invocations.insert(pid, invocation_id)
   7. Set ProcessEntry.parent = parent_pid.map(Pid::new)
-  8. Pass invocation_id in SpawnParams → RuntimeExecutor
+  8. Add PidInvocationMeta { pid, invocation_id, agent_name, agent_version, spawned_at }
+     to session.invocation_pids via session_store.update(session)
+  9. Pass invocation_id in SpawnParams → RuntimeExecutor
 
 RuntimeExecutor::shutdown_with_status(status, exit_reason)
   1. Deregister Category 2 tools
@@ -250,8 +268,9 @@ RuntimeExecutor::shutdown_with_status(status, exit_reason)
   3. Otherwise:
      - If exit_reason is set: append System entry "[Agent stopped: <reason>]"
        to MemoryManager.conversation_history
-     - store.write_conversation_structured(id, username, agent_name,
+     - store.write_conversation_structured(pid, session_id, username,
          &memory.conversation_history)
+       → writes to `<username>/.sessions/<session_id>/<pid>.jsonl`
        (history is built incrementally during run_with_client — see disk layout above)
      - store.finalize(id, status, ended_at, tokens, tool_calls, exit_reason)
      - If sub-agent completed → session.set_primary(origin_agent)
