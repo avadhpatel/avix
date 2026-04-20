@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use redb::{Database, TableDefinition};
+use redb::{Database, ReadableDatabase, TableDefinition};
 use serde::Serialize;
 
 use super::entry::{AgentRef, QuotaSnapshot, SessionEntry, SessionState};

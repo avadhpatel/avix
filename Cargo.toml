@@ -37,7 +37,7 @@ pgp                 = { version = "0.19" }
 chrono             = { version = "0.4", features = ["serde"] }
 tempfile           = { version = "3" }
 async-trait        = { version = "0.1" }
-redb               = { version = "2" }
+redb               = { version = "4" }
 serial_test        = { version = "3" }
 aes-gcm            = { version = "0.10" }
 rand               = { version = "0.8" }

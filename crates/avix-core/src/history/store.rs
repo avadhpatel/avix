@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use redb::{Database, ReadableTable, TableDefinition};
-use tokio::sync::Mutex;
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use uuid::Uuid;
 
 use super::record::{MessageRecord, PartRecord, PartType};
@@ -16,7 +15,7 @@ const PART_TABLE: TableDefinition<&str, &str> = TableDefinition::new("parts");
 /// Backed by redb at `<avix_root>/users/<username>/.avix_data/history.redb`.
 /// Provides create/get/list for both entity types plus query helpers.
 pub struct HistoryStore {
-    db: Arc<Mutex<Database>>,
+    db: Arc<Database>,
 }
 
 impl HistoryStore {
@@ -38,7 +37,7 @@ impl HistoryStore {
             .commit()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         Ok(Self {
-            db: Arc::new(Mutex::new(db)),
+            db: Arc::new(db),
         })
     }
 
@@ -47,7 +46,7 @@ impl HistoryStore {
     pub async fn create_message(&self, msg: &MessageRecord) -> Result<(), AvixError> {
         let json = serde_json::to_string(msg).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         let key = msg.id.to_string();
-        let db = self.db.lock().await;
+        let db = &self.db;
         let write_txn = db
             .begin_write()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -67,7 +66,7 @@ impl HistoryStore {
 
     pub async fn get_message(&self, id: &Uuid) -> Result<Option<MessageRecord>, AvixError> {
         let key = id.to_string();
-        let db = self.db.lock().await;
+        let db = &self.db;
         let read_txn = db
             .begin_read()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -88,7 +87,7 @@ impl HistoryStore {
 
     /// List all messages for `session_id`, ordered by `sequence`.
     pub async fn list_messages(&self, session_id: &Uuid) -> Result<Vec<MessageRecord>, AvixError> {
-        let db = self.db.lock().await;
+        let db = &self.db;
         let read_txn = db
             .begin_read()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -117,7 +116,7 @@ impl HistoryStore {
         let json =
             serde_json::to_string(part).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         let key = part.id.to_string();
-        let db = self.db.lock().await;
+        let db = &self.db;
         let write_txn = db
             .begin_write()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -137,7 +136,7 @@ impl HistoryStore {
 
     pub async fn get_part(&self, id: &Uuid) -> Result<Option<PartRecord>, AvixError> {
         let key = id.to_string();
-        let db = self.db.lock().await;
+        let db = &self.db;
         let read_txn = db
             .begin_read()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -158,7 +157,7 @@ impl HistoryStore {
 
     /// List all parts for `message_id`, ordered by `part_index`.
     pub async fn list_parts(&self, message_id: &Uuid) -> Result<Vec<PartRecord>, AvixError> {
-        let db = self.db.lock().await;
+        let db = &self.db;
         let read_txn = db
             .begin_read()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;

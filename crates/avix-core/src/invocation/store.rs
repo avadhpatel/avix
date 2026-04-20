@@ -2,8 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use redb::{Database, ReadableTable, TableDefinition};
-use tokio::sync::Mutex;
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use tracing::{debug, instrument, warn};
 
 use super::conversation::ConversationEntry;
@@ -22,7 +21,7 @@ const TABLE: TableDefinition<&str, &str> = TableDefinition::new("invocations");
 /// The `local` provider is optional. When absent, only redb is used (useful in tests).
 #[derive(Debug)]
 pub struct InvocationStore {
-    db: Arc<Mutex<Database>>,
+    db: Arc<Database>,
     local: Option<Arc<LocalProvider>>,
 }
 
@@ -43,7 +42,7 @@ impl InvocationStore {
             .commit()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         Ok(Self {
-            db: Arc::new(Mutex::new(db)),
+            db: Arc::new(db),
             local: None,
         })
     }
@@ -62,7 +61,7 @@ impl InvocationStore {
     pub async fn create(&self, record: &InvocationRecord) -> Result<(), AvixError> {
         let json =
             serde_json::to_string(record).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        let db = self.db.lock().await;
+        let db = &self.db;
         let write_txn = db
             .begin_write()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -106,7 +105,7 @@ impl InvocationStore {
 
         let json =
             serde_json::to_string(&record).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        let db = self.db.lock().await;
+        let db = &self.db;
         let write_txn = db
             .begin_write()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -136,7 +135,7 @@ impl InvocationStore {
 
         let json =
             serde_json::to_string(&record).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        let db = self.db.lock().await;
+        let db = &self.db;
         let write_txn = db
             .begin_write()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -175,7 +174,7 @@ impl InvocationStore {
 
         let json =
             serde_json::to_string(&record).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        let db = self.db.lock().await;
+        let db = &self.db;
         let write_txn = db
             .begin_write()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -225,7 +224,7 @@ impl InvocationStore {
 
         let json =
             serde_json::to_string(&record).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        let db = self.db.lock().await;
+        let db = &self.db;
         let write_txn = db
             .begin_write()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -289,7 +288,7 @@ impl InvocationStore {
 
     #[instrument]
     pub async fn get(&self, id: &str) -> Result<Option<InvocationRecord>, AvixError> {
-        let db = self.db.lock().await;
+        let db = &self.db;
         let read_txn = db
             .begin_read()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -386,7 +385,7 @@ impl InvocationStore {
     /// Admin-only: returns all invocations across all users.
     #[instrument]
     pub async fn list_all(&self) -> Result<Vec<InvocationRecord>, AvixError> {
-        let db = self.db.lock().await;
+        let db = &self.db;
         let read_txn = db
             .begin_read()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;

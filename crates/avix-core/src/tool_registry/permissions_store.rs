@@ -1,8 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use redb::{Database, ReadableTable, TableDefinition};
-use tokio::sync::Mutex;
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use tracing::{info, instrument};
 
 use crate::error::AvixError;
@@ -13,7 +12,7 @@ const TOOL_PERMS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("tool
 
 #[derive(Debug)]
 pub struct ToolPermissionsStore {
-    db: Arc<Mutex<Database>>,
+    db: Arc<Database>,
     path: PathBuf,
 }
 
@@ -43,14 +42,14 @@ impl ToolPermissionsStore {
         info!(path = %db_path.display(), "tool permissions store opened");
 
         Ok(Self {
-            db: Arc::new(Mutex::new(db)),
+            db: Arc::new(db),
             path: db_path,
         })
     }
 
     #[instrument]
     pub async fn get(&self, tool_name: &str) -> Result<Option<ToolPermissions>, AvixError> {
-        let db = self.db.lock().await;
+        let db = &self.db;
         let read_txn = db
             .begin_read()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -73,7 +72,7 @@ impl ToolPermissionsStore {
 
     #[instrument]
     pub async fn set(&self, tool_name: &str, perms: &ToolPermissions) -> Result<(), AvixError> {
-        let db = self.db.lock().await;
+        let db = &self.db;
         let write_txn = db
             .begin_write()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -100,7 +99,7 @@ impl ToolPermissionsStore {
 
     #[instrument]
     pub async fn list_all(&self) -> Result<Vec<(String, ToolPermissions)>, AvixError> {
-        let db = self.db.lock().await;
+        let db = &self.db;
         let read_txn = db
             .begin_read()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
@@ -123,7 +122,7 @@ impl ToolPermissionsStore {
 
     #[instrument]
     pub async fn delete(&self, tool_name: &str) -> Result<(), AvixError> {
-        let db = self.db.lock().await;
+        let db = &self.db;
         let write_txn = db
             .begin_write()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;

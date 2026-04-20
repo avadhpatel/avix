@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use redb::{Database, ReadableTable, TableDefinition};
-use tokio::sync::Mutex;
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use tracing::{debug, instrument};
 
 use super::record::SessionRecord;
@@ -14,7 +13,7 @@ const TABLE: TableDefinition<&str, &str> = TableDefinition::new("sessions");
 
 #[derive(Debug)]
 pub struct SessionStore {
-    db: Arc<Mutex<Database>>,
+    db: Arc<Database>,
 }
 
 impl SessionStore {
@@ -34,7 +33,7 @@ impl SessionStore {
             .commit()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         Ok(Self {
-            db: Arc::new(Mutex::new(db)),
+            db: Arc::new(db),
         })
     }
 
@@ -42,8 +41,7 @@ impl SessionStore {
     pub async fn create(&self, record: &SessionRecord) -> Result<(), AvixError> {
         let json =
             serde_json::to_string(record).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        let db = self.db.lock().await;
-        let write_txn = db
+        let write_txn = self.db
             .begin_write()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         {
@@ -63,8 +61,7 @@ impl SessionStore {
 
     #[instrument]
     pub async fn get(&self, id: &uuid::Uuid) -> Result<Option<SessionRecord>, AvixError> {
-        let db = self.db.lock().await;
-        let read_txn = db
+        let read_txn = self.db
             .begin_read()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         let table = read_txn
@@ -87,8 +84,7 @@ impl SessionStore {
     pub async fn update(&self, record: &SessionRecord) -> Result<(), AvixError> {
         let json =
             serde_json::to_string(record).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
-        let db = self.db.lock().await;
-        let write_txn = db
+        let write_txn = self.db
             .begin_write()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         {
@@ -108,8 +104,7 @@ impl SessionStore {
 
     #[instrument]
     pub async fn delete(&self, id: &uuid::Uuid) -> Result<(), AvixError> {
-        let db = self.db.lock().await;
-        let write_txn = db
+        let write_txn = self.db
             .begin_write()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         {
@@ -129,8 +124,7 @@ impl SessionStore {
 
     #[instrument]
     pub async fn list_for_user(&self, username: &str) -> Result<Vec<SessionRecord>, AvixError> {
-        let db = self.db.lock().await;
-        let read_txn = db
+        let read_txn = self.db
             .begin_read()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         let table = read_txn
@@ -153,8 +147,7 @@ impl SessionStore {
 
     #[instrument]
     pub async fn list_all(&self) -> Result<Vec<SessionRecord>, AvixError> {
-        let db = self.db.lock().await;
-        let read_txn = db
+        let read_txn = self.db
             .begin_read()
             .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
         let table = read_txn
