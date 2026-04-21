@@ -162,6 +162,9 @@ pub struct AgentOutputBody {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentOutputChunkBody {
     pub pid: String,
+    /// Avix conversation session ID — lets the UI route chunks without a page refresh.
+    #[serde(default)]
+    pub session_id: String,
     /// UUID correlating all chunks from one LLM turn.
     pub turn_id: String,
     pub text_delta: String,

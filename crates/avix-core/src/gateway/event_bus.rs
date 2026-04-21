@@ -179,10 +179,13 @@ impl AtpEventBus {
 
     /// Publish an incremental token delta from a streaming LLM turn.
     /// `atp_session_id` routes the event to the originating client connection.
+    /// `session_id` is the avix conversation session included in the payload so
+    /// the UI can associate chunks with the correct session without a page refresh.
     #[instrument(skip(self))]
     pub fn agent_output_chunk(
         &self,
         atp_session_id: &str,
+        session_id: &str,
         pid: u64,
         turn_id: &str,
         text_delta: &str,
@@ -195,6 +198,7 @@ impl AtpEventBus {
             atp_session_id,
             serde_json::json!({
                 "pid": pid.to_string(),
+                "session_id": session_id,
                 "turn_id": turn_id,
                 "text_delta": text_delta,
                 "seq": seq,

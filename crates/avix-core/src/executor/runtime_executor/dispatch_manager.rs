@@ -744,6 +744,7 @@ impl RuntimeExecutor {
                     if let Some(bus) = &self.event_bus {
                         bus.agent_output_chunk(
                             &self.atp_session_id,
+                            &self.session_id,
                             self.pid.as_u64(),
                             &turn_id_str,
                             &pending_text,
@@ -807,6 +808,7 @@ impl RuntimeExecutor {
 
         if let Some(bus) = &self.event_bus {
             bus.agent_output_chunk(
+                &self.atp_session_id,
                 &self.session_id,
                 self.pid.as_u64(),
                 &turn_id_str,
