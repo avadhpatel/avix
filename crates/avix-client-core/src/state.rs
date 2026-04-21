@@ -129,6 +129,13 @@ impl AppState {
         self.do_connect().await
     }
 
+    /// Re-establish the ATP connection using the stored credentials.
+    /// Called automatically when a command fails with EEXPIRED.
+    pub async fn reconnect(&mut self) -> Result<(), ClientError> {
+        debug!("Reconnecting after token expiry");
+        self.do_connect().await
+    }
+
     /// Returns true when a dispatcher is active (i.e. we are authenticated).
     pub fn is_authenticated(&self) -> bool {
         self.dispatcher.is_some()

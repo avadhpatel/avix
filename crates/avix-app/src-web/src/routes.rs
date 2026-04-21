@@ -58,6 +58,29 @@ pub async fn invoke_handler(
     State(state): State<WebState>,
     Json(req): Json<InvokeRequest>,
 ) -> InvokeResult {
+    let result = invoke_inner(&state, &req).await;
+    // On EEXPIRED, reconnect with stored credentials and retry once.
+    if req.command != "login" {
+        if let Err((_, ref msg)) = result {
+            if msg.contains("EEXPIRED") {
+                let reconnected = {
+                    let mut s = state.app.write().await;
+                    s.reconnect().await.is_ok()
+                };
+                if reconnected {
+                    return invoke_inner(&state, &req).await;
+                }
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    "session expired, please log in again".into(),
+                ));
+            }
+        }
+    }
+    result
+}
+
+async fn invoke_inner(state: &WebState, req: &InvokeRequest) -> InvokeResult {
     let s = state.app.read().await;
     match req.command.as_str() {
         "auth_status" => Ok(Json(serde_json::json!({
