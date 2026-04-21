@@ -666,6 +666,20 @@ pub async fn shutdown(&mut self) {
 
         if !self.invocation_id.is_empty() {
             if let Some(store) = &self.invocation_store {
+                // Flush conversation JSONL so each completed turn is durable.
+                tracing::debug!(
+                    pid = self.pid.as_u64(),
+                    session_id = %self.session_id,
+                    "flushing conversation JSONL on idle"
+                );
+                let _ = store
+                    .persist_interim_structured(
+                        &self.invocation_id,
+                        &self.memory.conversation_history,
+                        self.tokens_consumed,
+                        self.tool_calls_total,
+                    )
+                    .await;
                 let _ = store
                     .update_status(
                         &self.invocation_id,
@@ -766,6 +780,20 @@ pub async fn shutdown(&mut self) {
         if exit_reason.as_deref() == Some("waiting_for_input") {
             if !self.invocation_id.is_empty() {
                 if let Some(store) = &self.invocation_store {
+                    // Flush conversation so the completed turn is durable before going idle.
+                    tracing::debug!(
+                        pid = self.pid.as_u64(),
+                        session_id = %self.session_id,
+                        "flushing conversation JSONL on waiting_for_input"
+                    );
+                    let _ = store
+                        .persist_interim_structured(
+                            &self.invocation_id,
+                            &self.memory.conversation_history,
+                            self.tokens_consumed,
+                            self.tool_calls_total,
+                        )
+                        .await;
                     let _ = store
                         .update_status(
                             &self.invocation_id,
