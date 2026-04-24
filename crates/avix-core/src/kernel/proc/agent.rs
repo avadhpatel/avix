@@ -192,6 +192,7 @@ impl AgentManager {
                 context_limit: 0,
                 runtime_dir: self.runtime_dir.clone(),
                 invocation_id: invocation_id.clone(),
+                restore_from_pid: None,
             };
             let abort_handle = factory.launch(spawn_params);
             self.task_handles.lock().await.insert(pid, abort_handle);
@@ -210,7 +211,7 @@ impl AgentManager {
     /// `requestedCapabilities`, and maps them to concrete tool names via
     /// `CapabilityResolver`.  Falls back to `ALWAYS_PRESENT` only if the
     /// manifest or registry is unavailable.
-    async fn resolve_granted_tools(&self, agent_name: &str, caller: &str) -> Vec<String> {
+    pub async fn resolve_granted_tools(&self, agent_name: &str, caller: &str) -> Vec<String> {
         let cap_groups: Vec<String> = if let Some(scanner) = &self.manifest_scanner {
             match scanner.get_manifest(agent_name, caller).await {
                 Some(m) => m.spec.requested_capabilities,
@@ -277,6 +278,96 @@ impl AgentManager {
         debug!(pid, "set process status to Stopped");
 
         self.finalize_invocation(pid, InvocationStatus::Killed, Some("killed".into())).await;
+    }
+
+    /// Restore a single agent from a persisted `InvocationRecord`.
+    ///
+    /// Allocates a fresh PID, re-mints a capability token from the manifest, inserts
+    /// a process-table entry (Waiting), updates the session with the new PID, registers
+    /// the agent in the active maps, and launches an executor task in restore mode
+    /// (it loads conversation history then waits for the next SIGSTART).
+    ///
+    /// Returns the new PID on success, or `None` if no factory is wired.
+    #[instrument(skip(self, inv))]
+    pub async fn restore_from_invocation(&self, inv: &InvocationRecord) -> Option<u64> {
+        let factory = self.executor_factory.as_ref()?;
+
+        let pid = Pid::generate().as_u64();
+        debug!(
+            pid,
+            invocation_id = %inv.id,
+            agent = %inv.agent_name,
+            username = %inv.username,
+            old_pid = inv.pid,
+            "restoring agent from invocation"
+        );
+
+        // Re-mint capability token using the agent manifest + master key.
+        let granted_tools = self.resolve_granted_tools(&inv.agent_name, &inv.username).await;
+        let issued_to = IssuedTo {
+            pid,
+            agent_name: inv.agent_name.clone(),
+            spawned_by: inv.username.clone(),
+        };
+        let token = CapabilityToken::mint(granted_tools, Some(issued_to), 3600, &self.master_key);
+
+        // Insert process-table entry so the agent is visible to the gateway immediately.
+        let entry = ProcessEntry {
+            pid: Pid::from_u64(pid),
+            name: inv.agent_name.clone(),
+            kind: ProcessKind::Agent,
+            status: ProcessStatus::Waiting,
+            parent: None,
+            spawned_by_user: inv.username.clone(),
+            goal: inv.goal.clone(),
+            spawned_at: chrono::Utc::now(),
+            ..Default::default()
+        };
+        self.process_table.insert(entry).await;
+
+        // Add the new PID to the session record.
+        if let Some(sstore) = &self.session_store {
+            if let Ok(uuid) = Uuid::parse_str(&inv.session_id) {
+                if let Ok(Some(mut session)) = sstore.get(&uuid).await {
+                    session.add_pid(pid);
+                    if let Err(e) = sstore.update(&session).await {
+                        warn!(pid, error = %e, "failed to add restored pid to session");
+                    }
+                }
+            }
+        }
+
+        // Register in active maps so signal routing and abort work.
+        self.active_sessions
+            .lock()
+            .await
+            .insert(pid, inv.session_id.clone());
+        self.active_invocations
+            .lock()
+            .await
+            .insert(pid, inv.id.clone());
+
+        let spawn_params = SpawnParams {
+            pid: Pid::from_u64(pid),
+            agent_name: inv.agent_name.clone(),
+            goal: inv.goal.clone(),
+            spawned_by: inv.username.clone(),
+            session_id: inv.session_id.clone(),
+            atp_session_id: String::new(),
+            token,
+            system_prompt: None,
+            selected_model: String::new(),
+            denied_tools: vec![],
+            context_limit: 0,
+            runtime_dir: self.runtime_dir.clone(),
+            invocation_id: inv.id.clone(),
+            restore_from_pid: Some(inv.pid),
+        };
+
+        let abort_handle = factory.launch(spawn_params);
+        self.task_handles.lock().await.insert(pid, abort_handle);
+        info!(pid, old_pid = inv.pid, agent = %inv.agent_name, "restored agent launched");
+        Some(pid)
     }
 
     #[instrument(skip(self))]

@@ -19,7 +19,6 @@ use crate::process::table::ProcessTable;
 use crate::session::PersistentSessionStore;
 use crate::signal::{bus::SignalBus, SignalChannelRegistry};
 use crate::trace::Tracer;
-use crate::types::Pid;
 
 /// Concrete `AgentExecutorFactory` wired into the kernel bootstrap.
 ///
@@ -129,9 +128,11 @@ impl AgentExecutorFactory for IpcExecutorFactory {
         let pid = params.pid;
         let agent_name = params.agent_name.clone();
         let goal = params.goal.clone();
-        let agent_session_id = params.session_id.clone();   // logical agent session UUID
-        let atp_session_id = params.atp_session_id.clone(); // ATP connection session ID — for event routing
+        let agent_session_id = params.session_id.clone();
+        let atp_session_id = params.atp_session_id.clone();
         let invocation_id = params.invocation_id.clone();
+        let restore_from_pid = params.restore_from_pid;
+        let spawned_by = params.spawned_by.clone();
         let signal_channels = self.signal_channels.clone();
         let tool_registry_handle = Arc::clone(&self.tool_registry);
         let vfs_handle = self.vfs.clone();
@@ -140,10 +141,19 @@ impl AgentExecutorFactory for IpcExecutorFactory {
         let signal_bus = Arc::clone(&self.signal_bus);
 
         let handle = tokio::spawn(async move {
-            tracer.agent_spawn(pid.as_u64(), &agent_name, &goal, &agent_session_id);
+            let is_restore = restore_from_pid.is_some();
 
-            // Emit agent.spawned so the UI can register the new agent immediately.
-            event_bus.agent_spawned(&atp_session_id, pid.as_u64(), &agent_name, &goal, &agent_session_id);
+            if is_restore {
+                info!(
+                    pid = pid.as_u64(),
+                    agent = %agent_name,
+                    session_id = %agent_session_id,
+                    "restoring interrupted agent"
+                );
+            } else {
+                tracer.agent_spawn(pid.as_u64(), &agent_name, &goal, &agent_session_id);
+                event_bus.agent_spawned(&atp_session_id, pid.as_u64(), &agent_name, &goal, &agent_session_id);
+            }
 
             let llm_client = IpcLlmClient::new(
                 llm_sock.to_string_lossy().to_string(),
@@ -184,7 +194,7 @@ impl AgentExecutorFactory for IpcExecutorFactory {
             // Wire the event bus, tracer, persistence stores, VFS, and HIL infrastructure.
             executor = executor.with_event_bus(Arc::clone(&event_bus));
             executor = executor.with_tracer(Arc::clone(&tracer));
-            executor = executor.with_invocation_store(invocation_store, invocation_id);
+            executor = executor.with_invocation_store(Arc::clone(&invocation_store), invocation_id);
             executor = executor.with_session_store(session_store);
             executor = executor.with_resource_handler(resource_handler);
             executor = executor.with_hil_manager(hil_manager);
@@ -194,63 +204,127 @@ impl AgentExecutorFactory for IpcExecutorFactory {
                 executor.init_vfs_caller().await;
             }
 
-            info!(pid = pid.as_u64(), "executor started");
+            // ── Restore mode ─────────────────────────────────────────────────
+            // Load persisted conversation from the previous run's JSONL, persist
+            // idle state with the restored history, then go straight to waiting.
+            // The next SIGSTART from the user triggers the first new LLM turn.
+            if let Some(old_pid) = restore_from_pid {
+                let history = invocation_store
+                    .read_conversation(&agent_session_id, old_pid, &spawned_by)
+                    .await
+                    .unwrap_or_default();
+                let history_len = history.len();
+                executor.memory.conversation_history = history;
+                info!(
+                    pid = pid.as_u64(),
+                    old_pid,
+                    history_entries = history_len,
+                    "conversation history restored"
+                );
 
-            let mut current_goal = goal;
+                // Persist Idle status and flush conversation so the record is consistent.
+                executor.idle().await;
 
-            // ── Turn loop ────────────────────────────────────────────────────
-            // Each iteration processes one user message. After a successful
-            // turn the executor idles and waits for SIGSTART (next message).
-            // The loop exits on SIGKILL, SIGSTOP, or an unrecoverable error.
-            loop {
-                event_bus.agent_status(&atp_session_id, pid.as_u64(), "running");
+                event_bus.agent_status(&atp_session_id, pid.as_u64(), "waiting");
+                let _ = process_table.set_status(pid, ProcessStatus::Waiting).await;
+                info!(pid = pid.as_u64(), "restored agent waiting for next goal (SIGSTART)");
 
-                match executor.run_with_client(&current_goal, &llm_client).await {
-                    Ok(_result) => {
-                        info!(pid = pid.as_u64(), "executor turn finished; transitioning to idle");
-
-                        // Persist idle state — invocation + session status → Idle.
-                        executor.idle().await;
-
-                        event_bus.agent_status(&atp_session_id, pid.as_u64(), "waiting");
-                        let _ = process_table.set_status(pid, ProcessStatus::Waiting).await;
-
-                        info!(pid = pid.as_u64(), "executor waiting for next goal (SIGSTART)");
-
-                        // Block until a new goal arrives via SIGSTART or a kill signal.
-                        match executor.wait_for_next_goal().await {
-                            Some(next_goal) => {
-                                info!(pid = pid.as_u64(), "received next goal; resuming");
-                                current_goal = next_goal;
-                            }
-                            None => {
-                                info!(pid = pid.as_u64(), "executor shutting down after idle wait");
-                                break;
-                            }
-                        }
+                // Fall through to the turn loop below (first iteration skips run_with_client
+                // and goes directly to wait_for_next_goal).
+                match executor.wait_for_next_goal().await {
+                    Some(next_goal) => {
+                        info!(pid = pid.as_u64(), "restored agent received first goal; starting turn");
+                        // Continue into the shared turn loop with this goal.
+                        run_turn_loop(
+                            executor,
+                            next_goal,
+                            &llm_client,
+                            pid,
+                            &atp_session_id,
+                            &event_bus,
+                            &tracer,
+                            &process_table,
+                        )
+                        .await;
                     }
-                    Err(err) => {
-                        warn!(pid = pid.as_u64(), error = %err, "executor crashed");
-                        executor
-                            .shutdown_with_status(
-                                InvocationStatus::Failed,
-                                Some(err.to_string()),
-                            )
-                            .await;
-                        tracer.agent_exit(pid.as_u64(), "crashed", Some(&err.to_string()));
-                        event_bus.agent_status(&atp_session_id, pid.as_u64(), "crashed");
-                        event_bus.agent_exit(&atp_session_id, pid.as_u64(), 1);
-                        let _ = process_table
-                            .set_status(Pid::from_u64(pid.as_u64()), ProcessStatus::Crashed)
-                            .await;
-                        break;
+                    None => {
+                        info!(pid = pid.as_u64(), "restored agent killed before receiving first goal");
                     }
                 }
+
+                signal_channels.unregister(pid).await;
+                return;
             }
+
+            info!(pid = pid.as_u64(), "executor started");
+
+            // ── Normal turn loop ─────────────────────────────────────────────
+            run_turn_loop(
+                executor,
+                goal,
+                &llm_client,
+                pid,
+                &atp_session_id,
+                &event_bus,
+                &tracer,
+                &process_table,
+            )
+            .await;
 
             signal_channels.unregister(pid).await;
         });
 
         handle.abort_handle()
+    }
+}
+
+/// Shared turn loop used by both normal spawn and post-restore continuation.
+async fn run_turn_loop(
+    mut executor: RuntimeExecutor,
+    initial_goal: String,
+    llm_client: &IpcLlmClient,
+    pid: crate::types::Pid,
+    atp_session_id: &str,
+    event_bus: &Arc<crate::gateway::event_bus::AtpEventBus>,
+    tracer: &Arc<crate::trace::Tracer>,
+    process_table: &Arc<crate::process::table::ProcessTable>,
+) {
+    let mut current_goal = initial_goal;
+    loop {
+        event_bus.agent_status(atp_session_id, pid.as_u64(), "running");
+        let _ = process_table.set_status(pid, ProcessStatus::Running).await;
+
+        match executor.run_with_client(&current_goal, llm_client).await {
+            Ok(_result) => {
+                info!(pid = pid.as_u64(), "executor turn finished; transitioning to idle");
+                executor.idle().await;
+                event_bus.agent_status(atp_session_id, pid.as_u64(), "waiting");
+                let _ = process_table.set_status(pid, ProcessStatus::Waiting).await;
+                info!(pid = pid.as_u64(), "executor waiting for next goal (SIGSTART)");
+                match executor.wait_for_next_goal().await {
+                    Some(next_goal) => {
+                        info!(pid = pid.as_u64(), "received next goal; resuming");
+                        current_goal = next_goal;
+                    }
+                    None => {
+                        info!(pid = pid.as_u64(), "executor shutting down after idle wait");
+                        break;
+                    }
+                }
+            }
+            Err(err) => {
+                warn!(pid = pid.as_u64(), error = %err, "executor crashed");
+                executor
+                    .shutdown_with_status(InvocationStatus::Failed, Some(err.to_string()))
+                    .await;
+                tracer.agent_exit(pid.as_u64(), "crashed", Some(&err.to_string()));
+                event_bus.agent_status(atp_session_id, pid.as_u64(), "crashed");
+                event_bus.agent_exit(atp_session_id, pid.as_u64(), 1);
+                let _ = process_table
+                    .set_status(crate::types::Pid::from_u64(pid.as_u64()), ProcessStatus::Crashed)
+                    .await;
+                break;
+            }
+        }
     }
 }

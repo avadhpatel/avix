@@ -35,6 +35,7 @@ async fn make_executor(pid: u64) -> RuntimeExecutor {
         context_limit: 0,
         runtime_dir: std::path::PathBuf::new(),
         invocation_id: String::new(),
+            restore_from_pid: None,
             atp_session_id: String::new(),
     };
     RuntimeExecutor::spawn_with_registry(params, registry)

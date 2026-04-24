@@ -237,6 +237,7 @@ pub async fn run(sub: ServerCmd) -> Result<()> {
                 context_limit: 0,
                 runtime_dir: runtime.runtime_dir().to_path_buf(),
                 invocation_id: uuid::Uuid::new_v4().to_string(),
+                restore_from_pid: None,
             };
             let registry = Arc::new(MockToolRegistry::new());
             let mut executor = RuntimeExecutor::spawn_with_registry(params, registry).await?;

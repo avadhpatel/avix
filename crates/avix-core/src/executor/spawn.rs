@@ -26,4 +26,9 @@ pub struct SpawnParams {
     /// Invocation ID (UUID v4) generated at spawn by `ProcHandler`.
     /// Used by `RuntimeExecutor` to write conversation + finalize invocation record.
     pub invocation_id: String,
+    /// When `Some(old_pid)`, the factory enters restore mode: loads the conversation
+    /// JSONL from `<username>/.sessions/<session_id>/<old_pid>.jsonl`, injects it into
+    /// the executor, then goes directly to `idle()` + `wait_for_next_goal()` without
+    /// running an LLM turn. Set by crash-recovery restoration only.
+    pub restore_from_pid: Option<u64>,
 }

@@ -342,6 +342,43 @@ impl ProcHandler {
         }
     }
 
+    /// Scan `invocation_store` for all non-terminal invocations (Running, Paused, Idle)
+    /// and spawn a live executor for each one so they can accept SIGSTART from the user.
+    ///
+    /// Called at phase 3.5 — after services start and the real ToolRegistry is available.
+    #[instrument(skip(self, invocation_store))]
+    pub async fn restore_interrupted_agents(&self, invocation_store: Arc<InvocationStore>) {
+        let invocations = match invocation_store.list_all().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(error = %e, "restore_interrupted_agents: failed to list invocations");
+                return;
+            }
+        };
+
+        let mut restored = 0u32;
+        for inv in &invocations {
+            if matches!(
+                inv.status,
+                InvocationStatus::Running | InvocationStatus::Paused | InvocationStatus::Idle
+            ) {
+                info!(
+                    invocation_id = %inv.id,
+                    agent = %inv.agent_name,
+                    username = %inv.username,
+                    old_pid = inv.pid,
+                    status = ?inv.status,
+                    "restoring agent"
+                );
+                if self.agent_manager.restore_from_invocation(inv).await.is_some() {
+                    restored += 1;
+                }
+            }
+        }
+
+        info!(restored, "phase 3.5: agent restoration complete");
+    }
+
     #[instrument(skip(self))]
     pub async fn abort_agent(&self, pid: u64) {
         self.agent_manager.abort_agent(pid).await;

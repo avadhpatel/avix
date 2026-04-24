@@ -215,6 +215,18 @@ impl Runtime {
             message: "phase 3: services spawned".into(),
         });
 
+        // Phase 3.5: restore interrupted agents — must run after phase 3 so the real
+        // ToolRegistry is available to re-mint capability tokens correctly.
+        if let (Some(ph), Some(inv_store)) =
+            (self.proc_handler.as_ref(), self.invocation_store.as_ref())
+        {
+            ph.restore_interrupted_agents(Arc::clone(inv_store)).await;
+            self.boot_log.push(BootLogEntry {
+                phase: BootPhase(3),
+                message: "phase 3.5: interrupted agents restored".into(),
+            });
+        }
+
         // Phase 4: start ATP gateway
         self.phase4_atp_gateway(port, test_mode).await?;
         self.boot_log.push(BootLogEntry {

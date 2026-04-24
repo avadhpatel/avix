@@ -1,31 +1,33 @@
-# restart-gap-A — Boot-time Crash Recovery
+# restart-gap-A — Boot-time Crash Recovery with Agent Restoration
 
-> Goal: On every `avix start`, atomically repair stale persistence records left by the
-> previous run before any agents or ATP clients can observe inconsistent state.
+> Goal: On every `avix start`, repair stale persistence records and re-spawn live
+> executors for any agent that was Running, Paused, or Idle at crash/shutdown time,
+> so users can immediately send messages to those agents without manual resumption.
 
 ---
 
 ## Problem
 
-After a daemon crash or clean shutdown, the `InvocationStore` (redb) and
-`PersistentSessionStore` (redb) contain records whose in-memory state is permanently lost:
+After a crash or clean shutdown, `InvocationStore` (redb) and `PersistentSessionStore`
+(redb) contain records whose in-memory executors are gone.
 
-| Record status | Why it's stale | Correct post-restart status |
+| Record status | After restart: invocation | After restart: session |
 |---|---|---|
-| `InvocationStatus::Running` | Executor task is dead | `Killed` (exit_reason: "interrupted_at_shutdown") |
-| `InvocationStatus::Paused` | Atomic pause flag lost | `Killed` (exit_reason: "interrupted_at_shutdown") |
-| `SessionStatus::Running` | All PIDs gone | `Idle` (restorable via `session resume`) |
-| `SessionStatus::Paused` | In-memory pause lost | `Idle` (restorable via `session resume`) |
+| `Running` | Restore live executor → Idle/Waiting | Clear pids → Idle |
+| `Paused` | Restore live executor → Idle/Waiting | Clear pids → Idle |
+| `Idle` | Restore live executor → Idle/Waiting | (already Idle, but clear stale pids) |
+| `Completed` / `Failed` / `Killed` | Untouched (terminal) | Untouched |
 
-`InvocationStatus::Idle` and terminal statuses (`Completed`, `Failed`, `Killed`) are
-already stable — no action needed.
+The restored executor:
+- Loads conversation history from the persisted JSONL (keyed by `InvocationRecord.pid`)
+- Gets a **new PID** (for signal-channel registration and process-table entry)
+- Re-mints a capability token (using agent manifest + master key)
+- Goes directly to `idle()` then `wait_for_next_goal()` — no LLM call until user sends next message
+- Accepts SIGSTART to receive the next user message
 
-`session.pids` is a `Vec<u32>` of PIDs that were active in the session. After restart,
-none of those PIDs are live; the list must be cleared so `resume_session` can allocate
-a fresh PID without collisions.
-
-The existing `phase3_re_adopt` adds dead agents back to the process table as `Running` —
-this is wrong and will be removed from the boot sequence.
+`session.pids` is cleared on all sessions whose agents are being restored. `session.status`
+is set to `Idle` for any Running/Paused session. The session remains Idle until the first
+SIGSTART triggers a real turn.
 
 ---
 
@@ -40,225 +42,125 @@ this is wrong and will be removed from the boot sequence.
 
 | # | File | Change |
 |---|---|---|
-| 1 | `crates/avix-core/src/bootstrap/mod.rs` | Store `invocation_store` + `session_store` on `Runtime`; pass them to crash recovery |
-| 2 | `crates/avix-core/src/kernel/boot.rs` | Add `phase3_crash_recovery()`; remove `phase3_re_adopt` from boot call |
+| 1 | `crates/avix-core/src/executor/spawn.rs` | Add `restore_from_pid: Option<u64>` to `SpawnParams` |
+| 2 | `crates/avix-core/src/bootstrap/executor_factory.rs` | Restore mode in `launch()`: load JSONL, skip initial turn, go to idle+wait loop |
+| 3 | `crates/avix-core/src/kernel/proc/agent.rs` | Make `resolve_granted_tools` pub; add `restore_from_invocation()` |
+| 4 | `crates/avix-core/src/kernel/proc/mod.rs` | Add `restore_interrupted_agents()` to `ProcHandler` |
+| 5 | `crates/avix-core/src/kernel/boot.rs` | `phase3_crash_recovery` only repairs sessions; update tests |
+| 6 | `crates/avix-core/src/bootstrap/mod.rs` | Phase 3.5: call `proc_handler.restore_interrupted_agents()` after services |
 
 ---
 
-## Implementation order
+## Implementation
 
-### Step 1 — `crates/avix-core/src/bootstrap/mod.rs`
+### File 1 — `crates/avix-core/src/executor/spawn.rs`
 
-**A. Add store fields to `Runtime` struct:**
+Add `restore_from_pid: Option<u64>` to `SpawnParams`.
+When `Some(old_pid)`, `IpcExecutorFactory::launch()` enters restore mode:
+loads conversation history from `<username>/.sessions/<session_id>/<old_pid>.jsonl`.
+
+### File 2 — `crates/avix-core/src/bootstrap/executor_factory.rs`
+
+In `IpcExecutorFactory::launch()`, after wiring infrastructure, check `params.restore_from_pid`:
+
+**Normal path** (existing): emit `agent_spawned`, run `run_with_client(goal)`, idle, loop.
+
+**Restore path** (`restore_from_pid = Some(old_pid)`):
+1. Load conversation history: `invocation_store.read_conversation(session_id, old_pid, username).await`
+2. Inject into `executor.memory.conversation_history`
+3. Register signal channel
+4. Call `executor.idle()` (persists Idle status; writes JSONL back to old pid path)
+5. Set process table → Waiting
+6. Emit `agent_status(atp_session_id="", pid, "waiting")`
+7. Enter `wait_for_next_goal()` loop — identical to normal post-turn loop
+
+### File 3 — `crates/avix-core/src/kernel/proc/agent.rs`
+
+- Change `resolve_granted_tools` from `async fn` to `pub async fn`.
+- Add `pub async fn restore_from_invocation(inv: &InvocationRecord) -> Option<u64>`:
+  1. Allocate new `pid = Pid::generate().as_u64()`
+  2. Resolve granted tools (re-minted token, 3600s TTL)
+  3. Insert `ProcessEntry` into process table with `ProcessStatus::Waiting`
+  4. Add pid to session in session_store
+  5. Register in `active_sessions` and `active_invocations`
+  6. Call `executor_factory.launch(SpawnParams { restore_from_pid: Some(inv.pid), ... })`
+  7. Store abort handle in `task_handles`
+  8. Return `Some(pid)`
+
+### File 4 — `crates/avix-core/src/kernel/proc/mod.rs`
+
+Add `pub async fn restore_interrupted_agents(&self, invocation_store: Arc<InvocationStore>)`:
+1. `let invocations = invocation_store.list_all().await?`
+2. Filter: `Running | Paused | Idle` status
+3. For each: call `self.agent_manager.restore_from_invocation(&inv).await`
+4. Log counts
+
+### File 5 — `crates/avix-core/src/kernel/boot.rs`
+
+Update `phase3_crash_recovery`:
+- Scan for sessions whose agents were Running/Paused
+- Clear pids, set session status → Idle
+- **Do NOT finalize/kill any invocations** (they will be restored in phase 3.5)
+
+Update tests:
+- Remove assertions that Running/Paused → Killed
+- Assert sessions are Idle + pids cleared
+- Assert invocation statuses are unchanged
+
+### File 6 — `crates/avix-core/src/bootstrap/mod.rs`
+
+In `start_daemon()`, after `phase3_services()`:
 
 ```rust
-pub struct Runtime {
-    // ... existing fields ...
-    invocation_store: Option<Arc<InvocationStore>>,
-    session_store: Option<Arc<PersistentSessionStore>>,
-}
-```
-
-Also initialise them as `None` in `bootstrap_with_root()`.
-
-**B. In `phase2_kernel()` — store references before returning:**
-
-After the stores are opened (the existing `let invocation_store = ...` and
-`let session_store = ...` lines), clone them onto `self`:
-
-```rust
-self.invocation_store = Some(Arc::clone(&invocation_store));
-self.session_store = Some(Arc::clone(&session_store));
-```
-
-**C. In `start_daemon()` — replace `phase3_re_adopt` call with crash recovery:**
-
-Remove the existing `phase3_re_adopt(...)` block entirely.
-
-In its place, after the `phase2_kernel()` block and *before* `phase3_services()`:
-
-```rust
-// Phase 2.5: crash recovery — fix stale Running/Paused records from prior run.
-if let (Some(inv_store), Some(sess_store)) =
-    (self.invocation_store.clone(), self.session_store.clone())
+// Phase 3.5: restore interrupted agents from previous run.
+if let (Some(ph), Some(inv_store)) =
+    (self.proc_handler.as_ref(), self.invocation_store.as_ref())
 {
-    phase3_crash_recovery(inv_store, sess_store).await?;
+    ph.restore_interrupted_agents(Arc::clone(inv_store)).await;
     self.boot_log.push(BootLogEntry {
-        phase: BootPhase(2),
-        message: "phase 2.5: crash recovery complete".into(),
+        phase: BootPhase(3),
+        message: "phase 3.5: interrupted agents restored".into(),
     });
 }
 ```
 
 ---
 
-### Step 2 — `crates/avix-core/src/kernel/boot.rs`
-
-**A. Add `phase3_crash_recovery` function:**
-
-```rust
-/// Phase 2.5 — fix stale invocation and session records from the previous run.
-///
-/// Must run before any agents are spawned and before the ATP gateway starts,
-/// so no client ever observes a Running/Paused record that has no live executor.
-///
-/// Algorithm:
-///   1. Scan all invocations; for each Running or Paused: mark Killed.
-///   2. Collect the session IDs affected.
-///   3. For each affected session: clear pids, then transition:
-///      Running  → Idle  (allow user to resume)
-///      Paused   → Idle  (in-memory pause state is lost; allow resumption)
-pub async fn phase3_crash_recovery(
-    invocation_store: Arc<InvocationStore>,
-    session_store: Arc<PersistentSessionStore>,
-) -> Result<(), AvixError> {
-    info!("phase 2.5: scanning for stale records from previous run");
-
-    let invocations = invocation_store.list_all().await?;
-    let mut killed = 0u32;
-    let mut affected_sessions: std::collections::HashSet<String> = Default::default();
-
-    for inv in &invocations {
-        if matches!(inv.status, InvocationStatus::Running | InvocationStatus::Paused) {
-            info!(
-                id = %inv.id,
-                agent = %inv.agent_name,
-                status = ?inv.status,
-                "marking stale invocation as killed"
-            );
-            let _ = invocation_store
-                .finalize(
-                    &inv.id,
-                    InvocationStatus::Killed,
-                    chrono::Utc::now(),
-                    inv.tokens_consumed,
-                    inv.tool_calls_total,
-                    Some("interrupted_at_shutdown".into()),
-                )
-                .await;
-            killed += 1;
-            affected_sessions.insert(inv.session_id.clone());
-        }
-    }
-
-    // Repair affected sessions.
-    let mut sessions_repaired = 0u32;
-    for session_id_str in &affected_sessions {
-        let session_uuid = match uuid::Uuid::parse_str(session_id_str) {
-            Ok(u) => u,
-            Err(_) => continue,
-        };
-        if let Ok(Some(mut session)) = session_store.get(&session_uuid).await {
-            // Clear stale PIDs — all executors are dead after restart.
-            session.pids.clear();
-
-            // Transition non-terminal session states to Idle so the user can resume.
-            match session.status {
-                SessionStatus::Running | SessionStatus::Paused => {
-                    session.mark_idle();
-                    sessions_repaired += 1;
-                }
-                _ => {}
-            }
-            let _ = session_store.update(&session).await;
-        }
-    }
-
-    info!(
-        killed,
-        sessions_repaired,
-        "phase 2.5: crash recovery complete"
-    );
-    Ok(())
-}
-```
-
-**B. Keep `phase3_re_adopt` function definition** but it is no longer called from
-`start_daemon`. Mark it `#[allow(dead_code)]` or leave it — it may be repurposed later
-for an explicit "resume all idle agents" command.
-
----
-
-## Targeted tests
-
-All tests go in `crates/avix-core/src/kernel/boot.rs` under `#[cfg(test)]`.
-
-### Test 1 — running invocations become Killed
+## Boot sequence
 
 ```
-given:   InvocationStore with two records: status=Running, status=Running
-when:    phase3_crash_recovery(store, session_store)
-expect:  both records have status=Killed, exit_reason="interrupted_at_shutdown"
-```
-
-### Test 2 — paused invocations become Killed
-
-```
-given:   InvocationStore with one record: status=Paused
-when:    phase3_crash_recovery
-expect:  record has status=Killed
-```
-
-### Test 3 — idle/terminal invocations are untouched
-
-```
-given:   records with status: Idle, Completed, Failed, Killed
-when:    phase3_crash_recovery
-expect:  all records unchanged
-```
-
-### Test 4 — session Running → Idle
-
-```
-given:   session status=Running with pids=[42]; invocation Running in same session
-when:    phase3_crash_recovery
-expect:  session status=Idle, session.pids is empty
-```
-
-### Test 5 — session Paused → Idle
-
-```
-given:   session status=Paused; invocation Paused in same session
-when:    phase3_crash_recovery
-expect:  session status=Idle
-```
-
-### Test 6 — session with only Idle/terminal invocations is untouched
-
-```
-given:   session status=Idle; invocations all Idle/Completed
-when:    phase3_crash_recovery
-expect:  session unchanged (no affected_sessions entry)
-```
-
-### Test 7 — idempotent: running recovery twice is safe
-
-```
-given:   after first recovery (all Running → Killed)
-when:    phase3_crash_recovery called again
-expect:  no errors; counts are 0 killed, 0 sessions_repaired
+Phase 2:   kernel.agent spawned; stores opened
+Phase 2.5: phase3_crash_recovery — repair sessions (clear pids; Running/Paused → Idle)
+Phase 3:   services spawned; real ToolRegistry injected into executor factory
+Phase 3.5: restore_interrupted_agents — spawn live executors for all non-terminal invocations
+Phase 4:   ATP gateway — clients can now connect and SIGSTART restored agents
 ```
 
 ---
 
-## Target test coverage: 95%+ of `phase3_crash_recovery`
+## Key invariant: JSONL path consistency
+
+`persist_interim_structured(invocation_id, ...)` uses `InvocationRecord.pid` (old pid)
+to determine JSONL path. Restored executor gets new PID for signal routing but the same
+`invocation_id` in params. So:
+- Read: `read_conversation(session_id, old_pid, username)` → old JSONL
+- Write (via `idle()`): `persist_interim_structured(invocation_id, ...)` → same old JSONL via record.pid
+
+No inconsistency. No data loss.
 
 ---
 
 ## Success criteria
 
 1. `cargo check --package avix-core` — zero errors
-2. All 7 targeted tests pass
-3. `cargo clippy --package avix-core -- -D warnings` — zero warnings
+2. `cargo clippy --package avix-core -- -D warnings` — zero warnings
+3. After `avix start` following a crash: all previously Running/Paused/Idle agents appear
+   in process table as Waiting and respond to SIGSTART
 
 ---
 
 ## Post-plan architecture update
 
 After implementation, update `docs/architecture/02-bootstrap.md`:
-- Phase 2.5 description: "crash recovery — stale Running/Paused records marked Killed"
-- Remove Phase 3.5 reference (no longer calls `phase3_re_adopt`)
-
-Update `docs/architecture/14-agent-persistence.md`:
-- Note that `Running`/`Paused` invocations are cleaned up at boot
-- Document boot-time session repair: `Running`/`Paused` sessions → `Idle`
+- Phase 2.5: "session repair — stale Running/Paused sessions cleared; invocations untouched"
+- Phase 3.5: "agent restoration — live executors spawned for all non-terminal invocations"

@@ -874,6 +874,7 @@ mod tests {
             context_limit: 0,
             runtime_dir: std::path::PathBuf::new(),
             invocation_id: String::new(),
+            restore_from_pid: None,
         }
     }
 

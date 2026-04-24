@@ -1623,6 +1623,7 @@ mod tests {
             context_limit: 0,
             runtime_dir: std::path::PathBuf::new(),
             invocation_id: String::new(),
+            restore_from_pid: None,
         }
     }
 
@@ -1645,6 +1646,7 @@ mod tests {
             context_limit: 0,
             runtime_dir,
             invocation_id: String::new(),
+            restore_from_pid: None,
         }
     }
 
@@ -1896,6 +1898,7 @@ mod tests {
             context_limit: 0,
             runtime_dir: std::path::PathBuf::new(),
             invocation_id: String::new(),
+            restore_from_pid: None,
         };
         let mut executor = RuntimeExecutor::spawn_with_registry(params, registry)
             .await
@@ -2421,6 +2424,7 @@ mod tests {
             context_limit: 0,
             runtime_dir: std::path::PathBuf::new(),
             invocation_id: String::new(),
+            restore_from_pid: None,
         };
         let mut executor = RuntimeExecutor::spawn_with_registry(params, registry)
             .await

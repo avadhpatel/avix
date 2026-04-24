@@ -6,50 +6,33 @@ use crate::invocation::{InvocationStatus, InvocationStore};
 use crate::session::record::SessionStatus;
 use crate::session::PersistentSessionStore;
 
-/// Phase 3 — fix stale invocation and session records from the previous run.
+/// Phase 2.5 — repair session records left stale by the previous run.
 ///
-/// Must run before any agents are spawned and before the ATP gateway starts,
-/// so no client ever observes a Running/Paused record that has no live executor.
+/// Invocations are NOT modified here; they will be restored as live executors in
+/// phase 3.5 (`ProcHandler::restore_interrupted_agents`) after the real ToolRegistry
+/// is available.
 ///
 /// Algorithm:
-///   1. Scan all invocations; for each `Running` or `Paused`: finalize as `Killed`.
-///   2. Collect the session IDs that were affected.
-///   3. For each affected session: clear `pids`, then transition status:
-///      `Running`  → `Idle`  (allow user to resume via `session resume`)
-///      `Paused`   → `Idle`  (in-memory pause state is lost; allow resumption)
+///   1. Scan all invocations to find session IDs that had Running or Paused agents.
+///   2. For each affected session: clear `pids` (all executors are gone after restart)
+///      and transition the session status:
+///      `Running` → `Idle`  (live agents will be re-attached in phase 3.5)
+///      `Paused`  → `Idle`  (in-memory pause flag is lost; agent resumes normally)
 #[instrument(skip_all)]
 pub async fn phase3_crash_recovery(
     invocation_store: Arc<InvocationStore>,
     session_store: Arc<PersistentSessionStore>,
 ) -> Result<(), AvixError> {
-    info!("phase 2.5: scanning for stale records from previous run");
+    info!("phase 2.5: repairing stale session records from previous run");
 
     let invocations = invocation_store.list_all().await?;
-    let mut killed = 0u32;
     let mut affected_sessions: std::collections::HashSet<String> = Default::default();
 
     for inv in &invocations {
         if matches!(
             inv.status,
-            InvocationStatus::Running | InvocationStatus::Paused
+            InvocationStatus::Running | InvocationStatus::Paused | InvocationStatus::Idle
         ) {
-            info!(
-                id = %inv.id,
-                agent = %inv.agent_name,
-                status = ?inv.status,
-                "marking stale invocation as killed"
-            );
-            let _ = invocation_store
-                .finalize(
-                    &inv.id,
-                    InvocationStatus::Killed,
-                    chrono::Utc::now(),
-                    inv.tokens_consumed,
-                    inv.tool_calls_total,
-                    Some("interrupted_at_shutdown".into()),
-                )
-                .await;
-            killed += 1;
             affected_sessions.insert(inv.session_id.clone());
         }
     }
@@ -62,10 +45,10 @@ pub async fn phase3_crash_recovery(
             Err(_) => continue,
         };
         if let Ok(Some(mut session)) = session_store.get(&session_uuid).await {
-            // All executor tasks are dead after restart — clear the PID list.
+            // All executor tasks are dead after restart — clear stale PIDs so
+            // restore_interrupted_agents can add fresh ones without collisions.
             session.pids.clear();
 
-            // Transition non-terminal states to Idle so the user can resume.
             match session.status {
                 SessionStatus::Running | SessionStatus::Paused => {
                     session.mark_idle();
@@ -78,9 +61,8 @@ pub async fn phase3_crash_recovery(
     }
 
     info!(
-        killed,
         sessions_repaired,
-        "phase 2.5: crash recovery complete"
+        "phase 2.5: session repair complete"
     );
     Ok(())
 }
@@ -135,8 +117,10 @@ mod tests {
         s
     }
 
+    // ── Invocations are NOT modified — they are restored as live executors in phase 3.5.
+
     #[tokio::test]
-    async fn running_invocations_become_killed() {
+    async fn running_invocations_are_preserved_for_restore() {
         let dir = TempDir::new().unwrap();
         let inv = open_inv_store(&dir).await;
         let sess = open_sess_store(&dir).await;
@@ -146,15 +130,13 @@ mod tests {
 
         phase3_crash_recovery(Arc::clone(&inv), Arc::clone(&sess)).await.unwrap();
 
-        let r1 = inv.get("inv-1").await.unwrap().unwrap();
-        let r2 = inv.get("inv-2").await.unwrap().unwrap();
-        assert_eq!(r1.status, InvocationStatus::Killed);
-        assert_eq!(r1.exit_reason.as_deref(), Some("interrupted_at_shutdown"));
-        assert_eq!(r2.status, InvocationStatus::Killed);
+        // Invocation statuses must be unchanged — restore happens in phase 3.5.
+        assert_eq!(inv.get("inv-1").await.unwrap().unwrap().status, InvocationStatus::Running);
+        assert_eq!(inv.get("inv-2").await.unwrap().unwrap().status, InvocationStatus::Running);
     }
 
     #[tokio::test]
-    async fn paused_invocations_become_killed() {
+    async fn paused_invocations_are_preserved_for_restore() {
         let dir = TempDir::new().unwrap();
         let inv = open_inv_store(&dir).await;
         let sess = open_sess_store(&dir).await;
@@ -163,25 +145,21 @@ mod tests {
 
         phase3_crash_recovery(Arc::clone(&inv), Arc::clone(&sess)).await.unwrap();
 
-        let r = inv.get("inv-p").await.unwrap().unwrap();
-        assert_eq!(r.status, InvocationStatus::Killed);
-        assert_eq!(r.exit_reason.as_deref(), Some("interrupted_at_shutdown"));
+        assert_eq!(inv.get("inv-p").await.unwrap().unwrap().status, InvocationStatus::Paused);
     }
 
     #[tokio::test]
-    async fn idle_and_terminal_invocations_are_untouched() {
+    async fn terminal_invocations_are_untouched() {
         let dir = TempDir::new().unwrap();
         let inv = open_inv_store(&dir).await;
         let sess = open_sess_store(&dir).await;
 
-        inv.create(&make_inv("idle", "s", InvocationStatus::Idle)).await.unwrap();
         inv.create(&make_inv("done", "s", InvocationStatus::Completed)).await.unwrap();
         inv.create(&make_inv("fail", "s", InvocationStatus::Failed)).await.unwrap();
         inv.create(&make_inv("kill", "s", InvocationStatus::Killed)).await.unwrap();
 
         phase3_crash_recovery(Arc::clone(&inv), Arc::clone(&sess)).await.unwrap();
 
-        assert_eq!(inv.get("idle").await.unwrap().unwrap().status, InvocationStatus::Idle);
         assert_eq!(inv.get("done").await.unwrap().unwrap().status, InvocationStatus::Completed);
         assert_eq!(inv.get("fail").await.unwrap().unwrap().status, InvocationStatus::Failed);
         assert_eq!(inv.get("kill").await.unwrap().unwrap().status, InvocationStatus::Killed);
@@ -225,18 +203,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_with_only_idle_invocations_is_untouched() {
+    async fn idle_session_with_idle_invocation_pids_cleared() {
+        let dir = TempDir::new().unwrap();
+        let inv = open_inv_store(&dir).await;
+        let sess = open_sess_store(&dir).await;
+
+        let sid = uuid::Uuid::new_v4();
+        let mut session = make_session(sid, SessionStatus::Idle);
+        session.pids = vec![99];
+        sess.create(&session).await.unwrap();
+        inv.create(&make_inv("inv-i", &sid.to_string(), InvocationStatus::Idle)).await.unwrap();
+
+        phase3_crash_recovery(Arc::clone(&inv), Arc::clone(&sess)).await.unwrap();
+
+        // Idle sessions with non-terminal invocations have stale pids cleared.
+        let s = sess.get(&sid).await.unwrap().unwrap();
+        assert_eq!(s.status, SessionStatus::Idle);
+        assert!(s.pids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_with_only_terminal_invocations_is_untouched() {
         let dir = TempDir::new().unwrap();
         let inv = open_inv_store(&dir).await;
         let sess = open_sess_store(&dir).await;
 
         let sid = uuid::Uuid::new_v4();
         sess.create(&make_session(sid, SessionStatus::Idle)).await.unwrap();
-        inv.create(&make_inv("inv-i", &sid.to_string(), InvocationStatus::Idle)).await.unwrap();
+        inv.create(&make_inv("done", &sid.to_string(), InvocationStatus::Completed)).await.unwrap();
 
         phase3_crash_recovery(Arc::clone(&inv), Arc::clone(&sess)).await.unwrap();
 
-        // Session was not in affected_sessions so it is not touched.
+        // Session not in affected_sessions (no non-terminal invocation) — untouched.
         let s = sess.get(&sid).await.unwrap().unwrap();
         assert_eq!(s.status, SessionStatus::Idle);
     }
@@ -247,14 +245,20 @@ mod tests {
         let inv = open_inv_store(&dir).await;
         let sess = open_sess_store(&dir).await;
 
-        inv.create(&make_inv("inv-x", "sess-x", InvocationStatus::Running)).await.unwrap();
+        let sid = uuid::Uuid::new_v4();
+        let mut session = make_session(sid, SessionStatus::Running);
+        session.pids = vec![42];
+        sess.create(&session).await.unwrap();
+        inv.create(&make_inv("inv-x", &sid.to_string(), InvocationStatus::Running)).await.unwrap();
 
-        // First pass
         phase3_crash_recovery(Arc::clone(&inv), Arc::clone(&sess)).await.unwrap();
-        // Second pass — all records already Killed, should be a no-op
         phase3_crash_recovery(Arc::clone(&inv), Arc::clone(&sess)).await.unwrap();
 
-        let r = inv.get("inv-x").await.unwrap().unwrap();
-        assert_eq!(r.status, InvocationStatus::Killed);
+        // After two passes the session is still Idle and pids still empty.
+        let s = sess.get(&sid).await.unwrap().unwrap();
+        assert_eq!(s.status, SessionStatus::Idle);
+        assert!(s.pids.is_empty());
+        // Invocation is still unchanged (to be restored in phase 3.5).
+        assert_eq!(inv.get("inv-x").await.unwrap().unwrap().status, InvocationStatus::Running);
     }
 }
