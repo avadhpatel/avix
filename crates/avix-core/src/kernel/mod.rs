@@ -8,7 +8,7 @@ pub mod proc;
 pub mod resource_request;
 
 pub use approval_token::ApprovalTokenStore;
-pub use boot::{phase3_crash_recovery, phase3_re_adopt};
+pub use boot::phase3_crash_recovery;
 pub use hil::{HilOption, HilRequest, HilState, HilType, HilUrgency};
 pub use hil_manager::HilManager;
 pub use ipc_server::KernelIpcServer;
