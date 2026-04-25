@@ -41,11 +41,14 @@ impl SignalHandler {
     }
 
     /// Send a signal to one agent via its registered in-process channel.
-    async fn deliver_to(&self, pid: Pid, kind: SignalKind, payload: serde_json::Value) {
+    /// Returns `false` when no channel is registered for the pid.
+    async fn deliver_to(&self, pid: Pid, kind: SignalKind, payload: serde_json::Value) -> bool {
         let sig = Signal { target: pid, kind, payload };
         if !self.channels.send(pid, sig).await {
             warn!(pid = pid.as_u64(), "no signal channel registered for agent (not running?)");
+            return false;
         }
+        true
     }
 
     /// Send a signal to multiple agents concurrently.
@@ -220,7 +223,9 @@ impl SignalHandler {
                 return Err(AvixError::ConfigParse(format!("unknown signal: {other}")));
             }
         };
-        self.deliver_to(Pid::from_u64(pid), kind, payload).await;
+        if !self.deliver_to(Pid::from_u64(pid), kind, payload).await {
+            return Err(AvixError::NotFound(format!("no signal channel for pid {pid}")));
+        }
         debug!(pid, signal, "signal delivered successfully");
         Ok(())
     }

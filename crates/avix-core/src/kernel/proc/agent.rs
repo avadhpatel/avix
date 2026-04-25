@@ -292,13 +292,13 @@ impl AgentManager {
     pub async fn restore_from_invocation(&self, inv: &InvocationRecord) -> Option<u64> {
         let factory = self.executor_factory.as_ref()?;
 
-        let pid = Pid::generate().as_u64();
+        // Reuse the original PID — PIDs are stable across reboots for consistency.
+        let pid = inv.pid;
         debug!(
             pid,
             invocation_id = %inv.id,
             agent = %inv.agent_name,
             username = %inv.username,
-            old_pid = inv.pid,
             "restoring agent from invocation"
         );
 
@@ -325,13 +325,13 @@ impl AgentManager {
         };
         self.process_table.insert(entry).await;
 
-        // Add the new PID to the session record.
+        // Re-add the original PID to the session (phase 2.5 cleared pids on boot).
         if let Some(sstore) = &self.session_store {
             if let Ok(uuid) = Uuid::parse_str(&inv.session_id) {
                 if let Ok(Some(mut session)) = sstore.get(&uuid).await {
                     session.add_pid(pid);
                     if let Err(e) = sstore.update(&session).await {
-                        warn!(pid, error = %e, "failed to add restored pid to session");
+                        warn!(pid, error = %e, "failed to re-add pid to session");
                     }
                 }
             }
@@ -361,12 +361,12 @@ impl AgentManager {
             context_limit: 0,
             runtime_dir: self.runtime_dir.clone(),
             invocation_id: inv.id.clone(),
-            restore_from_pid: Some(inv.pid),
+            restore_from_pid: Some(pid),
         };
 
         let abort_handle = factory.launch(spawn_params);
         self.task_handles.lock().await.insert(pid, abort_handle);
-        info!(pid, old_pid = inv.pid, agent = %inv.agent_name, "restored agent launched");
+        info!(pid, agent = %inv.agent_name, "restored agent launched");
         Some(pid)
     }
 
