@@ -1,13 +1,26 @@
 use std::collections::VecDeque;
+use std::time::Instant;
 
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AgentOutputBuffer {
     /// Circular buffer — keeps the last MAX_LINES lines
     lines: VecDeque<String>,
     pub scroll_offset: u16,
+    /// Set when a message was sent and we're waiting for the first response chunk.
+    processing_since: Option<Instant>,
+}
+
+impl Default for AgentOutputBuffer {
+    fn default() -> Self {
+        Self {
+            lines: VecDeque::new(),
+            scroll_offset: 0,
+            processing_since: None,
+        }
+    }
 }
 
 const MAX_LINES: usize = 5000;
@@ -21,6 +34,14 @@ impl AgentOutputBuffer {
                 self.lines.pop_front();
             }
         }
+    }
+
+    pub fn push_user_message(&mut self, text: &str) {
+        self.push_text(&format!("> {}\n", text));
+    }
+
+    pub fn set_processing(&mut self, processing: bool) {
+        self.processing_since = if processing { Some(Instant::now()) } else { None };
     }
 
     #[allow(dead_code)]
@@ -61,7 +82,15 @@ impl AgentOutputBuffer {
 
     pub fn render(&self, pid: u64, area: Rect) -> Paragraph<'_> {
         let visible = self.visible_lines(area.height);
-        let text = visible.join("\n");
+        let mut text = visible.join("\n");
+        if let Some(since) = self.processing_since {
+            let frame = (since.elapsed().as_millis() / 250 % 4) as usize;
+            let spinner = ["|", "/", "-", "\\"][frame];
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&format!("{} Processing...", spinner));
+        }
         Paragraph::new(text)
             .block(
                 Block::default()

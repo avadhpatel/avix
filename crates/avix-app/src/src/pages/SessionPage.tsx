@@ -125,6 +125,8 @@ const SessionPage: React.FC = () => {
   const [sending, setSending] = useState(false);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
+  const [optimisticUserMessage, setOptimisticUserMessage] = useState<string | null>(null);
+  const [awaitingResponse, setAwaitingResponse] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
 
   const loadSession = useCallback(async () => {
@@ -181,6 +183,12 @@ const SessionPage: React.FC = () => {
     }
   }, [invocationMessages, streamingOutputs]);
 
+  // Clear optimistic message once the agent exits and real messages arrive
+  useEffect(() => {
+    setOptimisticUserMessage(null);
+    setAwaitingResponse(false);
+  }, [conversationVersion]);
+
   // Pending HIL for this session
   const sessionPids = session?.pids ?? [];
   const pendingHil = notifications.find(
@@ -194,19 +202,31 @@ const SessionPage: React.FC = () => {
   const activePid = session?.pids[0] ?? 0;
   const liveText = activePid ? streamingOutputs[activePid] : undefined;
 
+  // Clear thinking indicator once live activity starts arriving
+  // (placed after activePid/liveText declarations to satisfy temporal dead zone)
+  useEffect(() => {
+    if (awaitingResponse && (liveText || (liveToolCalls[activePid]?.length ?? 0) > 0)) {
+      setAwaitingResponse(false);
+    }
+  }, [liveText, liveToolCalls, activePid, awaitingResponse]);
+
   const handleSend = async () => {
     if (!session || !inputText.trim() || sending) return;
+    const msgText = inputText.trim();
+    setOptimisticUserMessage(msgText);
+    setAwaitingResponse(true);
+    setInputText('');
     setSending(true);
     try {
       if (session.status === 'idle') {
-        await invoke('resume_session', { session_id: session.id, input: inputText.trim() });
+        await invoke('resume_session', { session_id: session.id, input: msgText });
         await refreshSessions();
       } else if (session.status === 'running') {
-        await invoke('pipe_text', { pid: activePid, text: inputText.trim() });
+        await invoke('pipe_text', { pid: activePid, text: msgText });
       }
-      setInputText('');
     } catch {
-      // ignore
+      setOptimisticUserMessage(null);
+      setAwaitingResponse(false);
     } finally {
       setSending(false);
     }
@@ -312,6 +332,42 @@ const SessionPage: React.FC = () => {
           {invocationMessages.map((block) => (
             <InvocationBlock key={block.invocationId} block={block} />
           ))}
+
+          {/* Optimistic user message — shows immediately on send */}
+          {optimisticUserMessage && (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                padding: '8px 12px',
+                borderRadius: 8,
+                background: 'rgba(137,180,250,0.06)',
+                border: '1px solid rgba(137,180,250,0.12)',
+                marginBottom: 6,
+                opacity: 0.8,
+              }}
+            >
+              <span style={{ fontSize: 10, fontWeight: 700, color: '#89b4fa', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+                you
+              </span>
+              <div style={{ fontSize: 13, color: '#cdd6f4', lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {optimisticUserMessage}
+              </div>
+            </div>
+          )}
+
+          {/* Thinking indicator — shown between send and first live activity */}
+          {awaitingResponse && !liveText && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#585b70', fontSize: 12, marginBottom: 10 }}>
+              <span style={{ display: 'flex', gap: 2 }}>
+                <span style={{ animation: 'blink 1.4s step-end infinite', animationDelay: '0s' }}>●</span>
+                <span style={{ animation: 'blink 1.4s step-end infinite', animationDelay: '0.46s' }}>●</span>
+                <span style={{ animation: 'blink 1.4s step-end infinite', animationDelay: '0.92s' }}>●</span>
+              </span>
+              Agent is thinking…
+            </div>
+          )}
+
           {/* Live tool activity feed */}
           {activePid > 0 && (liveToolCalls[activePid]?.length ?? 0) > 0 && (
             <div style={{ marginBottom: 10 }}>

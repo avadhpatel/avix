@@ -226,6 +226,10 @@ pub enum Action {
     InstallComplete(String),
     InstallError(String),
     DismissInstall,
+    /// Prepend a user-sent message into the agent's output buffer (optimistic update).
+    AppendUserMessage(u64, String),
+    /// Set or clear the "processing" spinner for an agent's output buffer.
+    SetAgentProcessing(u64, bool),
 }
 
 impl TuiState {
@@ -375,6 +379,18 @@ impl TuiState {
             }
             Action::DismissInstall => {
                 self.install = InstallState::Idle;
+            }
+            Action::AppendUserMessage(pid, text) => {
+                self.agent_output_buffers
+                    .entry(pid)
+                    .or_default()
+                    .push_user_message(&text);
+            }
+            Action::SetAgentProcessing(pid, processing) => {
+                self.agent_output_buffers
+                    .entry(pid)
+                    .or_default()
+                    .set_processing(processing);
             }
         }
     }

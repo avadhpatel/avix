@@ -77,6 +77,7 @@ async fn dispatch_event(
                 if !body.is_final && !body.text_delta.is_empty() {
                     debug!("Agent output chunk: pid={} seq={}", body.pid, body.seq);
                     let pid = body.pid.parse::<u64>().unwrap_or(0);
+                    let _ = action_tx.send(Action::SetAgentProcessing(pid, false)).await;
                     let _ = action_tx
                         .send(Action::UpdateAgentOutput(pid, body.text_delta))
                         .await;
@@ -87,7 +88,7 @@ async fn dispatch_event(
             if let EventBody::AgentOutput(body) = event.body {
                 debug!("Agent output: pid={}", body.pid);
                 let pid = body.pid.parse::<u64>().unwrap_or(0);
-                // Send action to update TuiState
+                let _ = action_tx.send(Action::SetAgentProcessing(pid, false)).await;
                 let _ = action_tx
                     .send(Action::UpdateAgentOutput(pid, body.text))
                     .await;
@@ -109,6 +110,7 @@ async fn dispatch_event(
             if let EventBody::AgentExit(body) = event.body {
                 debug!("Agent exited: pid={}", body.pid);
                 let pid = body.pid.parse::<u64>().unwrap_or(0);
+                let _ = action_tx.send(Action::SetAgentProcessing(pid, false)).await;
                 let session_id = event.owner_session.as_deref().unwrap_or("");
                 let notif = Notification::from_agent_exit(pid, session_id, None);
                 notifications.add(notif).await;
@@ -251,7 +253,10 @@ async fn dispatch_parsed_command(
             };
             let _ = action_tx.send(Action::LogEvent(log_event)).await;
             if let Some(dispatcher) = &shared_state.read().await.dispatcher {
-                let _ = spawn_agent(dispatcher, &name, &goal, &[]).await;
+                if let Ok(pid) = spawn_agent(dispatcher, &name, &goal, &[]).await {
+                    let _ = action_tx.send(Action::AppendUserMessage(pid, goal)).await;
+                    let _ = action_tx.send(Action::SetAgentProcessing(pid, true)).await;
+                }
             }
         }
         ParsedCommand::Kill { pid } => {
@@ -663,6 +668,8 @@ async fn run_app(terminal: &mut Tui, _json: bool) -> Result<()> {
                                     {
                                         Ok(pid) => {
                                             debug!("Agent spawned successfully: pid={}", pid);
+                                            state.reducer(Action::AppendUserMessage(pid, form.goal.clone()));
+                                            state.reducer(Action::SetAgentProcessing(pid, true));
                                             // Add success notification
                                             let message = format!(
                                                 "Agent {} spawned with PID {}",
