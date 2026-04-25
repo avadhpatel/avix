@@ -158,6 +158,8 @@ const SessionPage: React.FC = () => {
     setSession(null);
     setInvocationMessages([]);
     setInputText('');
+    setOptimisticUserMessage(null);
+    setAwaitingResponse(false);
     loadSession();
     loadMessages();
   }, [selectedSessionId, loadSession, loadMessages]);

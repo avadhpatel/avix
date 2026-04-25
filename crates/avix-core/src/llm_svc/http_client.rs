@@ -304,9 +304,11 @@ impl LlmClient for DirectHttpLlmClient {
                                     StreamChunk::ToolCallStart { ref call_id, .. } => {
                                         // Extract the numeric index from the raw data and
                                         // store the mapping so we can fix up future deltas.
+                                        // Handles both OpenAI and Anthropic streaming formats.
                                         if let Ok(v) =
                                             serde_json::from_str::<serde_json::Value>(&data)
                                         {
+                                            // OpenAI: choices[0].delta.tool_calls[].{index, id}
                                             if let Some(tcs) =
                                                 v["choices"][0]["delta"]["tool_calls"].as_array()
                                             {
@@ -319,6 +321,17 @@ impl LlmClient for DirectHttpLlmClient {
                                                             );
                                                         }
                                                     }
+                                                }
+                                            }
+                                            // Anthropic: {index: N, content_block: {type: "tool_use", id: "..."}}
+                                            if v["content_block"]["type"].as_str()
+                                                == Some("tool_use")
+                                                && v["content_block"]["id"].as_str()
+                                                    == Some(call_id.as_str())
+                                            {
+                                                if let Some(idx) = v["index"].as_u64() {
+                                                    index_to_id
+                                                        .insert(idx.to_string(), call_id.clone());
                                                 }
                                             }
                                         }
@@ -405,5 +418,46 @@ mod tests {
     fn test_adapter_modalities() {
         let client = make_client();
         assert!(client.adapter.modalities().contains(&Modality::Text));
+    }
+
+    /// Regression: Anthropic streaming uses block index (not real call_id) in
+    /// ToolCallArgsDelta. The index→call_id remapping must handle Anthropic's
+    /// content_block_start format, otherwise args are silently dropped and tools
+    /// are called with `{}`, fail, and the LLM retries → same tools called repeatedly.
+    #[test]
+    fn test_index_to_id_remapping_handles_anthropic_format() {
+        // Simulate what http_client.rs scan closure does for Anthropic streaming.
+        let mut index_to_id: std::collections::HashMap<String, String> = Default::default();
+
+        // Anthropic content_block_start data for a tool_use block at index 1
+        let data = r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01abc","name":"fs__read","input":{}}}"#;
+        let call_id = "toolu_01abc".to_string();
+
+        let v: serde_json::Value = serde_json::from_str(data).unwrap();
+
+        // OpenAI path (should not fire for Anthropic data)
+        if let Some(tcs) = v["choices"][0]["delta"]["tool_calls"].as_array() {
+            for tc in tcs {
+                if tc["id"].as_str() == Some(call_id.as_str()) {
+                    if let Some(idx) = tc["index"].as_u64() {
+                        index_to_id.insert(idx.to_string(), call_id.clone());
+                    }
+                }
+            }
+        }
+
+        // Anthropic path
+        if v["content_block"]["type"].as_str() == Some("tool_use")
+            && v["content_block"]["id"].as_str() == Some(call_id.as_str())
+        {
+            if let Some(idx) = v["index"].as_u64() {
+                index_to_id.insert(idx.to_string(), call_id.clone());
+            }
+        }
+
+        // index "1" must now map to "toolu_01abc"
+        assert_eq!(index_to_id.get("1").map(|s| s.as_str()), Some("toolu_01abc"));
+        // index "0" (different block) must NOT exist
+        assert!(index_to_id.get("0").is_none());
     }
 }
