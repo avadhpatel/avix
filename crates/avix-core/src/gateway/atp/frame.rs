@@ -61,6 +61,7 @@ impl AtpReply {
 pub struct AtpEvent {
     #[serde(rename = "type")]
     pub msg_type: String,
+    pub seq: u64,
     pub event: AtpEventKind,
     #[serde(rename = "sessionId")]
     pub session_id: String,
@@ -69,10 +70,10 @@ pub struct AtpEvent {
 }
 
 impl AtpEvent {
-
     pub fn new(event: AtpEventKind, session_id: impl Into<String>, body: Value) -> Self {
         Self {
             msg_type: "event".into(),
+            seq: 0,
             event,
             session_id: session_id.into(),
             ts: Utc::now(),
@@ -93,6 +94,9 @@ pub struct AtpSubscribe {
     pub token: String,
     /// Event names to subscribe to, or `["*"]` for all permitted events.
     pub events: Vec<String>,
+    /// Replay cursor — if present, gateway replays buffered events with seq > since_seq.
+    #[serde(default)]
+    pub since_seq: Option<u64>,
 }
 
 /// Top-level inbound frame. Outbound frames (`AtpReply`, `AtpEvent`) are used directly.
@@ -179,6 +183,7 @@ mod tests {
             AtpFrame::Subscribe(sub) => {
                 assert_eq!(sub.id, "sub-001");
                 assert_eq!(sub.events, vec!["agent.output", "agent.status"]);
+                assert_eq!(sub.since_seq, None);
             }
             _ => panic!("expected Subscribe"),
         }
@@ -293,6 +298,34 @@ mod tests {
                 AtpFrame::Cmd(cmd) => assert_eq!(cmd.domain, expected),
                 _ => panic!("expected Cmd for domain {domain_str}"),
             }
+        }
+    }
+
+    #[test]
+    fn seq_field_serializes_in_event_frame() {
+        let mut ev = AtpEvent::new(AtpEventKind::AgentOutput, "sess-001", json!({}));
+        ev.seq = 5;
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains("\"seq\":5"));
+    }
+
+    #[test]
+    fn since_seq_deserializes_from_subscribe_frame() {
+        let raw = r#"{"type":"subscribe","events":["agent.output"],"since_seq":42}"#;
+        let frame = AtpFrame::parse(raw).unwrap();
+        match frame {
+            AtpFrame::Subscribe(sub) => assert_eq!(sub.since_seq, Some(42)),
+            _ => panic!("expected Subscribe"),
+        }
+    }
+
+    #[test]
+    fn since_seq_defaults_to_none_when_absent() {
+        let raw = r#"{"type":"subscribe","events":["agent.output"]}"#;
+        let frame = AtpFrame::parse(raw).unwrap();
+        match frame {
+            AtpFrame::Subscribe(sub) => assert_eq!(sub.since_seq, None),
+            _ => panic!("expected Subscribe"),
         }
     }
 }

@@ -1,4 +1,8 @@
-use tokio::sync::broadcast;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use tokio::sync::{broadcast, Mutex};
 use tracing::instrument;
 
 use crate::gateway::atp::frame::AtpEvent;
@@ -8,9 +12,13 @@ use crate::types::Role;
 /// Maximum buffered events per bus before oldest are dropped.
 const BUS_CAPACITY: usize = 1024;
 
+/// Number of events kept in the replay ring buffer (excluding AgentOutputChunk).
+const RING_CAPACITY: usize = 512;
+
 /// An envelope carrying an event plus the metadata needed for scoping.
 #[derive(Debug, Clone)]
 pub struct BusEvent {
+    pub seq: u64,
     pub event: AtpEvent,
     /// The session that "owns" this event (None = system-wide).
     pub owner_session: Option<String>,
@@ -107,23 +115,45 @@ impl EventFilter {
 #[derive(Clone, Debug)]
 pub struct AtpEventBus {
     tx: broadcast::Sender<BusEvent>,
+    seq_counter: Arc<AtomicU64>,
+    ring: Arc<Mutex<VecDeque<BusEvent>>>,
 }
 
 impl AtpEventBus {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(BUS_CAPACITY);
-        Self { tx }
+        Self {
+            tx,
+            seq_counter: Arc::new(AtomicU64::new(0)),
+            ring: Arc::new(Mutex::new(VecDeque::new())),
+        }
     }
 
     /// Publish an event with scoping metadata.
+    /// Assigns a monotonic seq, stores in ring buffer (except AgentOutputChunk), then broadcasts.
     #[instrument(skip_all)]
-    pub fn publish(&self, event: AtpEvent, owner_session: Option<String>, min_role: Role) {
-        let _ = self.tx.send(BusEvent {
-            event,
-            owner_session,
+    pub fn publish(&self, mut event: AtpEvent, owner_session: Option<String>, min_role: Role) {
+        let seq = self.seq_counter.fetch_add(1, Ordering::Relaxed);
+        event.seq = seq;
+        let bus_event = BusEvent { seq, event, owner_session, min_role };
+        if bus_event.event.event != AtpEventKind::AgentOutputChunk {
+            if let Ok(mut ring) = self.ring.try_lock() {
+                if ring.len() >= RING_CAPACITY {
+                    ring.pop_front();
+                }
+                ring.push_back(bus_event.clone());
+            }
+        }
+        let _ = self.tx.send(bus_event);
+    }
 
-            min_role,
-        });
+    /// Returns all buffered events with seq > since_seq, in order.
+    pub async fn replay_since(&self, since_seq: u64) -> Vec<BusEvent> {
+        let ring = self.ring.lock().await;
+        ring.iter()
+            .filter(|e| e.seq > since_seq)
+            .cloned()
+            .collect()
     }
 
     /// Subscribe — returns a receiver for this connection.
@@ -349,6 +379,7 @@ mod tests {
     fn make_agent_output_event(session: &str) -> BusEvent {
         let (min_role, owner_scoped) = event_scope(&AtpEventKind::AgentOutput);
         BusEvent {
+            seq: 0,
             event: AtpEvent::new(AtpEventKind::AgentOutput, session, serde_json::json!({})),
             owner_session: owner_scoped.then(|| session.to_string()),
             min_role,
@@ -429,6 +460,7 @@ mod tests {
         let mut f = EventFilter::new("sess-001".into(), Role::Admin);
         f.set_subscriptions(vec!["*".into()]);
         let ev = BusEvent {
+            seq: 0,
             event: AtpEvent::new(AtpEventKind::SysService, "sess-001", serde_json::json!({})),
             owner_session: None,
             min_role: Role::Admin,
@@ -441,6 +473,7 @@ mod tests {
         let mut f = EventFilter::new("sess-001".into(), Role::Operator);
         f.set_subscriptions(vec!["*".into()]);
         let ev = BusEvent {
+            seq: 0,
             event: AtpEvent::new(AtpEventKind::SysService, "sess-001", serde_json::json!({})),
             owner_session: None,
             min_role: Role::Admin,
@@ -513,5 +546,73 @@ mod tests {
         assert_eq!(ev.event.event, AtpEventKind::SysService);
         assert!(ev.owner_session.is_none());
         assert_eq!(ev.min_role, Role::Admin);
+    }
+
+    #[test]
+    fn seq_increments_monotonically() {
+        let bus = AtpEventBus::new();
+        let mut rx = bus.subscribe();
+        bus.agent_output("s", 1, "a");
+        bus.agent_output("s", 1, "b");
+        bus.agent_output("s", 1, "c");
+        let seqs: Vec<u64> = (0..3).map(|_| rx.try_recv().unwrap().seq).collect();
+        assert_eq!(seqs, vec![0, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn ring_buffer_stores_events() {
+        let bus = AtpEventBus::new();
+        bus.agent_output("s", 1, "a");
+        bus.agent_output("s", 1, "b");
+        bus.agent_output("s", 1, "c");
+        let replayed = bus.replay_since(0).await;
+        // seq 0 is not > 0, so only seq 1 and 2 returned
+        assert_eq!(replayed.len(), 2);
+        assert_eq!(replayed[0].seq, 1);
+        assert_eq!(replayed[1].seq, 2);
+    }
+
+    #[tokio::test]
+    async fn ring_buffer_evicts_oldest() {
+        let bus = AtpEventBus::new();
+        for i in 0..RING_CAPACITY + 2 {
+            bus.agent_output("s", i as u64, "x");
+        }
+        let replayed = bus.replay_since(0).await;
+        assert_eq!(replayed.len(), RING_CAPACITY);
+    }
+
+    #[tokio::test]
+    async fn replay_since_filters_by_seq() {
+        let bus = AtpEventBus::new();
+        for _ in 0..5 {
+            bus.agent_output("s", 1, "x");
+        }
+        // seqs 0..4; replay_since(2) returns seqs 3 and 4
+        let replayed = bus.replay_since(2).await;
+        assert_eq!(replayed.len(), 2);
+        assert_eq!(replayed[0].seq, 3);
+        assert_eq!(replayed[1].seq, 4);
+    }
+
+    #[tokio::test]
+    async fn output_chunk_excluded_from_ring() {
+        let bus = AtpEventBus::new();
+        bus.agent_output_chunk("s", "sess", 1, "t1", "delta", 0, false);
+        let replayed = bus.replay_since(0).await;
+        assert!(replayed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn ring_is_ordered() {
+        let bus = AtpEventBus::new();
+        for _ in 0..5 {
+            bus.agent_output("s", 1, "x");
+        }
+        let replayed = bus.replay_since(0).await;
+        let seqs: Vec<u64> = replayed.iter().map(|e| e.seq).collect();
+        let mut sorted = seqs.clone();
+        sorted.sort();
+        assert_eq!(seqs, sorted);
     }
 }

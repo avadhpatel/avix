@@ -59,6 +59,7 @@ pub struct Event {
     /// Wire field name is `"sessionId"` (camelCase).
     #[serde(rename = "sessionId")]
     pub owner_session: Option<String>,
+    pub seq: u64,
     pub body: EventBody,
 }
 
@@ -309,9 +310,8 @@ mod tests {
 
     #[test]
     fn event_hil_request_roundtrip() {
-        // Wire format uses "event" field with dot notation, "sessionId" for session.
         let json = r#"{
-            "type":"event","event":"hil.request","sessionId":"sess-1",
+            "type":"event","event":"hil.request","sessionId":"sess-1","seq":0,
             "body":{"hil_id":"h1","pid":10,"session_id":"sess-1",
                     "approval_token":"tok","prompt":"approve?","timeout_secs":600}
         }"#;
@@ -361,5 +361,18 @@ mod tests {
         let s = serde_json::to_string(&nk).unwrap();
         let d: NotificationKind = serde_json::from_str(&s).unwrap();
         assert_eq!(d, NotificationKind::Hil);
+    }
+
+    #[test]
+    fn event_deserializes_seq_field() {
+        let json = r#"{
+            "type": "event",
+            "event": "agent.output",
+            "sessionId": "sess-001",
+            "seq": 42,
+            "body": { "type": "AgentOutput", "pid": "57", "text": "hello" }
+        }"#;
+        let ev: Event = serde_json::from_str(json).unwrap();
+        assert_eq!(ev.seq, 42);
     }
 }

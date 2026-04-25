@@ -455,7 +455,19 @@ async fn handle_text_frame(
             }
         }
         Ok(AtpFrame::Subscribe(sub)) => {
+            let since_seq = sub.since_seq;
             filter.write().await.set_subscriptions(sub.events);
+            if let Some(seq) = since_seq {
+                let replayed = state.event_bus.replay_since(seq).await;
+                let f = filter.read().await;
+                for bus_event in replayed {
+                    if f.should_receive(&bus_event) {
+                        if let Ok(s) = serde_json::to_string(&bus_event.event) {
+                            let _ = tx.send(WsOutMsg::Text(s)).await;
+                        }
+                    }
+                }
+            }
         }
         Err(_) => {
             // Ignore malformed frames silently

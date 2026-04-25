@@ -42,7 +42,7 @@ graph LR
     subgraph GW["gateway.svc"]
         WS[WebSocket\nlistener\n7700 user\n7701 admin]
         ACL[ACL Pipeline\n5-step validation]
-        BUS[AtpEventBus\nbroadcast channel\ncap 1024]
+        BUS[AtpEventBus\nbroadcast channel\ncap 1024\n+ ring buffer 512]
         EP[Event pump\nper connection]
         WS --> ACL
         BUS --> EP --> WS
@@ -82,6 +82,12 @@ capacity 1024) from two sources:
 Each WebSocket connection has an independent `broadcast::Receiver` subscribed to the bus.
 A per-connection event pump task reads from the receiver, applies a three-gate filter
 (`EventFilter`), and sends matching events as ATP `event` frames over WebSocket.
+
+`AtpEventBus` also maintains a global ring buffer (`Mutex<VecDeque<BusEvent>>`, capacity
+512) for event replay. Every published event is assigned a gateway-global monotonic `seq`
+(u64, starting at 0) and stored in the ring — except `agent.output.chunk` which is
+excluded due to high volume. On reconnect, clients pass `since_seq` in the subscribe
+frame to replay missed events.
 
 ---
 
@@ -200,6 +206,24 @@ Use `"*"` to subscribe to all events permitted by the connection's role:
 { "type": "subscribe", "events": ["*"] }
 ```
 
+To replay missed events after a reconnect, include `since_seq` — the gateway replays all
+buffered events with `seq > since_seq` that pass the connection's `EventFilter`, then
+resumes live delivery:
+
+```json
+{
+  "type": "subscribe",
+  "events": ["agent.output", "agent.status"],
+  "since_seq": 1038
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"subscribe"` | Must be the literal string `"subscribe"` |
+| `events` | string[] | Event kinds to subscribe to, or `["*"]` for all permitted |
+| `since_seq` | u64? | Optional replay cursor — replay buffered events with seq > this value |
+
 ### Server → Client: Reply frame
 
 Every `cmd` gets exactly one `reply`:
@@ -232,11 +256,20 @@ Error reply:
 ```json
 {
   "type":      "event",
+  "seq":       1042,
   "event":     "agent.output",
   "sessionId": "sess-abc-123",
+  "ts":        "2026-04-25T10:00:00Z",
   "body":      { "pid": 57, "text": "Analysing Q3 data..." }
 }
 ```
+
+`seq` is a gateway-global monotonic counter starting at 0. Clients should track the
+highest `seq` seen; on reconnect they pass it as `since_seq` to recover missed events.
+
+`agent.output.chunk` events are excluded from the ring buffer — clients wanting agent
+replay after a long disconnect should use `kernel/proc/invocation-get` →
+`conversation.jsonl` instead.
 
 ---
 
@@ -556,8 +589,8 @@ sequenceDiagram
     GW-->>C: 101 Switching Protocols
     GW->>C: ATP event {session.ready, sessionId}
 
-    C->>GW: ATP subscribe {events:["*"]}
-    Note over GW: EventFilter updated — connection now receives events
+    C->>GW: ATP subscribe {events:["*"], since_seq: 1038}
+    Note over GW: EventFilter updated — replays buffered events with seq > 1038, then live
 
     loop active session
         C->>GW: ATP cmd frames
@@ -584,6 +617,24 @@ side effects.
 
 Replay state is **per-connection** — the same `id` can be reused across separate
 WebSocket connections.
+
+## Event Sequence and Ring Buffer
+
+Every ATP event frame carries a `seq` field — a gateway-global monotonic u64 starting
+at 0. The `AtpEventBus` assigns this at publish time via an `AtomicU64`.
+
+A global ring buffer (`Mutex<VecDeque<BusEvent>>`, capacity 512) stores recent events.
+`agent.output.chunk` events are excluded (high volume — use `invocation-get` for replay
+of agent output). When the ring is full, the oldest event is evicted.
+
+On `subscribe` with `since_seq: N`, the gateway:
+1. Updates the `EventFilter` with the requested event kinds
+2. Calls `replay_since(N)` — returns all buffered events with `seq > N`
+3. Sends each replayed event through the same `EventFilter` (role + ownership gates apply)
+4. Resumes live delivery via the broadcast pump
+
+The `EventEmitter` in `avix-client-core` tracks `last_seq` across reconnects and passes
+it as `since_seq` in `connect_fn(since_seq: Option<u64>)` on every subsequent connect.
 
 ## End-to-End Integration Tests
 

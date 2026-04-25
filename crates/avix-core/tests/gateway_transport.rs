@@ -55,6 +55,15 @@ fn make_auth_config() -> AuthConfig {
                     header: None,
                 },
             },
+            AuthIdentity {
+                name: "bob".to_string(),
+                uid: 1003,
+                role: Role::User,
+                credential: CredentialType::ApiKey {
+                    key_hash: make_key_hash("bobpass"),
+                    header: None,
+                },
+            },
         ],
     }
 }
@@ -381,4 +390,132 @@ async fn valid_proc_list_returns_ok() {
     assert_eq!(reply["id"].as_str().unwrap(), "proc-list-001");
     assert!(reply["ok"].as_bool().unwrap());
     assert_eq!(reply["body"], json!([]));
+}
+
+async fn start_server_with_bus() -> (TestServer, Arc<AtpEventBus>) {
+    let auth_config = make_auth_config();
+    let auth_svc = Arc::new(AuthService::new(auth_config));
+    let token_store = Arc::new(ATPTokenStore::new("test-gateway-secret".to_string()));
+    let event_bus = Arc::new(AtpEventBus::new());
+
+    let server = GatewayServer::new(
+        GatewayConfig::default(),
+        Arc::clone(&auth_svc),
+        Arc::clone(&token_store),
+        Arc::clone(&event_bus),
+    );
+
+    // test_mode=false: falls back to TestIpcRouter (no kernel_sock) but skips
+    // the background event emitter that would pollute the bus seq space.
+    let user_addr = Arc::clone(&server)
+        .bind_and_run("127.0.0.1:0".parse().unwrap(), false, false)
+        .await
+        .expect("bind user port");
+    let admin_addr = Arc::clone(&server)
+        .bind_and_run("127.0.0.1:0".parse().unwrap(), true, false)
+        .await
+        .expect("bind admin port");
+
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+
+    let srv = TestServer {
+        user_port: user_addr.port(),
+        admin_port: admin_addr.port(),
+        token_store,
+        http,
+    };
+    (srv, event_bus)
+}
+
+async fn send_subscribe(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    events: &[&str],
+    since_seq: Option<u64>,
+) {
+    let mut frame = json!({ "type": "subscribe", "events": events });
+    if let Some(seq) = since_seq {
+        frame["since_seq"] = json!(seq);
+    }
+    ws.send(TungsteniteMessage::Text(frame.to_string()))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn subscribe_with_since_seq_replays_missed_events() {
+    let (srv, bus) = start_server_with_bus().await;
+    let (token, session_id) = login_ok(&srv.http, srv.user_port, "alice", "hunter2").await;
+
+    // Publish 2 events (seq 0, seq 1) before client connects
+    bus.agent_output(&session_id, 1, "msg-0"); // seq 0
+    bus.agent_output(&session_id, 1, "msg-1"); // seq 1
+
+    let mut ws = connect_ws(srv.user_port, &token).await;
+    let _ = read_text(&mut ws).await; // session.ready
+
+    // since_seq=0: replay events with seq > 0 → only seq 1
+    send_subscribe(&mut ws, &["agent.output"], Some(0)).await;
+
+    let replayed = read_text(&mut ws).await;
+    assert_eq!(replayed["event"].as_str().unwrap(), "agent.output");
+    assert_eq!(replayed["seq"].as_u64().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn subscribe_without_since_seq_no_replay() {
+    let (srv, bus) = start_server_with_bus().await;
+    let (token, session_id) = login_ok(&srv.http, srv.user_port, "alice", "hunter2").await;
+
+    // Publish event before subscribe — must NOT be replayed (no since_seq)
+    bus.agent_output(&session_id, 1, "old-msg"); // seq 0
+
+    let mut ws = connect_ws(srv.user_port, &token).await;
+    let _ = read_text(&mut ws).await; // session.ready
+
+    send_subscribe(&mut ws, &["agent.output"], None).await;
+    // Give the server a moment to process the subscribe frame before publishing
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Publish a LIVE event after subscribe — this SHOULD arrive via the pump
+    bus.agent_output(&session_id, 1, "live-msg"); // seq 1
+
+    let live = read_text(&mut ws).await;
+    assert_eq!(live["event"].as_str().unwrap(), "agent.output");
+    assert_eq!(live["seq"].as_u64().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn replay_respects_event_filter() {
+    let (srv, bus) = start_server_with_bus().await;
+
+    // alice owns session_a; bob (User role) is session_b
+    let (token_a, session_a) = login_ok(&srv.http, srv.user_port, "alice", "hunter2").await;
+    let (token_b, _session_b) = login_ok(&srv.http, srv.user_port, "bob", "bobpass").await;
+
+    // Publish 2 events owned by session_a: seq 0 and seq 1
+    bus.agent_output(&session_a, 1, "session-a-msg-0"); // seq 0
+    bus.agent_output(&session_a, 1, "session-a-msg-1"); // seq 1
+
+    // session_b (User) subscribes with since_seq=0 → replay returns seq=1
+    // But ownership gate blocks it: session_b can't see session_a's events
+    let mut ws_b = connect_ws(srv.user_port, &token_b).await;
+    let _ = read_text(&mut ws_b).await; // session.ready
+    send_subscribe(&mut ws_b, &["agent.output"], Some(0)).await;
+
+    let nothing = timeout(Duration::from_millis(150), ws_b.next()).await;
+    assert!(nothing.is_err(), "session-b (User) must not receive session-a events");
+
+    // session_a (alice) subscribes with since_seq=0 → gets seq=1 (its own event)
+    let mut ws_a = connect_ws(srv.user_port, &token_a).await;
+    let _ = read_text(&mut ws_a).await; // session.ready
+    send_subscribe(&mut ws_a, &["agent.output"], Some(0)).await;
+
+    let replayed = read_text(&mut ws_a).await;
+    assert_eq!(replayed["event"].as_str().unwrap(), "agent.output");
+    assert_eq!(replayed["seq"].as_u64().unwrap(), 1);
 }
