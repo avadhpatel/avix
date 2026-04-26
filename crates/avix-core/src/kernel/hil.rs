@@ -53,6 +53,9 @@ pub struct HilRequest {
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub state: HilState,
+    /// ATP connection session ID — used to route events to the right subscriber.
+    /// Distinct from the agent's internal `session_id`.
+    pub atp_session_id: String,
 }
 
 impl HilRequest {
@@ -86,6 +89,7 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Utc::now() + chrono::Duration::minutes(10),
             state: HilState::Pending,
+            atp_session_id: "atp-sess-1".into(),
         }
     }
 

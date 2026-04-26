@@ -430,6 +430,8 @@ impl RuntimeExecutor {
 
                 let hil_id = uuid::Uuid::new_v4().to_string();
                 let approval_token = uuid::Uuid::new_v4().to_string();
+                // Clone before move into hil_req so we can reference them for JSONL.
+                let approval_token_str = approval_token.clone();
                 let now = chrono::Utc::now();
                 let hil_req = crate::kernel::hil::HilRequest {
                     api_version: "avix/v1".into(),
@@ -448,12 +450,32 @@ impl RuntimeExecutor {
                     created_at: now,
                     expires_at: now + chrono::Duration::minutes(10),
                     state: crate::kernel::hil::HilState::Pending,
+                    atp_session_id: self.atp_session_id.clone(),
                 };
 
                 if let Err(e) = hil_mgr.open(hil_req).await {
                     tracing::error!(pid = ?self.pid, tool = %tool_name, error = %e, "cap/request-tool: HilManager::open failed");
                     self.denied_tools.push(tool_name.clone());
                     return Ok(serde_json::json!({"approved": false, "tool": tool_name, "error": e.to_string()}));
+                }
+
+                // Record HIL request in conversation JSONL so history re-renders show it.
+                {
+                    use crate::invocation::conversation::{ConversationEntry, Role};
+                    let entry = ConversationEntry::from_role_content(
+                        Role::HilRequest,
+                        serde_json::to_string(&serde_json::json!({
+                            "hilId":         hil_id,
+                            "pid":           self.pid.as_u64(),
+                            "sessionId":     self.atp_session_id,
+                            "hilType":       "capability_upgrade",
+                            "tool":          tool_name,
+                            "reason":        reason,
+                            "approvalToken": approval_token_str,
+                        }))
+                        .unwrap_or_default(),
+                    );
+                    self.memory.conversation_history.push(entry);
                 }
 
                 // Send SIGPAUSE then wait for SIGRESUME via CapabilityUpgrader.
@@ -474,11 +496,40 @@ impl RuntimeExecutor {
                         self.token = upgrader.current_token().clone();
                         self.refresh_tool_list().await;
                         tracing::info!(pid = ?self.pid, tool = %tool_name, "cap/request-tool: HIL approved, token upgraded");
+                        {
+                            use crate::invocation::conversation::{ConversationEntry, Role};
+                            let entry = ConversationEntry::from_role_content(
+                                Role::HilResponse,
+                                serde_json::to_string(&serde_json::json!({
+                                    "hilId":      hil_id,
+                                    "pid":        self.pid.as_u64(),
+                                    "outcome":    "approved",
+                                    "resolvedAt": chrono::Utc::now(),
+                                }))
+                                .unwrap_or_default(),
+                            );
+                            self.memory.conversation_history.push(entry);
+                        }
                         Ok(serde_json::json!({"approved": true, "tool": tool_name, "scope": "session"}))
                     }
                     Err(e) => {
                         tracing::info!(pid = ?self.pid, tool = %tool_name, reason = %e, "cap/request-tool: HIL denied or timed out");
                         self.denied_tools.push(tool_name.clone());
+                        {
+                            use crate::invocation::conversation::{ConversationEntry, Role};
+                            let outcome = if e.to_string().contains("timeout") { "timeout" } else { "denied" };
+                            let entry = ConversationEntry::from_role_content(
+                                Role::HilResponse,
+                                serde_json::to_string(&serde_json::json!({
+                                    "hilId":      hil_id,
+                                    "pid":        self.pid.as_u64(),
+                                    "outcome":    outcome,
+                                    "resolvedAt": chrono::Utc::now(),
+                                }))
+                                .unwrap_or_default(),
+                            );
+                            self.memory.conversation_history.push(entry);
+                        }
                         Ok(serde_json::json!({"approved": false, "tool": tool_name, "reason": e.to_string()}))
                     }
                 }

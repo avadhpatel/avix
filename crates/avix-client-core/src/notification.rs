@@ -223,9 +223,13 @@ mod tests {
             hil_id: "test-hil".to_string(),
             pid: 123,
             session_id: "sess".to_string(),
-            prompt: "approve?".to_string(),
             approval_token: "token".to_string(),
+            hil_type: "capability_upgrade".to_string(),
+            tool: Some("fs/write".to_string()),
+            reason: Some("needs write access".to_string()),
+            prompt: "approve?".to_string(),
             timeout_secs: 30,
+            urgency: "normal".to_string(),
         };
         let notif = Notification::from_hil_request(&hil_req);
         store.add(notif).await;

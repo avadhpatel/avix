@@ -304,6 +304,7 @@ async fn run_turn_loop(
                 match executor.wait_for_next_goal().await {
                     Some(next_goal) => {
                         info!(pid = pid.as_u64(), "received next goal; resuming");
+                        executor.record_next_goal(&next_goal).await;
                         current_goal = next_goal;
                     }
                     None => {

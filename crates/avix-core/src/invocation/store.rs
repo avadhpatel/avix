@@ -153,6 +153,36 @@ impl InvocationStore {
         Ok(())
     }
 
+    /// Update the goal (command) of an existing record — called when SIGSTART
+    /// delivers a new command to an idle executor before it starts the next turn.
+    #[instrument]
+    pub async fn update_goal(&self, id: &str, goal: &str) -> Result<(), AvixError> {
+        let mut record = match self.get(id).await? {
+            Some(r) => r,
+            None => return Ok(()),
+        };
+        record.goal = goal.to_string();
+
+        let json =
+            serde_json::to_string(&record).map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        let db = &self.db;
+        let write_txn = db
+            .begin_write()
+            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        {
+            let mut table = write_txn
+                .open_table(TABLE)
+                .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+            table
+                .insert(id, json.as_str())
+                .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        }
+        write_txn
+            .commit()
+            .map_err(|e| AvixError::ConfigParse(e.to_string()))?;
+        Ok(())
+    }
+
     /// Write interim snapshot of a running invocation (redb + JSONL).
     ///
     /// Does NOT set ended_at or change status. Updates tokens/tool_calls.

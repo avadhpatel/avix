@@ -164,10 +164,27 @@ incrementally during `run_with_client` (not only at shutdown):
 
 | When | Entry written |
 |------|--------------|
-| Turn loop start | `{ role: user, content: goal }` |
-| Each tool-dispatch turn | `{ role: assistant, content: text_portion, toolCalls: [{ id, name, args, result }] }` — result is included after the tool returns |
-| Final assistant response | `{ role: assistant, content: response_text }` |
-| Non-clean exit (Failed/Killed) | `{ role: system, content: "[Agent stopped: <exit_reason>]" }` — appended by `shutdown_with_status` before flushing |
+| Turn loop start | `{ role: "user", content: goal }` |
+| Each tool-dispatch turn | `{ role: "assistant", content: text_portion, toolCalls: [{ id, name, args, result }] }` — result is included after the tool returns |
+| Final assistant response | `{ role: "assistant", content: response_text }` |
+| HIL request raised (`cap/request-tool`) | `{ role: "hil_request", content: <JSON string> }` — written immediately after `HilManager.open()` succeeds, before SIGPAUSE |
+| HIL response received | `{ role: "hil_response", content: <JSON string> }` — written after `CapabilityUpgrader.request_tool()` returns (approved, denied, or timeout) |
+| Non-clean exit (Failed/Killed) | `{ role: "system", content: "[Agent stopped: <exit_reason>]" }` — appended by `shutdown_with_status` before flushing |
+
+The `hil_request` content JSON contains: `hilId`, `pid`, `sessionId`, `hilType`, `tool`,
+`reason`, `approvalToken`. The `hil_response` content JSON contains: `hilId`, `pid`,
+`outcome` (`"approved"` / `"denied"` / `"timeout"`), `resolvedAt`. These entries survive
+reboots and are used by the UI to re-render approval/denial cards in conversation history.
+
+Example JSONL for a session with a HIL escalation:
+
+```json
+{"role":"user","content":"Send the quarterly report"}
+{"role":"assistant","content":"I need permission to send email.","toolCalls":[]}
+{"role":"hil_request","content":"{\"hilId\":\"h-1\",\"pid\":57,\"sessionId\":\"s-1\",\"hilType\":\"capability_upgrade\",\"tool\":\"send_email\",\"reason\":\"wants to send email\",\"approvalToken\":\"tok-1\"}"}
+{"role":"hil_response","content":"{\"hilId\":\"h-1\",\"pid\":57,\"outcome\":\"approved\",\"resolvedAt\":\"2026-04-25T10:00:00Z\"}"}
+{"role":"assistant","content":"Report sent successfully."}
+```
 
 Example JSONL for a two-turn session that hits the tool chain limit:
 

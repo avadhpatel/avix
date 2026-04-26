@@ -3,12 +3,16 @@ use tracing::instrument;
 
 /// Role in a conversation turn.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     User,
     Assistant,
     Tool,
     System,
+    /// A HIL approval request the agent raised.
+    HilRequest,
+    /// The human's response (approved / denied / timeout) to a HIL request.
+    HilResponse,
 }
 
 /// A single turn in the conversation history.
@@ -87,6 +91,29 @@ pub struct FileDiffEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // T-CONV-00: HIL role variants round-trip and serialise as snake_case
+    #[test]
+    fn hil_roles_roundtrip() {
+        let req = serde_json::to_string(&Role::HilRequest).unwrap();
+        assert_eq!(req, "\"hil_request\"");
+        let back: Role = serde_json::from_str(&req).unwrap();
+        assert_eq!(back, Role::HilRequest);
+
+        let res = serde_json::to_string(&Role::HilResponse).unwrap();
+        assert_eq!(res, "\"hil_response\"");
+        let back: Role = serde_json::from_str(&res).unwrap();
+        assert_eq!(back, Role::HilResponse);
+    }
+
+    // T-CONV-00b: existing roles still serialise correctly after rename_all change
+    #[test]
+    fn existing_roles_unaffected() {
+        assert_eq!(serde_json::to_string(&Role::User).unwrap(), "\"user\"");
+        assert_eq!(serde_json::to_string(&Role::Assistant).unwrap(), "\"assistant\"");
+        assert_eq!(serde_json::to_string(&Role::System).unwrap(), "\"system\"");
+        assert_eq!(serde_json::to_string(&Role::Tool).unwrap(), "\"tool\"");
+    }
 
     // T-CONV-01
     #[test]

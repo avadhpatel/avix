@@ -66,9 +66,27 @@ impl HilManager {
             .insert(hil_id.clone(), req.clone());
         self.approval_store.register(&req.approval_token).await;
 
-        // 3. Push hil.request event to ATP event bus
-        let event_body = serde_json::to_value(&req)
-            .map_err(|e| AvixError::ConfigParse(format!("json serialise: {e}")))?;
+        // 3. Push hil.request event with stable wire-format body.
+        let now = Utc::now();
+        let timeout_secs = (req.expires_at - now).num_seconds().max(0) as u32;
+        let prompt = match (&req.tool, &req.reason) {
+            (Some(t), Some(r)) => format!("Agent requests capability: {t}. Reason: {r}"),
+            (Some(t), None) => format!("Agent requests capability: {t}"),
+            (None, Some(r)) => r.clone(),
+            (None, None) => "Agent requires human approval".to_string(),
+        };
+        let event_body = serde_json::json!({
+            "hil_id":         req.hil_id,
+            "pid":            req.pid.as_u64(),
+            "session_id":     req.atp_session_id,
+            "approval_token": req.approval_token,
+            "hil_type":       req.hil_type,
+            "tool":           req.tool,
+            "reason":         req.reason,
+            "prompt":         prompt,
+            "timeout_secs":   timeout_secs,
+            "urgency":        req.urgency,
+        });
         let event = AtpEvent::new(AtpEventKind::HilRequest, &session_owner, event_body);
         self.event_bus
             .publish(event, Some(session_owner.clone()), Role::User);
@@ -96,8 +114,8 @@ impl HilManager {
         // 1. Atomically consume the approval token → EUSED if already used
         self.approval_store.consume(approval_token).await?;
 
-        // 2. Update VFS file state
-        let session_owner = {
+        // 2. Update VFS file state; extract pid + atp_session_id before dropping lock.
+        let (session_owner, pid, atp_session_id) = {
             let guard = self.pending.read().await;
             if let Some(req) = guard.get(hil_id) {
                 let mut updated = req.clone();
@@ -107,38 +125,41 @@ impl HilManager {
                     HilState::Denied
                 };
                 let name = updated.agent_name.clone();
+                let pid = req.pid;
+                let atp_session_id = req.atp_session_id.clone();
                 let yaml = serde_yaml::to_string(&updated).unwrap_or_default();
                 let path = crate::memfs::path::VfsPath::parse(&updated.vfs_path()).ok();
                 if let Some(p) = path {
                     self.vfs.write(&p, yaml.into_bytes()).await.ok();
                 }
-                name
+                (name, pid, atp_session_id)
             } else {
-                String::new()
+                (String::new(), Pid::from_u64(0), String::new())
             }
         };
 
         self.pending.write().await.remove(hil_id);
 
         // 3. Push hil.resolved event
-        self.push_resolved(hil_id, decision, resolved_by, &session_owner, &payload)
+        self.push_resolved(hil_id, decision, resolved_by, &session_owner, pid, &atp_session_id)
             .await;
 
         Ok(())
     }
 
     async fn timeout_hil(&self, hil_id: &str, pid: Pid) {
-        let session_owner = {
+        let (session_owner, atp_session_id) = {
             let mut guard = self.pending.write().await;
             if let Some(req) = guard.remove(hil_id) {
                 let mut updated = req.clone();
                 updated.state = HilState::Timeout;
                 let name = updated.agent_name.clone();
+                let atp_session_id = req.atp_session_id.clone();
                 let yaml = serde_yaml::to_string(&updated).unwrap_or_default();
                 if let Ok(p) = crate::memfs::path::VfsPath::parse(&updated.vfs_path()) {
                     self.vfs.write(&p, yaml.into_bytes()).await.ok();
                 }
-                name
+                (name, atp_session_id)
             } else {
                 // Already resolved before timeout fired
                 return;
@@ -153,14 +174,8 @@ impl HilManager {
         };
         self.signal_bus.send(sig).await.ok();
 
-        self.push_resolved(
-            hil_id,
-            "timeout",
-            "kernel",
-            &session_owner,
-            &serde_json::json!({}),
-        )
-        .await;
+        self.push_resolved(hil_id, "timeout", "kernel", &session_owner, pid, &atp_session_id)
+            .await;
     }
 
     async fn push_resolved(
@@ -169,17 +184,19 @@ impl HilManager {
         outcome: &str,
         resolved_by: &str,
         session_owner: &str,
-        payload: &serde_json::Value,
+        pid: Pid,
+        session_id: &str,
     ) {
         let event = AtpEvent::new(
             AtpEventKind::HilResolved,
             session_owner,
             serde_json::json!({
-                "hilId": hil_id,
-                "outcome": outcome,
-                "resolvedBy": resolved_by,
-                "resolvedAt": Utc::now(),
-                "note": payload.get("note"),
+                "hil_id":      hil_id,
+                "pid":         pid.as_u64(),
+                "session_id":  session_id,
+                "outcome":     outcome,
+                "resolved_by": resolved_by,
+                "resolved_at": Utc::now(),
             }),
         );
         self.event_bus
@@ -232,6 +249,7 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Utc::now() + chrono::Duration::minutes(10),
             state: HilState::Pending,
+            atp_session_id: "sess-mgr-test".into(),
         }
     }
 
@@ -246,6 +264,13 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(ev.event.event, AtpEventKind::HilRequest);
+        let body = &ev.event.body;
+        assert_eq!(body["hil_id"], "hil-001");
+        assert_eq!(body["pid"], 57u64);
+        assert_eq!(body["session_id"], "sess-mgr-test");
+        assert_eq!(body["approval_token"], "tok-abc");
+        assert!(body["prompt"].as_str().unwrap().contains("send_email"));
+        assert!(body["timeout_secs"].as_u64().unwrap() > 0);
     }
 
     #[tokio::test]
@@ -279,7 +304,12 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(ev.event.event, AtpEventKind::HilResolved);
-        assert_eq!(ev.event.body["outcome"], "approved");
+        let body = &ev.event.body;
+        assert_eq!(body["outcome"], "approved");
+        assert_eq!(body["hil_id"], "hil-003");
+        assert_eq!(body["pid"], 57u64);
+        assert_eq!(body["session_id"], "sess-mgr-test");
+        assert_eq!(body["resolved_by"], "alice");
     }
 
     #[tokio::test]
@@ -302,7 +332,11 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(ev.event.event, AtpEventKind::HilResolved);
-        assert_eq!(ev.event.body["outcome"], "denied");
+        let body = &ev.event.body;
+        assert_eq!(body["outcome"], "denied");
+        assert_eq!(body["hil_id"], "hil-004");
+        assert_eq!(body["pid"], 57u64);
+        assert_eq!(body["session_id"], "sess-mgr-test");
     }
 
     #[tokio::test]
@@ -339,7 +373,11 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(ev.event.event, AtpEventKind::HilResolved);
-        assert_eq!(ev.event.body["outcome"], "timeout");
+        let body = &ev.event.body;
+        assert_eq!(body["outcome"], "timeout");
+        assert_eq!(body["hil_id"], "hil-006");
+        assert_eq!(body["pid"], 57u64);
+        assert_eq!(body["resolved_by"], "kernel");
     }
 
     #[tokio::test]

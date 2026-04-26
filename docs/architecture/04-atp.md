@@ -544,33 +544,93 @@ sequenceDiagram
     participant BUS as AtpEventBus
     participant C as Human Client
 
-    A->>K: ResourceRequest (tool requires approval)
+    A->>K: cap/request-tool (tool requires approval)
     K->>K: HilManager.open()
     K->>K: mint ApprovalToken (single-use)
     K->>K: write /proc/57/hil-queue/hil-001.yaml
-    K->>BUS: hil_request(session, hil-001, kind)
-    BUS-->>C: ATP event {hil.request, hilId, approvalToken}
+    K->>BUS: hil.request event (see body below)
+    BUS-->>C: ATP event {hil.request, hil_id, pid, session_id, approval_token, ...}
+    A->>A: record hil_request entry in conversation JSONL
     K->>A: SIGPAUSE signal (agent suspends)
 
     Note over C: Human reads hil.request event
 
-    C->>K: ATP cmd {domain:signal, op:send, signal:SIGRESUME\n  payload:{approvalToken, hilId, decision:approved}}
+    C->>K: ATP cmd {domain:signal, op:send, signal:SIGRESUME\n  payload:{approvalToken, hilId, decision:"approved"}}
     K->>K: HilManager.resolve()
     K->>K: atomically consume ApprovalToken\n(EUSED if already consumed)
     K->>K: update /proc/57/hil-queue/hil-001.yaml → approved
-    K->>BUS: hil_resolved(session, hil-001, approved)
-    BUS-->>C: ATP event {hil.resolved, outcome:approved}
-    K->>A: SIGRESUME {decision:approved}
+    K->>BUS: hil.resolved event (see body below)
+    BUS-->>C: ATP event {hil.resolved, hil_id, pid, session_id, outcome, resolved_by, resolved_at}
+    K->>A: SIGRESUME {decision:"approved"}
+    A->>A: record hil_response entry in conversation JSONL
     Note over A: agent resumes
 ```
 
 **Timeout path:** If no response arrives within `hil_timeout_secs`, `HilManager` automatically:
 - Updates the VFS file state to `timeout`
 - Sends `SIGRESUME { decision: "timeout" }` to the agent
-- Pushes `hil.resolved { outcome: "timeout" }` ATP event
+- Pushes `hil.resolved` ATP event with `outcome: "timeout"`
+- `RuntimeExecutor` records a `hil_response` JSONL entry with `outcome: "timeout"`
 
 `ApprovalToken` is single-use and atomically consumed. The first valid `SIGRESUME` with
 `approvalToken` invalidates all others. Subsequent attempts return `EUSED`.
+
+`pid` is **always present** in all HIL events — multiple agent PIDs can share one ATP
+session, so clients must use `pid` (not session routing alone) to associate events with
+the correct agent.
+
+### `hil.request` event body
+
+```json
+{
+  "hil_id":         "uuid",
+  "pid":            12345,
+  "session_id":     "atp-session-uuid",
+  "approval_token": "uuid",
+  "hil_type":       "capability_upgrade",
+  "tool":           "fs/write",
+  "reason":         "Agent needs write access to complete task",
+  "prompt":         "Agent requests capability: fs/write. Reason: Agent needs write access to complete task",
+  "timeout_secs":   600,
+  "urgency":        "normal"
+}
+```
+
+`prompt` is a human-readable string suitable for displaying directly in UI. `hil_type` is
+one of `"capability_upgrade"`, `"tool_call_approval"`, `"escalation"`.
+
+### `hil.resolved` event body
+
+```json
+{
+  "hil_id":      "uuid",
+  "pid":         12345,
+  "session_id":  "atp-session-uuid",
+  "outcome":     "approved",
+  "resolved_by": "alice",
+  "resolved_at": "2026-04-25T10:00:00Z"
+}
+```
+
+`outcome` is one of `"approved"`, `"denied"`, `"timeout"`. `resolved_by` is `"kernel"`
+for automatic timeout.
+
+### SIGRESUME approval payload (client → server)
+
+```json
+{
+  "signal": "SIGRESUME",
+  "pid": 12345,
+  "payload": {
+    "hilId":         "uuid",
+    "approvalToken": "uuid",
+    "decision":      "approved",
+    "note":          "optional human comment"
+  }
+}
+```
+
+`decision` is `"approved"` or `"denied"` (string, not boolean). `note` is optional.
 
 ---
 

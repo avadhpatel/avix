@@ -207,15 +207,22 @@ pub struct HilRequestBody {
     pub pid: u64,
     pub session_id: String,
     pub approval_token: String,
+    pub hil_type: String,
+    pub tool: Option<String>,
+    pub reason: Option<String>,
     pub prompt: String,
     pub timeout_secs: u32,
+    pub urgency: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HilResolvedBody {
     pub hil_id: String,
     pub pid: u64,
+    pub session_id: String,
     pub outcome: HilOutcome,
+    pub resolved_by: String,
+    pub resolved_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -312,11 +319,47 @@ mod tests {
     fn event_hil_request_roundtrip() {
         let json = r#"{
             "type":"event","event":"hil.request","sessionId":"sess-1","seq":0,
-            "body":{"hil_id":"h1","pid":10,"session_id":"sess-1",
-                    "approval_token":"tok","prompt":"approve?","timeout_secs":600}
+            "body":{
+                "hil_id":"h1","pid":10,"session_id":"sess-1",
+                "approval_token":"tok","hil_type":"capability_upgrade",
+                "tool":"fs/write","reason":"needs write","prompt":"approve?",
+                "timeout_secs":600,"urgency":"normal"
+            }
         }"#;
         let e: Event = serde_json::from_str(json).unwrap();
         assert_eq!(e.kind, EventKind::HilRequest);
+        if let EventBody::HilRequest(b) = &e.body {
+            assert_eq!(b.hil_id, "h1");
+            assert_eq!(b.pid, 10);
+            assert_eq!(b.session_id, "sess-1");
+            assert_eq!(b.tool.as_deref(), Some("fs/write"));
+            assert_eq!(b.timeout_secs, 600);
+        } else {
+            panic!("expected HilRequest body");
+        }
+    }
+
+    #[test]
+    fn event_hil_resolved_roundtrip() {
+        let json = r#"{
+            "type":"event","event":"hil.resolved","sessionId":"sess-1","seq":1,
+            "body":{
+                "hil_id":"h1","pid":10,"session_id":"sess-1",
+                "outcome":"approved","resolved_by":"alice",
+                "resolved_at":"2026-04-25T10:00:00Z"
+            }
+        }"#;
+        let e: Event = serde_json::from_str(json).unwrap();
+        assert_eq!(e.kind, EventKind::HilResolved);
+        if let EventBody::HilResolved(b) = &e.body {
+            assert_eq!(b.hil_id, "h1");
+            assert_eq!(b.pid, 10);
+            assert_eq!(b.session_id, "sess-1");
+            assert_eq!(b.outcome, HilOutcome::Approved);
+            assert_eq!(b.resolved_by, "alice");
+        } else {
+            panic!("expected HilResolved body");
+        }
     }
 
     #[test]

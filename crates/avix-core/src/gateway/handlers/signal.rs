@@ -348,6 +348,7 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Utc::now() + chrono::Duration::minutes(10),
             state: HilState::Pending,
+            atp_session_id: "sess-test".into(),
         };
         hil_mgr.open(req).await.unwrap();
 
@@ -424,6 +425,7 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Utc::now() + chrono::Duration::minutes(10),
             state: HilState::Pending,
+            atp_session_id: "sess-double".into(),
         };
         hil_mgr.open(req).await.unwrap();
 

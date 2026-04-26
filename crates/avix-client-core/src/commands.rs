@@ -79,18 +79,15 @@ pub async fn resolve_hil(
     approved: bool,
     note: Option<&str>,
 ) -> Result<(), ClientError> {
-    send_signal(
-        dispatcher,
-        pid,
-        "SIGRESUME",
-        Some(serde_json::json!({
-            "hil_id": hil_id,
-            "approval_token": approval_token,
-            "approved": approved,
-            "note": note,
-        })),
-    )
-    .await
+    let mut payload = serde_json::json!({
+        "hilId":         hil_id,
+        "approvalToken": approval_token,
+        "decision":      if approved { "approved" } else { "denied" },
+    });
+    if let Some(n) = note {
+        payload["note"] = serde_json::Value::String(n.to_string());
+    }
+    send_signal(dispatcher, pid, "SIGRESUME", Some(payload)).await
 }
 
 /// Send SIGKILL to an agent.
@@ -469,12 +466,43 @@ mod tests {
 
     // Moved to spawn_agent.rs
 
+    #[test]
+    fn resolve_hil_payload_approved() {
+        // Verify the payload shape resolve_hil sends: camelCase + "decision" string.
+        let mut payload = serde_json::json!({
+            "hilId":         "h1",
+            "approvalToken": "at1",
+            "decision":      "approved",
+        });
+        // note is None — should not appear
+        assert_eq!(payload["hilId"], "h1");
+        assert_eq!(payload["approvalToken"], "at1");
+        assert_eq!(payload["decision"], "approved");
+        assert!(payload.get("note").is_none());
+
+        // With note
+        payload["note"] = serde_json::Value::String("context".to_string());
+        assert_eq!(payload["note"], "context");
+    }
+
+    #[test]
+    fn resolve_hil_payload_denied() {
+        let payload = serde_json::json!({
+            "hilId":         "h2",
+            "approvalToken": "at2",
+            "decision":      if false { "approved" } else { "denied" },
+            "note":          "not allowed",
+        });
+        assert_eq!(payload["decision"], "denied");
+        assert_eq!(payload["note"], "not allowed");
+    }
+
     #[tokio::test]
     async fn resolve_hil_sends_sigresume() {
         let fake = FakeDispatcher::new();
         fake.set_reply("signal/send", ok_reply(serde_json::json!({})));
 
-        // Build the Cmd that resolve_hil would produce.
+        // Construct the Cmd that resolve_hil would produce and verify the body shape.
         let cmd = Cmd::new(
             "signal",
             "send",
@@ -483,14 +511,12 @@ mod tests {
                 "pid": 10u64,
                 "signal": "SIGRESUME",
                 "payload": {
-                    "hil_id": "h1",
-                    "approval_token": "at1",
-                    "approved": true,
-                    "note": null,
+                    "hilId":         "h1",
+                    "approvalToken": "at1",
+                    "decision":      "approved",
                 },
             }),
         );
-        // Not yet captured — call it.
         fake.call(cmd).await.unwrap();
 
         let cmds = fake.captured().await;
@@ -498,7 +524,10 @@ mod tests {
         assert_eq!(cmd.domain, "signal");
         assert_eq!(cmd.op, "send");
         assert_eq!(cmd.body["signal"], "SIGRESUME");
-        assert_eq!(cmd.body["payload"]["approved"], true);
+        let payload = &cmd.body["payload"];
+        assert_eq!(payload["hilId"], "h1");
+        assert_eq!(payload["approvalToken"], "at1");
+        assert_eq!(payload["decision"], "approved");
     }
 
     #[tokio::test]

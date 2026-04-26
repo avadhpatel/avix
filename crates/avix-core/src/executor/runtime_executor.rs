@@ -702,6 +702,25 @@ pub async fn shutdown(&mut self) {
         }
     }
 
+    /// Persist the new goal delivered by SIGSTART into the invocation store
+    /// before the next LLM turn begins.  Call this immediately after
+    /// `wait_for_next_goal` returns `Some(goal)`.
+    pub async fn record_next_goal(&mut self, goal: &str) {
+        self.goal = goal.to_string();
+        if !self.invocation_id.is_empty() {
+            if let Some(store) = &self.invocation_store {
+                if let Err(e) = store.update_goal(&self.invocation_id, goal).await {
+                    tracing::warn!(
+                        pid = self.pid.as_u64(),
+                        invocation_id = %self.invocation_id,
+                        error = %e,
+                        "failed to update goal in invocation store on SIGSTART"
+                    );
+                }
+            }
+        }
+    }
+
     /// Block until a `SIGSTART` signal arrives carrying the next goal string.
     ///
     /// Handles `SIGPAUSE`/`SIGRESUME` while waiting. Returns `Some(goal)` on `SIGSTART`,
