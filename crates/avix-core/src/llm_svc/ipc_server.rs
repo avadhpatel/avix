@@ -77,6 +77,7 @@ async fn handle_message_bidir(
             handle_stream_complete(req.clone(), svc, &mut write_half).await;
         }
         IpcMessage::Request(req) => {
+            debug!(method = %req.method, id = %req.id, "llm IPC request");
             let resp = svc.dispatch(&req).await;
             if let Err(e) = frame::write_to(&mut write_half, &resp).await {
                 warn!(error = %e, "llm IPC: failed to write response");
@@ -93,6 +94,7 @@ async fn handle_stream_complete(
     svc: Arc<LlmService>,
     write_half: &mut OwnedWriteHalf,
 ) {
+    debug!(id = %req.id, "llm stream started");
     let stream_result = svc.dispatch_stream(&req).await;
     let mut stream = match stream_result {
         Ok(s) => s,
@@ -143,6 +145,13 @@ async fn handle_stream_complete(
         }
     }
 
+    debug!(
+        id = %req.id,
+        stop_reason = %stop_reason_str,
+        input_tokens,
+        output_tokens,
+        "llm stream done"
+    );
     // Final response summarises the completed stream.
     let resp = JsonRpcResponse::ok(
         &req.id,

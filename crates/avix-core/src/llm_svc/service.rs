@@ -195,6 +195,15 @@ pub(crate) async fn dispatch(&self, req: &JsonRpcRequest) -> JsonRpcResponse {
             turn_id,
         };
 
+        tracing::debug!(
+            provider = %pname,
+            model = %llm_req.model,
+            messages = llm_req.messages.len(),
+            tools = llm_req.tools.len(),
+            turn_id = %llm_req.turn_id,
+            "llm/stream_complete"
+        );
+
         let client = self
             .text_clients
             .get(&pname)
@@ -239,6 +248,16 @@ pub(crate) async fn dispatch(&self, req: &JsonRpcRequest) -> JsonRpcResponse {
             turn_id,
         };
 
+        tracing::debug!(
+            provider = %pname,
+            model = %llm_req.model,
+            messages = llm_req.messages.len(),
+            tools = llm_req.tools.len(),
+            turn_id = %llm_req.turn_id,
+            "llm/complete"
+        );
+
+        let t0 = std::time::Instant::now();
         // Use the injected text client for this provider
         let resp = if let Some(client) = self.text_clients.get(&pname) {
             client
@@ -250,7 +269,16 @@ pub(crate) async fn dispatch(&self, req: &JsonRpcRequest) -> JsonRpcResponse {
                 "no text client for {pname}"
             )));
         };
-        tracing::debug!(response =  ?resp, "LLM Complete Response");
+        let latency_ms = t0.elapsed().as_millis() as u64;
+        tracing::debug!(
+            provider = %pname,
+            model = %model,
+            input_tokens = resp.input_tokens,
+            output_tokens = resp.output_tokens,
+            stop_reason = ?resp.stop_reason,
+            latency_ms,
+            "llm/complete done"
+        );
 
         // Record usage
         self.usage
@@ -269,7 +297,7 @@ pub(crate) async fn dispatch(&self, req: &JsonRpcRequest) -> JsonRpcResponse {
             "input_tokens": resp.input_tokens,
             "output_tokens": resp.output_tokens,
             "total_tokens": resp.total_tokens(),
-            "latency_ms": 0u64,
+            "latency_ms": latency_ms,
         }))
     }
 

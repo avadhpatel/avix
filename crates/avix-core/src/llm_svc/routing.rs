@@ -122,6 +122,7 @@ impl RoutingEngine {
                             matches!(status_map.get(fb), Some(ProviderStatus::Unavailable { .. }))
                         };
                         if !fb_is_unavailable {
+                            tracing::debug!(primary = %name, fallback = %fb, "routing: primary unavailable, using fallback");
                             return Ok(fb_provider);
                         }
                     }
@@ -132,6 +133,7 @@ impl RoutingEngine {
             )));
         }
 
+        tracing::debug!(provider = %name, modality = %modality.as_str(), "routing resolved");
         Ok(provider)
     }
 
