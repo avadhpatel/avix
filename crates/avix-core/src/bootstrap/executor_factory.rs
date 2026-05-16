@@ -314,17 +314,33 @@ async fn run_turn_loop(
                 }
             }
             Err(err) => {
-                warn!(pid = pid.as_u64(), error = %err, "executor crashed");
-                executor
-                    .shutdown_with_status(InvocationStatus::Failed, Some(err.to_string()))
-                    .await;
-                tracer.agent_exit(pid.as_u64(), "crashed", Some(&err.to_string()));
-                event_bus.agent_status(atp_session_id, pid.as_u64(), "crashed");
-                event_bus.agent_exit(atp_session_id, pid.as_u64(), 1);
-                let _ = process_table
-                    .set_status(crate::types::Pid::from_u64(pid.as_u64()), ProcessStatus::Crashed)
-                    .await;
-                break;
+                // Turn failed — keep the executor alive so the user can retry.
+                // Do NOT call shutdown_with_status (would deregister Cat2 tools).
+                warn!(pid = pid.as_u64(), error = %err, "executor turn failed; staying alive for retry");
+                executor.persist_turn_error(&err.to_string()).await;
+                event_bus.agent_status(atp_session_id, pid.as_u64(), "waiting");
+                let _ = process_table.set_status(pid, ProcessStatus::Waiting).await;
+                match executor.wait_for_next_goal().await {
+                    Some(next_goal) => {
+                        info!(pid = pid.as_u64(), "received new goal after turn failure; resuming");
+                        executor.record_next_goal(&next_goal).await;
+                        current_goal = next_goal;
+                    }
+                    None => {
+                        // Killed while waiting after error — clean shutdown.
+                        info!(pid = pid.as_u64(), "executor killed while waiting after turn failure");
+                        executor
+                            .shutdown_with_status(InvocationStatus::Killed, None)
+                            .await;
+                        tracer.agent_exit(pid.as_u64(), "killed", None);
+                        event_bus.agent_status(atp_session_id, pid.as_u64(), "crashed");
+                        event_bus.agent_exit(atp_session_id, pid.as_u64(), 1);
+                        let _ = process_table
+                            .set_status(crate::types::Pid::from_u64(pid.as_u64()), ProcessStatus::Crashed)
+                            .await;
+                        break;
+                    }
+                }
             }
         }
     }

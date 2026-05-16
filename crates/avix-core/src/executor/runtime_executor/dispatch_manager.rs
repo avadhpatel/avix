@@ -309,17 +309,20 @@ impl RuntimeExecutor {
                 AvixError::ConfigParse(format!("tool '{}' not found in registry", call.name))
             })?;
 
-        // 2. Check execute permission
+        // 2. Check execute permission — bypass if tool is capability-granted (ADR-01:
+        // CapabilityToken.granted_tools is the single source of truth).
         if let Some(ref entry) = entry_opt {
-            if let Err(e) = check_tool_execute_permission(entry, &self.spawned_by) {
-                tracing::warn!(
-                    pid = self.pid.as_u64(),
-                    tool = %call.name,
-                    user = %self.spawned_by,
-                    error = %e,
-                    "Cat1 tool execute permission denied"
-                );
-                return Err(e);
+            if !self.token.has_tool(&call.name) {
+                if let Err(e) = check_tool_execute_permission(entry, &self.spawned_by) {
+                    tracing::warn!(
+                        pid = self.pid.as_u64(),
+                        tool = %call.name,
+                        user = %self.spawned_by,
+                        error = %e,
+                        "Cat1 tool execute permission denied"
+                    );
+                    return Err(e);
+                }
             }
         }
 

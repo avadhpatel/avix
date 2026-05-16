@@ -702,6 +702,54 @@ pub async fn shutdown(&mut self) {
         }
     }
 
+    /// Record a turn error in persistent state without killing the executor.
+    ///
+    /// Unlike `shutdown_with_status`, this does NOT deregister Cat2 tools — the
+    /// executor stays alive and ready for the next goal via `wait_for_next_goal`.
+    #[instrument(skip(self))]
+    pub async fn persist_turn_error(&mut self, err: &str) {
+        tracing::warn!(pid = self.pid.as_u64(), error = err, "persisting turn error; executor staying alive");
+
+        use crate::invocation::conversation::{ConversationEntry, Role};
+        self.memory.conversation_history.push(
+            ConversationEntry::from_role_content(
+                Role::System,
+                format!("[Turn failed: {}]", err),
+            ),
+        );
+
+        if !self.invocation_id.is_empty() {
+            if let Some(store) = &self.invocation_store {
+                let _ = store
+                    .persist_interim_structured(
+                        &self.invocation_id,
+                        &self.memory.conversation_history,
+                        self.tokens_consumed,
+                        self.tool_calls_total,
+                    )
+                    .await;
+                let _ = store
+                    .update_status(
+                        &self.invocation_id,
+                        crate::invocation::InvocationStatus::Idle,
+                    )
+                    .await;
+            }
+        }
+
+        if !self.session_id.is_empty() {
+            if let Some(store) = &self.session_store {
+                if let Ok(Some(mut session)) = store
+                    .get(&uuid::Uuid::parse_str(&self.session_id).unwrap_or_default())
+                    .await
+                {
+                    session.mark_idle();
+                    let _ = store.update(&session).await;
+                }
+            }
+        }
+    }
+
     /// Persist the new goal delivered by SIGSTART into the invocation store
     /// before the next LLM turn begins.  Call this immediately after
     /// `wait_for_next_goal` returns `Some(goal)`.
