@@ -219,72 +219,18 @@ binary         = ""              # empty for interpreted services
 
 ---
 
-## Signal Delivery to Active RuntimeExecutor Threads
+## Signal Delivery to Active RuntimeExecutor Threads — ✅ RESOLVED
 
-**Goal**: When a signal (e.g. `SIGPAUSE`, `SIGKILL`, `SIGSTOP`, `SIGPIPE`) arrives for an
-agent that is currently blocked inside an LLM call (`llm/complete` via IPC), the signal must
-be delivered promptly and cause the correct observable effect — not silently queued until the
-LLM call returns.
+All items implemented. See [`signal-delivery-to-active-executor.md`](signal-delivery-to-active-executor.md).
 
-**Problem today — two distinct bugs**:
-
-1. **Wrong delivery path (architecture bug)**: The current production code assumes each active
-   agent PID has its own dedicated socket for receiving signals. This is incorrect — there is
-   no per-agent socket. The kernel delivers signals to `RuntimeExecutor` via the existing
-   `deliver_signal` method (called from `ProcHandler` / `KernelIpcServer` on the kernel side).
-   Any code that opens or listens on a per-agent signal socket must be removed; signal receipt
-   must go through `deliver_signal` exclusively.
-
-2. **Late delivery (timing bug)**: Even once signals arrive via `deliver_signal`, the current
-   `RuntimeExecutor` only checks for them between turns (i.e. after the LLM response arrives).
-   An in-flight `llm/complete` call can take seconds to minutes, so signals sent during that
-   window are not acted on until the call completes — making `SIGKILL`/`SIGPAUSE` feel
-   unresponsive and breaking any caller expecting prompt acknowledgement.
-
-**Required design**:
-
-1. **Cancellable LLM future** — wrap the `llm/complete` IPC call in a `tokio::select!` that
-   races against a `CancellationToken` (from the `tokio-util` crate).  The token is held by
-   `RuntimeExecutor` and cancelled immediately when a `SIGKILL`, `SIGSTOP`, or `SIGPAUSE`
-   arrives on the signal channel.
-
-2. **Signal-dispatch loop runs concurrently** — promote the signal-receive loop from
-   post-turn polling to a background `tokio::select!` arm that is always live, even during
-   the LLM call.  Something like:
-   ```rust
-   tokio::select! {
-       result = llm_call_future => { /* handle LLM response */ }
-       sig    = signal_rx.recv() => { handle_signal_during_llm(sig, cancel.clone()); }
-   }
-   ```
-
-3. **Per-signal semantics during an active call**:
-   | Signal       | Action while LLM call is in-flight |
-   |--------------|-------------------------------------|
-   | `SIGKILL`    | Cancel LLM future immediately; finalize invocation as `Killed`; exit |
-   | `SIGSTOP`    | Cancel future; suspend task (do not resume until `SIGSTART`) |
-   | `SIGPAUSE`   | Cancel future; enter paused state; resume with `SIGRESUME` |
-   | `SIGPIPE`    | Deliver pipe data into the next-turn context; do NOT cancel the current call |
-   | `SIGSAVE`    | Flush conversation snapshot mid-call; continue |
-   | `SIGESCALATE`| Inject HIL approval result into context; continue or cancel based on result |
-
-4. **State machine update** — `RuntimeExecutor`'s internal state machine must have an
-   explicit `ActiveLlmCall { cancel: CancellationToken }` variant so that the signal handler
-   can distinguish "idle between turns" from "blocked in LLM call" and apply the right action.
-
-5. **IPC acknowledgement** — after cancelling the LLM future, `RuntimeExecutor` must still
-   send the signal acknowledgement back to the kernel (update `/proc/<pid>/status.yaml` and
-   emit the appropriate ATP event) before entering the new state.
-
-**Affected files** (to be detailed in the dev plan):
-- `crates/avix-core/src/runtime/executor.rs` — `tokio::select!` + `CancellationToken`
-- `crates/avix-core/src/runtime/state.rs` (or inline) — add `ActiveLlmCall` state variant
-- `crates/avix-core/src/runtime/signal.rs` — signal handler logic split into
-  `handle_signal_between_turns` vs `handle_signal_during_llm`
-- Integration test in `crates/avix-core/tests/lifecycle.rs` — assert `SIGKILL` while LLM
-  call is pending resolves within e.g. 200 ms
-
-**Dependencies**: `tokio-util` crate (already likely present); no new external deps expected.
+| Component | What was built |
+|-----------|---------------|
+| `SignalChannels` | `Arc<Mutex<HashMap<u32, mpsc::Sender<Signal>>>>` — replaces per-agent Unix sockets; registered at spawn, deregistered at exit in `IpcExecutorFactory` |
+| `tokio::select!` in `run_with_client` | Races `run_turn_streaming` against `signal_rx.recv()` — signals arrive during LLM call, not just between turns (`dispatch_manager.rs:1158`) |
+| `CancellationToken` | Created per LLM turn; cancelled immediately on `SIGKILL`/`SIGSTOP`/`SIGPAUSE` arrival |
+| `handle_signal_during_llm` | Distinct handler for in-flight signals — sets `killed`/`paused` atomics, flushes VFS status (`dispatch_manager.rs:976`) |
+| `handle_signal_between_turns` | Existing handler for inter-turn signals (`dispatch_manager.rs:899`) |
+| Per-agent socket files | Deleted — `SignalDelivery` and `agent_socket.rs` removed |
 
 ---
 
